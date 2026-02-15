@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import type { Task, TaskStatus, AppEvent } from '@ai-office/shared';
 import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-office/shared';
+import { detectDeliverableType } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
@@ -47,6 +48,11 @@ export function listTasks(): Task[] {
 }
 
 export function createTask(title: string, description: string, assigneeId?: string | null, parentTaskId?: string | null, expectedDeliverables?: string[]): Task {
+  // Auto-detect deliverable type if not explicitly provided
+  if (!expectedDeliverables || expectedDeliverables.length === 0) {
+    const detected = detectDeliverableType(`${title} ${description}`);
+    expectedDeliverables = [detected];
+  }
   const id = uuid();
   stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
   // If specific assignee requested, set it on the task
