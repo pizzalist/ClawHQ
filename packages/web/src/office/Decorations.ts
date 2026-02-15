@@ -144,6 +144,112 @@ export function createMeetingTable(): PIXI.Container {
   return c;
 }
 
+/** Glass-walled meeting room */
+export function createMeetingRoom(): PIXI.Container {
+  const c = new PIXI.Container();
+  const TILE = 80;
+  const HALF = 40;
+  const roomW = TILE * 4; // 4 tiles wide
+  const roomH = TILE * 3; // 3 tiles tall
+
+  // Semi-transparent walls
+  const walls = new PIXI.Graphics();
+
+  // Back wall (top-right)
+  walls.beginFill(0x2a2b44, 0.4);
+  walls.moveTo(0, -roomH / 2);
+  walls.lineTo(roomW / 2, -roomH / 2 + HALF);
+  walls.lineTo(roomW / 2, -roomH / 2 + HALF + 8);
+  walls.lineTo(0, -roomH / 2 + 8);
+  walls.closePath();
+  walls.endFill();
+
+  // Back wall (top-left)
+  walls.beginFill(0x2a2b44, 0.4);
+  walls.moveTo(0, -roomH / 2);
+  walls.lineTo(-roomW / 2, -roomH / 2 + HALF);
+  walls.lineTo(-roomW / 2, -roomH / 2 + HALF + 8);
+  walls.lineTo(0, -roomH / 2 + 8);
+  walls.closePath();
+  walls.endFill();
+
+  // Right wall
+  walls.beginFill(0x2a2b44, 0.35);
+  walls.moveTo(roomW / 2, -roomH / 2 + HALF);
+  walls.lineTo(roomW / 2, roomH / 2 - HALF);
+  walls.lineTo(roomW / 2, roomH / 2 - HALF + 8);
+  walls.lineTo(roomW / 2, -roomH / 2 + HALF + 8);
+  walls.closePath();
+  walls.endFill();
+
+  // Glass effect lines
+  const glass = new PIXI.Graphics();
+  glass.lineStyle(1, 0x60a5fa, 0.25);
+  // Horizontal lines on back walls
+  for (let i = 1; i <= 3; i++) {
+    const yOff = i * 2;
+    glass.moveTo(-roomW / 2 + 10, -roomH / 2 + HALF + yOff);
+    glass.lineTo(roomW / 2 - 10, -roomH / 2 + yOff);
+  }
+  // Vertical dividers
+  glass.lineStyle(1, 0x60a5fa, 0.15);
+  glass.moveTo(0, -roomH / 2);
+  glass.lineTo(0, -roomH / 2 + 8);
+
+  // Left wall with door opening
+  const leftWall = new PIXI.Graphics();
+  leftWall.beginFill(0x2a2b44, 0.35);
+  // Top portion of left wall
+  leftWall.moveTo(-roomW / 2, -roomH / 2 + HALF);
+  leftWall.lineTo(-roomW / 2, -roomH / 2 + HALF + 30);
+  leftWall.lineTo(-roomW / 2 + 4, -roomH / 2 + HALF + 30);
+  leftWall.lineTo(-roomW / 2 + 4, -roomH / 2 + HALF);
+  leftWall.closePath();
+  leftWall.endFill();
+  // Bottom portion (below door)
+  leftWall.beginFill(0x2a2b44, 0.35);
+  leftWall.moveTo(-roomW / 2, roomH / 2 - HALF - 10);
+  leftWall.lineTo(-roomW / 2, roomH / 2 - HALF + 8);
+  leftWall.lineTo(-roomW / 2 + 4, roomH / 2 - HALF + 8);
+  leftWall.lineTo(-roomW / 2 + 4, roomH / 2 - HALF - 10);
+  leftWall.closePath();
+  leftWall.endFill();
+
+  // Interior meeting table
+  const table = new PIXI.Graphics();
+  table.beginFill(0x000000, 0.15);
+  table.drawEllipse(0, 6, 36, 18);
+  table.endFill();
+  table.beginFill(0x5a4080);
+  table.drawEllipse(0, -2, 34, 16);
+  table.endFill();
+  table.beginFill(0x6a50a0, 0.5);
+  table.drawEllipse(0, -4, 28, 12);
+  table.endFill();
+
+  // Floor highlight (room area)
+  const floor = new PIXI.Graphics();
+  floor.beginFill(0x1e2236, 0.3);
+  floor.moveTo(0, -roomH / 2);
+  floor.lineTo(roomW / 2, -roomH / 2 + HALF);
+  floor.lineTo(0, roomH / 2 - HALF + 8);
+  floor.lineTo(-roomW / 2, -roomH / 2 + HALF);
+  floor.closePath();
+  floor.endFill();
+
+  // Label
+  const label = new PIXI.Text('🏛️ Meeting Room', {
+    fontSize: 11,
+    fill: 0x9ca3af,
+    fontFamily: 'monospace',
+  });
+  label.anchor.set(0.5);
+  label.position.set(0, -roomH / 2 - 12);
+
+  c.addChild(floor, walls, glass, leftWall, table, label);
+  return c;
+}
+
 /** Water cooler */
 export function createWaterCooler(): PIXI.Container {
   const c = new PIXI.Container();

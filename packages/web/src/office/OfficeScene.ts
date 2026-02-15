@@ -3,7 +3,7 @@ import type { Agent } from '@ai-office/shared';
 import { Floor, gridToIso } from './Floor';
 import { Desk } from './Desk';
 import { AgentSprite } from './AgentSprite';
-import { createPlant, createCoffeeMachine, createWhiteboard, createWaterCooler, createMeetingTable } from './Decorations';
+import { createPlant, createCoffeeMachine, createWhiteboard, createWaterCooler, createMeetingTable, createMeetingRoom } from './Decorations';
 
 /** Desk grid positions (col, row) on the isometric grid */
 const DESK_POSITIONS: [number, number][] = [
@@ -11,10 +11,10 @@ const DESK_POSITIONS: [number, number][] = [
   [2, 5], [4, 5], [6, 5], [8, 5],
 ];
 
-/** Grid position for the meeting area */
-const MEETING_POS: [number, number] = [5, 7];
+/** Grid position for the meeting room (right side) */
+const MEETING_ROOM_POS: [number, number] = [13, 3];
 
-/** Seat offsets around the meeting table (relative to table center) */
+/** Seat offsets around the meeting room table (relative to room center) */
 const MEETING_SEATS: { x: number; y: number }[] = [
   { x: -30, y: -10 }, { x: 30, y: -10 },
   { x: -30, y: 15 }, { x: 30, y: 15 },
@@ -51,13 +51,13 @@ export class OfficeScene {
     this.floor.container.zIndex = 0;
     this.container.addChild(this.floor.container);
 
-    // Meeting table
-    const mtPos = gridToIso(MEETING_POS[0], MEETING_POS[1]);
+    // Meeting room (right side of office)
+    const mtPos = gridToIso(MEETING_ROOM_POS[0], MEETING_ROOM_POS[1]);
     this.meetingTablePos = mtPos;
-    const meetingTable = createMeetingTable();
-    meetingTable.position.set(mtPos.x, mtPos.y);
-    (meetingTable as any).zIndex = mtPos.y + 2;
-    this.container.addChild(meetingTable);
+    const meetingRoom = createMeetingRoom();
+    meetingRoom.position.set(mtPos.x, mtPos.y);
+    (meetingRoom as any).zIndex = mtPos.y + 2;
+    this.container.addChild(meetingRoom);
 
     // Decorations (placed by grid position, converted to iso)
     this.addDecorations();
@@ -102,8 +102,8 @@ export class OfficeScene {
     const w = this.app.renderer.width / (window.devicePixelRatio || 1);
     const h = this.app.renderer.height / (window.devicePixelRatio || 1);
     // Approximate bounding box of the iso grid
-    const gridCenterX = 0; // iso grid is roughly symmetric around x=0
-    const gridCenterY = 160; // vertical center of an 8-row grid
+    const gridCenterX = 60; // offset for wider grid
+    const gridCenterY = 200; // vertical center of a 10-row grid
     this.container.position.set(
       w / 2 - gridCenterX,
       h / 2 - gridCenterY + 20,

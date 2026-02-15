@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { Meeting, MeetingType, MeetingProposal, MeetingReview } from '@ai-office/shared';
+import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal, MeetingReview } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
@@ -19,6 +19,8 @@ function rowToMeeting(row: Record<string, unknown>): Meeting {
     participants: JSON.parse((row.participants as string) || '[]'),
     proposals: JSON.parse((row.proposals as string) || '[]'),
     decision: row.decision ? JSON.parse(row.decision as string) : null,
+    character: (row.character as MeetingCharacter) || undefined,
+    report: (row.report as string) || undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -34,7 +36,7 @@ export function getMeeting(id: string): Meeting | null {
 }
 
 function saveMeeting(m: Meeting) {
-  stmts.updateMeeting.run(m.status, JSON.stringify(m.proposals), m.decision ? JSON.stringify(m.decision) : null, m.id);
+  stmts.updateMeeting.run(m.status, JSON.stringify(m.proposals), m.decision ? JSON.stringify(m.decision) : null, m.report || null, m.id);
   emitChange();
 }
 
@@ -42,16 +44,16 @@ function saveMeeting(m: Meeting) {
 const pendingProposals = new Map<string, { total: number; done: number }>();
 const pendingReviews = new Map<string, { total: number; done: number }>();
 
-export function createMeeting(title: string, description: string, type: MeetingType, participantIds: string[]): Meeting {
+export function createMeeting(title: string, description: string, type: MeetingType, participantIds: string[], character?: MeetingCharacter): Meeting {
   const id = uuid();
-  stmts.insertMeeting.run(id, title, description, type, JSON.stringify(participantIds));
+  stmts.insertMeeting.run(id, title, description, type, JSON.stringify(participantIds), character || null);
   const meeting = getMeeting(id)!;
   emitChange();
   return meeting;
 }
 
-export function startPlanningMeeting(title: string, description: string, pmAgentIds: string[]): Meeting {
-  const meeting = createMeeting(title, description, 'planning', pmAgentIds);
+export function startPlanningMeeting(title: string, description: string, pmAgentIds: string[], character?: MeetingCharacter): Meeting {
+  const meeting = createMeeting(title, description, 'planning', pmAgentIds, character);
   pendingProposals.set(meeting.id, { total: pmAgentIds.length, done: 0 });
 
   for (const agentId of pmAgentIds) {
@@ -227,9 +229,66 @@ function handleReviewComplete(meetingId: string, proposalIndex: number, reviewer
     if (tracker.done >= tracker.total) {
       pendingReviews.delete(meetingId);
       meeting.status = 'completed';
+      meeting.report = generateMeetingReport(meeting);
       saveMeeting(meeting);
     }
   }
+}
+
+function generateMeetingReport(meeting: Meeting): string {
+  const agents = listAgents();
+  const agentMap = new Map(agents.map(a => [a.id, a]));
+  const participantNames = meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ');
+  const charLabels: Record<string, string> = {
+    brainstorm: '🧠 자유 토론',
+    planning: '📋 기획 회의',
+    review: '🔍 검토 회의',
+    retrospective: '🔄 회고',
+  };
+  const charLabel = meeting.character ? (charLabels[meeting.character] || meeting.character) : meeting.type;
+  const date = new Date().toLocaleDateString('ko-KR');
+
+  let report = `# 회의 보고서: ${meeting.title}\n\n`;
+  report += `**유형:** ${charLabel} | **날짜:** ${date} | **참가자:** ${participantNames}\n\n`;
+  report += `## 안건\n\n${meeting.description || '(설명 없음)'}\n\n`;
+
+  report += `## 제안서\n\n`;
+  for (const p of meeting.proposals) {
+    report += `### ${p.agentName}\n\n${p.content.slice(0, 1000)}\n\n`;
+  }
+
+  report += `## 리뷰 결과\n\n`;
+  for (const p of meeting.proposals) {
+    if (p.reviews && p.reviews.length > 0) {
+      report += `### ${p.agentName}의 제안서 리뷰\n\n`;
+      for (const r of p.reviews) {
+        report += `**${r.reviewerName}** ${r.isDevilsAdvocate ? '(깐깐이)' : ''} — 점수: ${r.score}/10\n`;
+        if (r.pros.length) report += `- 장점: ${r.pros.join(', ')}\n`;
+        if (r.cons.length) report += `- 단점: ${r.cons.join(', ')}\n`;
+        if (r.risks.length) report += `- 리스크: ${r.risks.join(', ')}\n`;
+        report += '\n';
+      }
+    }
+  }
+
+  report += `## 종합 점수\n\n`;
+  for (const p of meeting.proposals) {
+    const reviews = p.reviews || [];
+    const avg = reviews.length > 0 ? (reviews.reduce((s, r) => s + r.score, 0) / reviews.length).toFixed(1) : 'N/A';
+    report += `- **${p.agentName}**: ${avg}/10\n`;
+  }
+  report += '\n';
+
+  report += `## 결론\n\n`;
+  if (meeting.decision) {
+    const winner = meeting.proposals.find(p => p.agentId === meeting.decision!.winnerId);
+    report += `✅ **${winner?.agentName || '알 수 없음'}**의 제안서가 채택되었습니다.\n`;
+    if (meeting.decision.feedback) report += `\n피드백: ${meeting.decision.feedback}\n`;
+  } else {
+    report += `사용자 결정 대기 중\n`;
+  }
+
+  return report;
 }
 
 export function decideMeeting(meetingId: string, winnerId: string, feedback: string): Meeting {
@@ -237,6 +296,7 @@ export function decideMeeting(meetingId: string, winnerId: string, feedback: str
   if (!meeting) throw new Error('Meeting not found');
   meeting.decision = { winnerId, feedback };
   meeting.status = 'completed';
+  meeting.report = generateMeetingReport(meeting);
   saveMeeting(meeting);
   return meeting;
 }

@@ -126,6 +126,7 @@ export interface DecisionHistoryEntry {
 
 // Meeting types
 export type MeetingType = 'planning' | 'review' | 'debate' | 'tech-spec';
+export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective';
 
 // Tech Spec Meeting types
 export type TechSpecRole = 'cto' | 'frontend-lead' | 'backend-lead' | 'qa-devils-advocate';
@@ -180,6 +181,8 @@ export interface Meeting {
   proposals: MeetingProposal[];
   decision: { winnerId: string; feedback: string } | null;
   techSpec?: TechSpecMeetingData;
+  character?: MeetingCharacter;
+  report?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -26,6 +26,8 @@ export class AgentSprite {
   private role: AgentRole;
   private animPhase = Math.random() * Math.PI * 2; // desync animations
   private tickerFn: () => void;
+  private targetX: number | undefined;
+  private targetY: number | undefined;
 
   constructor(agent: Agent) {
     this.id = agent.id;
@@ -135,11 +137,30 @@ export class AgentSprite {
   private animate() {
     const t = Date.now() / 1000 + this.animPhase;
 
+    // Smooth walking toward target
+    if (this.targetX !== undefined && this.targetY !== undefined) {
+      const dx = this.targetX - this.container.position.x;
+      const dy = this.targetY - this.container.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 2) {
+        this.container.position.set(this.targetX, this.targetY);
+        this.targetX = undefined;
+        this.targetY = undefined;
+      } else {
+        const speed = 2; // px per frame
+        const ratio = speed / dist;
+        this.container.position.x += dx * ratio;
+        this.container.position.y += dy * ratio;
+        // Walking bob
+        this.body.position.y = Math.sin(t * 8) * 2;
+      }
+    }
+
     if (this.state === 'working') {
       // Typing bob
       this.body.pivot.y = Math.sin(t * 4) * 0.5;
-      this.body.position.y = Math.sin(t * 6) * 0.8;
-    } else {
+      if (this.targetX === undefined) this.body.position.y = Math.sin(t * 6) * 0.8;
+    } else if (this.targetX === undefined) {
       // Idle breathing — gentle vertical bob
       this.body.position.y = Math.sin(t * 1.5) * 1.2;
     }
@@ -171,7 +192,13 @@ export class AgentSprite {
   }
 
   moveTo(x: number, y: number) {
-    this.container.position.set(x, y);
+    // If not yet placed, teleport; otherwise animate
+    if (this.container.position.x === 0 && this.container.position.y === 0) {
+      this.container.position.set(x, y);
+    } else {
+      this.targetX = x;
+      this.targetY = y;
+    }
   }
 
   destroy() {

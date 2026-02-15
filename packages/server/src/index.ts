@@ -563,16 +563,24 @@ app.get('/api/meetings/:id', (req, res) => {
 });
 
 app.post('/api/meetings', (req, res) => {
-  const { title, description, type, participantIds } = req.body;
+  const { title, description, type, participantIds, character } = req.body;
   if (!title || !participantIds || !Array.isArray(participantIds) || participantIds.length < 2) {
     return res.status(400).json({ error: 'title and at least 2 participantIds required' });
   }
   try {
-    const meeting = startPlanningMeeting(title, description || '', participantIds);
+    const meeting = startPlanningMeeting(title, description || '', participantIds, character);
     res.status(201).json(meeting);
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+app.get('/api/meetings/:id/report', (req, res) => {
+  const meeting = getMeeting(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+  if (!meeting.report) return res.status(404).json({ error: 'No report available yet' });
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.send(meeting.report);
 });
 
 app.post('/api/meetings/:id/decide', (req, res) => {

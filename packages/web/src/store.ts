@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -31,7 +31,7 @@ interface Store {
   stopAgent: (id: string) => Promise<void>;
   resetAgent: (id: string) => Promise<void>;
   applyPreset: (presetId: string) => Promise<void>;
-  createMeeting: (title: string, description: string, participantIds: string[]) => Promise<void>;
+  createMeeting: (title: string, description: string, participantIds: string[], character?: MeetingCharacter) => Promise<void>;
   decideMeeting: (meetingId: string, winnerId: string, feedback: string) => Promise<void>;
   startTechSpec: (title: string, description: string, assignments: Array<{ role: string; agentId: string }>) => Promise<void>;
   rerunTechSpecRole: (meetingId: string, role: string) => Promise<void>;
@@ -142,14 +142,14 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  createMeeting: async (title, description, participantIds) => {
+  createMeeting: async (title, description, participantIds, character = 'planning') => {
     const { setLoading } = get();
     setLoading('createMeeting', true);
     try {
       const res = await fetch(`${API}/api/meetings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description, participantIds }),
+        body: JSON.stringify({ title, description, participantIds, character }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       toast('Meeting started! PMs are generating proposals...', 'success');

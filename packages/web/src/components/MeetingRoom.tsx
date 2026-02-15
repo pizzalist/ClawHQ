@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import type { Meeting, MeetingProposal, MeetingReview } from '@ai-office/shared';
+import type { Meeting, MeetingProposal, MeetingReview, MeetingCharacter } from '@ai-office/shared';
 import Spinner from './Spinner';
+
+const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
+  brainstorm: '🧠 브레인스토밍 (자유 토론)',
+  planning: '📋 기획 회의',
+  review: '🔍 검토 회의',
+  retrospective: '🔄 회고',
+};
 
 function ReviewCard({ review }: { review: MeetingReview }) {
   return (
@@ -15,33 +22,21 @@ function ReviewCard({ review }: { review: MeetingReview }) {
         </span>
       </div>
       <p className="text-xs text-gray-400 mb-2">{review.summary}</p>
-      {review.pros.length > 0 && (
-        <div className="mb-1">
-          {review.pros.map((p, i) => (
-            <div key={i} className="text-xs text-green-400/80 flex items-start gap-1">
-              <span>✅</span><span>{p}</span>
-            </div>
-          ))}
+      {review.pros.length > 0 && review.pros.map((p, i) => (
+        <div key={`pro-${i}`} className="text-xs text-green-400/80 flex items-start gap-1">
+          <span>✅</span><span>{p}</span>
         </div>
-      )}
-      {review.cons.length > 0 && (
-        <div className="mb-1">
-          {review.cons.map((c, i) => (
-            <div key={i} className="text-xs text-red-400/80 flex items-start gap-1">
-              <span>❌</span><span>{c}</span>
-            </div>
-          ))}
+      ))}
+      {review.cons.length > 0 && review.cons.map((c, i) => (
+        <div key={`con-${i}`} className="text-xs text-red-400/80 flex items-start gap-1">
+          <span>❌</span><span>{c}</span>
         </div>
-      )}
-      {review.risks.length > 0 && (
-        <div>
-          {review.risks.map((r, i) => (
-            <div key={i} className="text-xs text-yellow-400/80 flex items-start gap-1">
-              <span>⚠️</span><span>{r}</span>
-            </div>
-          ))}
+      ))}
+      {review.risks.length > 0 && review.risks.map((r, i) => (
+        <div key={`risk-${i}`} className="text-xs text-yellow-400/80 flex items-start gap-1">
+          <span>⚠️</span><span>{r}</span>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -94,9 +89,18 @@ function ProposalCard({ proposal, meeting, onChoose }: { proposal: MeetingPropos
           onClick={onChoose}
           className="mt-3 w-full py-2 bg-accent hover:bg-accent/80 text-white text-sm font-bold rounded-lg transition-all hover:scale-[1.02] active:scale-95"
         >
-          ✅ Choose This Proposal
+          ✅ 이 제안 채택
         </button>
       )}
+    </div>
+  );
+}
+
+function MeetingReport({ report }: { report: string }) {
+  return (
+    <div className="mt-5 p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/5">
+      <h3 className="text-sm font-semibold text-indigo-300 mb-2">📝 회의 결과 보고서</h3>
+      <pre className="text-xs text-gray-200 whitespace-pre-wrap font-mono leading-relaxed">{report}</pre>
     </div>
   );
 }
@@ -120,17 +124,20 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
           {meeting.status}
         </span>
       </div>
-      {meeting.description && <p className="text-sm text-gray-400 mb-4">{meeting.description}</p>}
+      {meeting.description && <p className="text-sm text-gray-400 mb-3">{meeting.description}</p>}
 
-      <div className="text-xs text-gray-500 mb-3">
-        Participants: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
+      <div className="text-xs text-gray-500 mb-2">
+        참가자: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
       </div>
+      {meeting.character && (
+        <div className="text-xs text-indigo-300 mb-3">유형: {MEETING_CHARACTER_LABELS[meeting.character]}</div>
+      )}
 
       {meeting.status === 'active' && meeting.proposals.length < meeting.participants.length && (
         <div className="flex items-center gap-2 mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
           <Spinner />
           <span className="text-sm text-blue-300">
-            Generating proposals... {meeting.proposals.length}/{meeting.participants.length} complete
+            제안서 생성 중... {meeting.proposals.length}/{meeting.participants.length}
           </span>
         </div>
       )}
@@ -138,13 +145,13 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
       {meeting.status === 'reviewing' && (
         <div className="flex items-center gap-2 mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
           <Spinner />
-          <span className="text-sm text-yellow-300">Reviews in progress...</span>
+          <span className="text-sm text-yellow-300">리뷰 진행 중...</span>
         </div>
       )}
 
       {meeting.status === 'completed' && !meeting.decision && (
         <div className="mb-4 p-3 bg-accent/10 border border-accent/30 rounded-lg">
-          <span className="text-sm text-accent font-semibold">🗳️ Proposals ready! Choose the best one below.</span>
+          <span className="text-sm text-accent font-semibold">🗳️ 제안서가 준비됐어요! 아래에서 채택해 주세요.</span>
         </div>
       )}
 
@@ -158,6 +165,8 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
           />
         ))}
       </div>
+
+      {meeting.report && <MeetingReport report={meeting.report} />}
     </div>
   );
 }
@@ -169,8 +178,9 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [character, setCharacter] = useState<MeetingCharacter>('planning');
 
-  const pmAgents = agents.filter(a => a.role === 'pm' || a.role === 'developer' || a.role === 'designer');
+  const candidates = agents.filter(a => a.role === 'pm' || a.role === 'reviewer' || a.role === 'developer' || a.role === 'designer');
 
   const toggle = (id: string) => {
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
@@ -178,37 +188,53 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
 
   const submit = async () => {
     if (!title.trim() || selected.length < 2) return;
-    await createMeeting(title, description, selected);
+    await createMeeting(title, description, selected, character);
     onClose();
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface border border-gray-700/50 rounded-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold mb-4">🏛️ New Planning Meeting</h2>
+      <div className="bg-surface border border-gray-700/50 rounded-xl p-6 w-full max-w-xl" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-bold mb-4">🏛️ 새 미팅 시작</h2>
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Title</label>
+            <label className="text-xs text-gray-400 mb-1 block">회의 제목</label>
             <input
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="e.g. Q1 Product Strategy"
+              placeholder="예: 신규 프로젝트 기획 회의"
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Description</label>
+            <label className="text-xs text-gray-400 mb-1 block">안건 / 설명</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Describe what proposals should cover..."
+              placeholder="회의에서 다룰 내용을 적어주세요"
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm h-24 resize-none"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Select Participants (min 2)</label>
+            <label className="text-xs text-gray-400 mb-1 block">회의 성격 (사용자 확인)</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(MEETING_CHARACTER_LABELS) as MeetingCharacter[]).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCharacter(c)}
+                  className={`text-left px-3 py-2 text-xs rounded-lg border transition-all ${
+                    character === c ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200' : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                  }`}
+                >
+                  {MEETING_CHARACTER_LABELS[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">참가자 선택 (최소 2명)</label>
             <div className="flex flex-wrap gap-2">
-              {pmAgents.map(a => (
+              {candidates.map(a => (
                 <button
                   key={a.id}
                   onClick={() => toggle(a.id)}
@@ -225,13 +251,13 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="flex gap-2 mt-5 justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">취소</button>
           <button
             onClick={submit}
             disabled={!title.trim() || selected.length < 2 || loading}
             className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-sm font-semibold rounded-lg disabled:opacity-40 transition-all"
           >
-            {loading ? 'Starting...' : '🚀 Start Meeting'}
+            {loading ? '시작 중...' : '🚀 회의 시작'}
           </button>
         </div>
       </div>
@@ -251,21 +277,20 @@ export default function MeetingRoom() {
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/30">
-        <h2 className="text-sm font-semibold text-gray-300">🏛️ Meetings</h2>
+        <h2 className="text-sm font-semibold text-gray-300">🏛️ 미팅 룸</h2>
         <button
           onClick={() => setShowNew(true)}
           className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs font-semibold rounded-lg transition-all"
         >
-          + New Meeting
+          + 새 미팅
         </button>
       </div>
 
       <div className="flex flex-1 min-h-0">
-        {/* Meeting list */}
-        <div className="w-64 border-r border-gray-700/30 overflow-y-auto shrink-0">
+        <div className="w-72 border-r border-gray-700/30 overflow-y-auto shrink-0">
           {meetings.length === 0 && (
             <div className="p-4 text-sm text-gray-500 text-center">
-              No meetings yet.<br />Start one to get proposals!
+              아직 미팅이 없어요.<br />새 미팅을 시작해보세요.
             </div>
           )}
           {meetings.map(m => (
@@ -282,19 +307,18 @@ export default function MeetingRoom() {
               </div>
               <div className="text-xs text-gray-500 mt-0.5">
                 {m.proposals.length} proposals · {m.status}
-                {m.status === 'completed' && !m.decision && ' · ⚡ Needs decision'}
+                {m.status === 'completed' && !m.decision && ' · ⚡ 결정 필요'}
               </div>
             </button>
           ))}
         </div>
 
-        {/* Meeting detail */}
         <div className="flex-1 overflow-y-auto">
           {selectedMeeting ? (
             <MeetingDetail meeting={selectedMeeting} />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-              Select a meeting or create a new one
+              미팅을 선택하거나 새로 시작하세요
             </div>
           )}
         </div>
