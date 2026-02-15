@@ -208,17 +208,34 @@ export interface Meeting {
     createdAt: string;
     updatedAt: string;
 }
+export interface ChiefInlineAction {
+    id: string;
+    label: string;
+    action: 'view_result' | 'approve' | 'request_revision' | 'select_proposal' | 'custom';
+    params: Record<string, string>;
+}
+export interface ChiefNotification {
+    id: string;
+    type: 'task_complete' | 'task_failed' | 'meeting_complete' | 'meeting_review_complete' | 'info';
+    title: string;
+    summary: string;
+    actions: ChiefInlineAction[];
+    taskId?: string;
+    meetingId?: string;
+    createdAt: string;
+}
 export interface ChiefChatMessage {
     id: string;
     role: 'user' | 'chief';
     content: string;
+    notification?: ChiefNotification;
     createdAt: string;
 }
 export interface TeamPlanSuggestion {
     role: AgentRole;
     count: number;
 }
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin' | 'chief_notification';
 export interface WSMessage {
     type: WSMessageType;
     payload: unknown;

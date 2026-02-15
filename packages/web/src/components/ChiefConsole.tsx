@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
-import type { ChiefAction, ChiefCheckIn } from '@ai-office/shared';
+import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage } from '@ai-office/shared';
 
 const ROLE_LABELS: Record<string, string> = {
   pm: 'PM', developer: '개발', reviewer: '리뷰어',
@@ -18,6 +18,14 @@ const STAGE_STYLES: Record<string, { icon: string; border: string; bg: string }>
   progress: { icon: '📊', border: 'border-cyan-500/40', bg: 'bg-cyan-500/10' },
   decision: { icon: '⚖️', border: 'border-yellow-500/40', bg: 'bg-yellow-500/10' },
   completion: { icon: '🎉', border: 'border-emerald-500/40', bg: 'bg-emerald-500/10' },
+};
+
+const NOTIF_STYLES: Record<string, { icon: string; border: string; bg: string }> = {
+  task_complete: { icon: '✅', border: 'border-emerald-500/40', bg: 'bg-emerald-500/10' },
+  task_failed: { icon: '❌', border: 'border-red-500/40', bg: 'bg-red-500/10' },
+  meeting_complete: { icon: '🏛️', border: 'border-indigo-500/40', bg: 'bg-indigo-500/10' },
+  meeting_review_complete: { icon: '🔍', border: 'border-purple-500/40', bg: 'bg-purple-500/10' },
+  info: { icon: 'ℹ️', border: 'border-gray-500/40', bg: 'bg-gray-500/10' },
 };
 
 function ActionCard({ action, index, selectable, selected, onToggle }: {
@@ -52,6 +60,42 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
             {ok ? '✓' : '✗'} {action.result!.message}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function InlineNotification({ notification }: { notification: ChiefNotification }) {
+  const handleAction = useStore((s) => s.handleChiefInlineAction);
+  const setSelectedTask = useStore((s) => s.setSelectedTask);
+  const [acting, setActing] = useState<string | null>(null);
+  const style = NOTIF_STYLES[notification.type] || NOTIF_STYLES.info;
+
+  const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
+    setActing(actionId);
+    // Special: view_result opens the task result modal
+    if (action === 'view_result' && params.taskId) {
+      setSelectedTask(params.taskId);
+      setActing(null);
+      return;
+    }
+    await handleAction(notification.id, actionId, params);
+    setActing(null);
+  };
+
+  return (
+    <div className={`rounded-xl border ${style.border} ${style.bg} p-3 space-y-2`}>
+      <div className="flex flex-wrap gap-2 mt-1">
+        {notification.actions.map((act) => (
+          <button
+            key={act.id}
+            onClick={() => onAction(act.id, act.action, act.params)}
+            disabled={acting !== null}
+            className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
+          >
+            {acting === act.id ? '처리 중...' : act.label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -125,6 +169,41 @@ function ThinkingIndicator() {
   );
 }
 
+function ChatMessage({ m, checkIn }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn }) {
+  const isUser = m.role === 'user';
+  const hasNotification = m.notification != null;
+  const notifStyle = hasNotification ? NOTIF_STYLES[m.notification!.type] || NOTIF_STYLES.info : null;
+
+  return (
+    <div className="space-y-2">
+      <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${
+        isUser
+          ? 'ml-auto bg-accent/20 text-accent border border-accent/40'
+          : hasNotification
+            ? `${notifStyle!.bg} border ${notifStyle!.border} text-gray-100`
+            : 'bg-gray-800/70 border border-gray-700/50 text-gray-100'
+      }`}>
+        <div className="text-[11px] mb-1 opacity-70">
+          {isUser ? '나' : hasNotification ? `${notifStyle!.icon} 총괄자` : '총괄자'}
+        </div>
+        {m.content}
+      </div>
+      {/* Inline action buttons for notifications */}
+      {hasNotification && m.notification!.actions.length > 0 && (
+        <div className="max-w-[85%]">
+          <InlineNotification notification={m.notification!} />
+        </div>
+      )}
+      {/* Check-in options */}
+      {checkIn && (
+        <div className="max-w-[85%]">
+          <CheckInCard checkIn={checkIn} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChiefConsole() {
   const chiefMessages = useStore((s) => s.chiefMessages);
   const chiefSuggestions = useStore((s) => s.chiefSuggestions);
@@ -147,6 +226,7 @@ export default function ChiefConsole() {
   const [input, setInput] = useState('');
   const [selectedActionIndices, setSelectedActionIndices] = useState<Set<number>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const hasSuggestions = chiefSuggestions.length > 0;
   const hasProposal = chiefProposedActions.length > 0 && chiefPendingMessageId != null;
@@ -168,10 +248,24 @@ export default function ChiefConsole() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chiefMessages, chiefThinking, chiefCheckIns]);
 
+  // Build check-in map for inline rendering
+  const checkInByMsgId = useMemo(() => {
+    const map = new Map<string, ChiefCheckIn>();
+    for (const ci of chiefCheckIns) map.set(ci.id, ci);
+    return map;
+  }, [chiefCheckIns]);
+
   const send = async () => {
-    if (!input.trim() || chiefThinking) return;
+    const msg = input.trim();
+    if (!msg || chiefThinking) return;
     setInput('');
-    await chiefChat(input.trim());
+    await chiefChat(msg);
+  };
+
+  // Use form onSubmit to prevent double-send from button click + Enter
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    send();
   };
 
   const toggleAction = (idx: number) => {
@@ -194,70 +288,56 @@ export default function ChiefConsole() {
     await rejectProposal(chiefPendingMessageId);
   };
 
-  // Find which check-in corresponds to which message (by ID match)
-  const checkInByMsgId = useMemo(() => {
-    const map = new Map<string, ChiefCheckIn>();
-    for (const ci of chiefCheckIns) map.set(ci.id, ci);
-    return map;
-  }, [chiefCheckIns]);
-
   return (
     <div className="flex-1 min-h-0 p-4 flex gap-4 overflow-hidden">
-      {/* Chat area */}
+      {/* Chat area — main interaction */}
       <div className="flex-1 min-w-0 border border-gray-700/40 rounded-xl bg-surface flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-700/30 text-sm font-semibold text-gray-200 flex items-center gap-2">
-          🧠 총괄자 운영 콘솔
+          🧠 총괄자 콘솔
           {chiefThinking && <span className="text-xs text-accent animate-pulse">처리 중...</span>}
-          {hasCheckIns && <span className="text-xs text-yellow-400">🔔 확인 요청 {chiefCheckIns.length}건</span>}
+          {hasCheckIns && <span className="text-xs text-yellow-400">🔔 {chiefCheckIns.length}</span>}
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {chiefMessages.length === 0 && (
-            <div className="text-sm text-gray-500">총괄자에게 목표를 말하면 LLM이 팀 구성, 작업, 미팅을 <b>제안</b>합니다. 진행 중에도 매 단계마다 확인을 요청합니다.</div>
-          )}
-          {chiefMessages.map((m) => {
-            const relatedCheckIn = checkInByMsgId.get(m.id);
-            return (
-              <div key={m.id} className="space-y-2">
-                <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${m.role === 'user' ? 'ml-auto bg-accent/20 text-accent border border-accent/40' : 'bg-gray-800/70 border border-gray-700/50 text-gray-100'}`}>
-                  <div className="text-[11px] mb-1 opacity-70">{m.role === 'user' ? '나' : '총괄자'}</div>
-                  {m.content}
-                </div>
-                {/* Inline check-in options right after the message */}
-                {relatedCheckIn && (
-                  <div className="max-w-[85%]">
-                    <CheckInCard checkIn={relatedCheckIn} />
-                  </div>
-                )}
+            <div className="text-sm text-gray-500">
+              총괄자에게 자연스럽게 말해보세요. 모든 업무 지시, 결과 확인, 의사결정이 여기서 이루어집니다.
+              <div className="mt-3 space-y-1 text-xs text-gray-600">
+                <div>💡 예: "웹사이트 만들어줘"</div>
+                <div>💡 예: "현재 진행 상황 알려줘"</div>
+                <div>💡 예: "PM 2명, 개발자 3명으로 팀 꾸려줘"</div>
               </div>
-            );
-          })}
+            </div>
+          )}
+          {chiefMessages.map((m) => (
+            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} />
+          ))}
           {chiefThinking && <ThinkingIndicator />}
           <div ref={messagesEndRef} />
         </div>
-        <div className="p-3 border-t border-gray-700/30 flex gap-2">
+        {/* Input — form-based to prevent double-send */}
+        <form ref={formRef} onSubmit={handleSubmit} className="p-3 border-t border-gray-700/30 flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder="예: 신규 웹서비스 런칭을 위한 팀을 구성해줘"
+            placeholder="총괄자에게 지시하세요..."
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
             disabled={chiefThinking}
           />
-          <button onClick={send} disabled={!input.trim() || loadingChat || chiefThinking}
+          <button type="submit" disabled={!input.trim() || loadingChat || chiefThinking}
             className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-            {loadingChat ? '전송 중...' : '전송'}
+            {loadingChat ? '...' : '전송'}
           </button>
-        </div>
+        </form>
       </div>
 
-      {/* Side panel */}
-      <div className="w-80 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4">
+      {/* Side panel — proposals & actions */}
+      <div className="w-72 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4">
 
         {/* LLM Proposal awaiting approval */}
         {hasProposal && (
           <div>
-            <h3 className="text-sm font-semibold text-yellow-300 mb-2">📋 총괄자 제안 — 승인 대기</h3>
-            <p className="text-xs text-gray-400 mb-2">실행할 액션을 선택하고 승인하세요.</p>
+            <h3 className="text-sm font-semibold text-yellow-300 mb-2">📋 제안 — 승인 대기</h3>
+            <p className="text-xs text-gray-400 mb-2">실행할 액션을 선택하세요.</p>
             <div className="space-y-2 mb-3">
               {chiefProposedActions.map((a, idx) => (
                 <ActionCard key={idx} action={a} index={idx} selectable
@@ -271,7 +351,7 @@ export default function ChiefConsole() {
               </button>
               <button onClick={handleReject}
                 className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm font-semibold">
-                ✗ 거절
+                ✗
               </button>
             </div>
           </div>
@@ -285,24 +365,6 @@ export default function ChiefConsole() {
               {chiefExecutedActions.map((a, idx) => (
                 <ActionCard key={idx} action={a} index={idx} />
               ))}
-            </div>
-          </div>
-        )}
-
-        {/* Pending check-ins summary */}
-        {hasCheckIns && !hasProposal && (
-          <div>
-            <h3 className="text-sm font-semibold text-yellow-300 mb-2">🔔 확인 대기 ({chiefCheckIns.length}건)</h3>
-            <p className="text-xs text-gray-400 mb-2">채팅에서 각 확인 요청에 응답해주세요.</p>
-            <div className="space-y-1">
-              {chiefCheckIns.map(ci => {
-                const sty = STAGE_STYLES[ci.stage] || STAGE_STYLES.progress;
-                return (
-                  <div key={ci.id} className={`text-xs px-2 py-1.5 rounded border ${sty.border} ${sty.bg} text-gray-300`}>
-                    {sty.icon} {ci.message.split('\n')[0].slice(0, 50)}...
-                  </div>
-                );
-              })}
             </div>
           </div>
         )}
@@ -321,34 +383,33 @@ export default function ChiefConsole() {
             </div>
             <button onClick={() => applyChiefPlan(chiefSuggestions)} disabled={!hasSuggestions || loadingApply}
               className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-40">
-              {loadingApply ? '적용 중...' : '✅ 제안 적용'}
+              {loadingApply ? '적용 중...' : '✅ 적용'}
             </button>
-            <p className="mt-3 text-xs text-gray-400">예상 편성: {suggestionSummary}</p>
+            <p className="mt-2 text-xs text-gray-400">{suggestionSummary}</p>
           </div>
         )}
 
         {chiefMeetingDraft && (
           <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10">
-            <div className="text-sm font-semibold text-indigo-200 mb-1">킥오프 미팅 연결</div>
-            <div className="text-xs text-gray-300 mb-3">팀 생성 후 바로 미팅을 시작합니다.</div>
+            <div className="text-sm font-semibold text-indigo-200 mb-1">킥오프 미팅</div>
             <button onClick={() => createMeeting(chiefMeetingDraft.title, chiefMeetingDraft.description, chiefMeetingDraft.participantIds, chiefMeetingDraft.character)}
               disabled={loadingMeeting}
               className="w-full px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-40">
-              {loadingMeeting ? '시작 중...' : '🏛️ 킥오프 미팅 시작'}
+              {loadingMeeting ? '시작 중...' : '🏛️ 시작'}
             </button>
           </div>
         )}
 
-        {!hasSuggestions && !hasProposal && !hasExecuted && !hasCheckIns && (
+        {!hasSuggestions && !hasProposal && !hasExecuted && (
           <div>
-            <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 사용 가이드</h3>
+            <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 가이드</h3>
             <div className="text-xs text-gray-400 space-y-2">
-              <p>총괄자는 매 단계마다 확인을 요청합니다:</p>
+              <p>모든 업무가 Chief를 통해 이루어집니다:</p>
               <ul className="list-disc list-inside space-y-1 text-gray-500">
-                <li>📐 <b>계획</b> — 팀 구성과 작업 제안 → 승인</li>
-                <li>📊 <b>진행</b> — 작업 완료 보고 → 확인/수정</li>
-                <li>⚖️ <b>결정</b> — 대안 제시 → 선택</li>
-                <li>🎉 <b>완료</b> — 최종 결과 → 확정</li>
+                <li>🗣️ 자연어로 지시 → Chief가 계획 제안</li>
+                <li>✅ 결과 완료 → Chief가 알림 + 확정 요청</li>
+                <li>⚖️ 미팅 결과 → Chief가 선택지 제시</li>
+                <li>🔄 수정 필요 → Chief에게 말하면 재작업</li>
               </ul>
             </div>
           </div>

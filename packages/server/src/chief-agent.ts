@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
+import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, ChiefInlineAction, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
@@ -32,6 +32,55 @@ export function onChiefResponse(cb: ChiefResponseCallback) { responseCallback = 
 type ChiefCheckInCallback = (checkIn: ChiefCheckIn) => void;
 let checkInCallback: ChiefCheckInCallback | null = null;
 export function onChiefCheckIn(cb: ChiefCheckInCallback) { checkInCallback = cb; }
+
+// Callbacks for chief notifications (task/meeting results with inline actions)
+type ChiefNotificationCallback = (notification: ChiefNotification) => void;
+let notificationCallback: ChiefNotificationCallback | null = null;
+export function onChiefNotification(cb: ChiefNotificationCallback) { notificationCallback = cb; }
+
+/**
+ * Push a notification into Chief chat with inline action buttons.
+ * This is the core function that makes Chief the central hub.
+ */
+export function notifyChief(notification: ChiefNotification) {
+  const msg: ChiefChatMessage = {
+    id: notification.id,
+    role: 'chief',
+    content: notification.summary,
+    notification,
+    createdAt: notification.createdAt,
+  };
+  pushMessage('chief-default', msg);
+  if (notificationCallback) notificationCallback(notification);
+}
+
+/**
+ * Handle an inline action button click from the Chief console.
+ */
+export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>): { reply: string } {
+  const action = actionId;
+  let reply = '처리되었습니다.';
+
+  if (action === 'approve' || actionId.startsWith('approve')) {
+    reply = '✅ 확정되었습니다. 다음 단계로 진행합니다.';
+  } else if (action === 'request_revision') {
+    reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?';
+  } else if (action === 'view_result') {
+    reply = '결과를 확인합니다.';
+  } else if (action === 'select_proposal') {
+    const proposalAgent = params?.agentName || '선택된 안';
+    reply = `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`;
+  }
+
+  const replyMsg: ChiefChatMessage = {
+    id: `chief-action-reply-${Date.now()}`,
+    role: 'chief',
+    content: reply,
+    createdAt: new Date().toISOString(),
+  };
+  pushMessage('chief-default', replyMsg);
+  return { reply };
+}
 
 function emitCheckIn(checkIn: ChiefCheckIn) {
   // Also add to default session messages so it appears in chat history
@@ -67,6 +116,23 @@ export function chiefHandleTaskEvent(event: AppEvent) {
 
     const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
     const resultPreview = task.result ? task.result.slice(0, 300) : '(결과 없음)';
+    const elapsedMs = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime();
+    const elapsedSec = Math.round(elapsedMs / 1000);
+
+    // Emit notification with inline actions
+    notifyChief({
+      id: `notif-task-${event.taskId}-${Date.now()}`,
+      type: 'task_complete',
+      title: task.title,
+      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초`,
+      actions: [
+        { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
+        { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
+        { id: `revise-${event.taskId}`, label: '🔄 수정 요청', action: 'request_revision', params: { taskId: event.taskId } },
+      ],
+      taskId: event.taskId,
+      createdAt: new Date().toISOString(),
+    });
 
     // Check how many tasks remain
     const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in-progress').length;
@@ -122,6 +188,20 @@ export function chiefHandleTaskEvent(event: AppEvent) {
 
     const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
 
+    // Emit notification
+    notifyChief({
+      id: `notif-taskfail-${event.taskId}-${Date.now()}`,
+      type: 'task_failed',
+      title: task.title,
+      summary: `❌ [태스크 실패] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n오류: ${(task.result || event.message || '알 수 없는 오류').slice(0, 200)}`,
+      actions: [
+        { id: `view-${event.taskId}`, label: '📄 상세 보기', action: 'view_result', params: { taskId: event.taskId } },
+        { id: `retry-${event.taskId}`, label: '🔄 재시도', action: 'custom', params: { taskId: event.taskId, command: 'retry' } },
+      ],
+      taskId: event.taskId,
+      createdAt: new Date().toISOString(),
+    });
+
     emitCheckIn({
       id: `checkin-failure-${Date.now()}`,
       stage: 'decision',
@@ -154,24 +234,73 @@ export function chiefHandleMeetingChange() {
       const proposalCount = meeting.proposals?.length || 0;
       if (proposalCount === 0) continue;
 
-      // Build options from proposals
+      const isReviewMeeting = meeting.character === 'review' || meeting.type === 'review';
+
+      if (isReviewMeeting) {
+        // Review meetings → consolidated feedback, NO winner selection
+        const allReviews = meeting.proposals.flatMap(p => p.reviews || []);
+        const avgScore = allReviews.length > 0
+          ? (allReviews.reduce((s, r) => s + r.score, 0) / allReviews.length).toFixed(1)
+          : 'N/A';
+        const keyFeedback = allReviews.slice(0, 3).map(r => `• ${r.summary || r.pros.join(', ')}`).join('\n');
+
+        notifyChief({
+          id: `notif-meeting-review-${meeting.id}-${Date.now()}`,
+          type: 'meeting_review_complete',
+          title: meeting.title,
+          summary: `🔍 [리뷰 완료] "${meeting.title}"\n평균 점수: ${avgScore}/10\n\n주요 피드백:\n${keyFeedback}\n\n이대로 확정할까요?`,
+          actions: [
+            { id: `view-meeting-${meeting.id}`, label: '📄 전체 리뷰 보기', action: 'view_result', params: { meetingId: meeting.id } },
+            { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
+            { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
+          ],
+          meetingId: meeting.id,
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        // Proposal meetings → present choices
+        const proposalActions: ChiefInlineAction[] = meeting.proposals.map((p, i) => ({
+          id: `select-${meeting.id}-${p.agentId}`,
+          label: `${String.fromCharCode(65 + i)}안: ${p.agentName}`,
+          action: 'select_proposal' as const,
+          params: { meetingId: meeting.id, agentId: p.agentId, agentName: p.agentName },
+        }));
+
+        const proposalSummaries = meeting.proposals.map((p, i) =>
+          `${String.fromCharCode(65 + i)}안 (${p.agentName}):\n${p.content.slice(0, 150)}${p.content.length > 150 ? '...' : ''}`
+        ).join('\n\n');
+
+        notifyChief({
+          id: `notif-meeting-${meeting.id}-${Date.now()}`,
+          type: 'meeting_complete',
+          title: meeting.title,
+          summary: `🏛️ [미팅 완료] "${meeting.title}"\n\n${proposalCount}개의 제안:\n\n${proposalSummaries}\n\n어떤 안으로 진행할까요?`,
+          actions: [
+            { id: `view-meeting-${meeting.id}`, label: '📄 상세 보기', action: 'view_result', params: { meetingId: meeting.id } },
+            ...proposalActions,
+          ],
+          meetingId: meeting.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      // Also emit check-in for backward compat
       const options: ChiefCheckInOption[] = meeting.proposals.map((p, i) => ({
         id: `proposal-${p.agentId}`,
         label: `${String.fromCharCode(65 + i)}안: ${p.agentName}`,
         description: p.content.slice(0, 80) + (p.content.length > 80 ? '...' : ''),
       }));
 
-      const proposalSummaries = meeting.proposals.map((p, i) =>
-        `${String.fromCharCode(65 + i)}안 (${p.agentName}):\n${p.content.slice(0, 150)}${p.content.length > 150 ? '...' : ''}`
-      ).join('\n\n');
-
       emitCheckIn({
         id: `checkin-meeting-${meeting.id}-${Date.now()}`,
         stage: 'decision',
-        message: `미팅 완료: "${meeting.title}" 🏛️\n\n` +
-          `${proposalCount}개의 제안이 나왔습니다:\n\n${proposalSummaries}\n\n` +
-          `어떤 안으로 진행할까요?`,
-        options,
+        message: isReviewMeeting
+          ? `리뷰 완료: "${meeting.title}" 🔍\n결과를 확인해주세요.`
+          : `미팅 완료: "${meeting.title}" 🏛️\n${proposalCount}개의 제안이 나왔습니다.`,
+        options: isReviewMeeting ? [
+          { id: 'approve', label: '✅ 확정' },
+          { id: 'revise', label: '🔄 수정 요청' },
+        ] : options,
         meetingId: meeting.id,
         createdAt: new Date().toISOString(),
       });
@@ -302,7 +431,7 @@ export function summarizeOfficeState(): string {
 
 function buildChiefSystemPrompt(): string {
   const state = summarizeOfficeState();
-  return `당신은 AI 오피스의 총괄자(Chief)입니다. 한국어로 응답하세요.
+  return `당신은 AI 오피스의 총괄자(Chief)입니다. 반드시 한국어로 응답하세요.
 
 ${state}
 
@@ -319,12 +448,18 @@ ${state}
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
 사용 가능한 character: brainstorm, planning, review, retrospective
 
-## 지침
-- 사용자의 요청을 분석하고, 적절한 팀 구성과 작업 계획을 **제안**하세요
-- 제안의 이유를 자연스럽게 설명하세요
-- ACTION 블록은 반드시 응답에 포함하세요 — 사용자가 확인 후 승인합니다
+## 핵심 지침
+- **항상 실행 전에 사용자 확인을 받으세요** — 절대 자동 실행하지 마세요
+- 옵션을 번호나 리스트로 명확하게 제시하세요
+- 결과를 간결하게 요약하세요
+- **적극적으로 다음 단계를 제안**하세요 ("이어서 ~할까요?")
+- 이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요
 - 불확실한 경우 사용자에게 질문하세요
-- 이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요`;
+- ACTION 블록은 반드시 응답에 포함하세요 — 사용자가 확인 후 승인합니다
+- 친근하고 자연스러운 대화체를 사용하세요
+
+## 승인 표현 인식
+사용자가 "ㅇ", "응", "확인", "승인", "ㅇㅇ", "네", "좋아", "진행해" 등으로 응답하면 이전 제안을 승인한 것으로 해석하세요.`;
 }
 
 /** Parse [ACTION:type key="value" ...] blocks from LLM output */

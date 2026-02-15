@@ -12,7 +12,7 @@ import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgent
 import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
-import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
 import { stmts } from './db.js';
 const app = express();
 app.use(cors());
@@ -55,6 +55,10 @@ onChiefResponse((_sessionId, response) => {
 // Forward chief proactive check-ins to WebSocket clients
 onChiefCheckIn((checkIn) => {
     broadcast({ type: 'chief_checkin', payload: checkIn });
+});
+// Forward chief notifications (task/meeting results with inline actions)
+onChiefNotification((notification) => {
+    broadcast({ type: 'chief_notification', payload: notification });
 });
 onTaskEvent((event) => {
     broadcast({ type: 'event', payload: event });
@@ -133,6 +137,26 @@ app.post('/api/chief/checkin/respond', (req, res) => {
     }
     try {
         const result = respondToCheckIn(checkInId, optionId, comment);
+        res.json({ ok: true, ...result });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/chief/action', (req, res) => {
+    const { notificationId, actionId, params } = req.body || {};
+    if (!notificationId || !actionId) {
+        return res.status(400).json({ error: 'notificationId and actionId are required' });
+    }
+    try {
+        const result = handleChiefAction(notificationId, actionId, params);
+        // Broadcast the reply to all clients
+        broadcast({ type: 'chief_response', payload: {
+                messageId: `action-reply-${Date.now()}`,
+                reply: result.reply,
+                actions: [],
+                state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+            } });
         res.json({ ok: true, ...result });
     }
     catch (err) {

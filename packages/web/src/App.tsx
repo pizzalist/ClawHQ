@@ -20,9 +20,10 @@ import ChiefConsole from './components/ChiefConsole';
 type View = 'office' | 'chief' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
 
 export default function App() {
-  const [view, setView] = useState<View>('office');
+  const [view, setView] = useState<View>('chief');
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
+  const chiefPendingDecisions = useStore((s) => s.chiefPendingDecisions);
   const [decisionCount, setDecisionCount] = useState(0);
   useEffect(() => { connectWS(); }, []);
   useEffect(() => {
@@ -73,6 +74,11 @@ export default function App() {
             }`}
           >
             {label}
+            {v === 'chief' && chiefPendingDecisions > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-yellow-500 text-black rounded-full font-bold leading-none">
+                {chiefPendingDecisions}
+              </span>
+            )}
             {v === 'decisions' && decisionCount > 0 && (
               <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-accent text-white rounded-full font-bold leading-none">
                 {decisionCount}

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, TeamPlanSuggestion } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefNotification, TeamPlanSuggestion } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -17,6 +17,8 @@ interface Store {
   chiefExecutedActions: ChiefAction[];   // approved & executed results
   chiefPendingMessageId: string | null;  // messageId of proposal awaiting approval
   chiefCheckIns: ChiefCheckIn[];         // proactive check-ins from Chief
+  chiefNotifications: ChiefNotification[]; // notifications with inline actions
+  chiefPendingDecisions: number;         // count of pending decisions for badge
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -30,6 +32,8 @@ interface Store {
   setChiefThinking: (v: boolean) => void;
   handleChiefResponse: (response: ChiefResponse) => void;
   handleChiefCheckIn: (checkIn: ChiefCheckIn) => void;
+  handleChiefNotification: (notification: ChiefNotification) => void;
+  handleChiefInlineAction: (notificationId: string, actionId: string, params?: Record<string, string>) => Promise<void>;
   respondToCheckIn: (checkInId: string, optionId: string, comment?: string) => Promise<void>;
   dismissCheckIn: (checkInId: string) => void;
   approveProposal: (messageId: string, selectedIndices?: number[]) => Promise<void>;
@@ -69,6 +73,8 @@ export const useStore = create<Store>((set, get) => ({
   chiefExecutedActions: [],
   chiefPendingMessageId: null,
   chiefCheckIns: [],
+  chiefNotifications: [],
+  chiefPendingDecisions: 0,
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -90,26 +96,77 @@ export const useStore = create<Store>((set, get) => ({
       content: response.reply,
       createdAt: new Date().toISOString(),
     };
-    set((s) => ({
-      chiefMessages: [...s.chiefMessages, chiefMsg],
-      chiefProposedActions: response.actions,
-      chiefExecutedActions: [],
-      chiefPendingMessageId: response.actions.length > 0 ? response.messageId : null,
-      chiefThinking: false,
-    }));
+    set((s) => {
+      // Deduplicate: skip if message with same id already exists
+      const exists = s.chiefMessages.some(m => m.id === response.messageId);
+      return {
+        chiefMessages: exists ? s.chiefMessages : [...s.chiefMessages, chiefMsg],
+        chiefProposedActions: response.actions,
+        chiefExecutedActions: [],
+        chiefPendingMessageId: response.actions.length > 0 ? response.messageId : null,
+        chiefThinking: false,
+      };
+    });
   },
   handleChiefCheckIn: (checkIn) => {
-    // Add check-in message to chat and to check-in queue
-    const chiefMsg: ChiefChatMessage = {
-      id: checkIn.id,
-      role: 'chief',
-      content: checkIn.message,
-      createdAt: checkIn.createdAt,
-    };
-    set((s) => ({
-      chiefMessages: [...s.chiefMessages, chiefMsg],
-      chiefCheckIns: [...s.chiefCheckIns, checkIn],
-    }));
+    set((s) => {
+      // Deduplicate
+      if (s.chiefMessages.some(m => m.id === checkIn.id)) return s;
+      const chiefMsg: ChiefChatMessage = {
+        id: checkIn.id,
+        role: 'chief',
+        content: checkIn.message,
+        createdAt: checkIn.createdAt,
+      };
+      return {
+        chiefMessages: [...s.chiefMessages, chiefMsg],
+        chiefCheckIns: [...s.chiefCheckIns, checkIn],
+      };
+    });
+  },
+  handleChiefNotification: (notification) => {
+    set((s) => {
+      // Deduplicate
+      if (s.chiefMessages.some(m => m.id === notification.id)) return s;
+      const chiefMsg: ChiefChatMessage = {
+        id: notification.id,
+        role: 'chief',
+        content: notification.summary,
+        notification,
+        createdAt: notification.createdAt,
+      };
+      return {
+        chiefMessages: [...s.chiefMessages, chiefMsg],
+        chiefNotifications: [...s.chiefNotifications, notification],
+        chiefPendingDecisions: s.chiefPendingDecisions + 1,
+      };
+    });
+  },
+  handleChiefInlineAction: async (notificationId, actionId, params) => {
+    try {
+      const res = await fetch(`${API}/api/chief/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationId, actionId, params }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json();
+      if (data.reply) {
+        const replyMsg: ChiefChatMessage = {
+          id: `action-reply-${Date.now()}`,
+          role: 'chief',
+          content: data.reply,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({
+          chiefMessages: [...s.chiefMessages, replyMsg],
+          chiefNotifications: s.chiefNotifications.filter(n => n.id !== notificationId),
+          chiefPendingDecisions: Math.max(0, s.chiefPendingDecisions - 1),
+        }));
+      }
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to handle action', 'error');
+    }
   },
   respondToCheckIn: async (checkInId, optionId, comment) => {
     try {
@@ -470,6 +527,10 @@ export function connectWS() {
       }
       case 'chief_checkin': {
         store.handleChiefCheckIn(msg.payload as ChiefCheckIn);
+        break;
+      }
+      case 'chief_notification': {
+        store.handleChiefNotification(msg.payload as ChiefNotification);
         break;
       }
       case 'event': {
