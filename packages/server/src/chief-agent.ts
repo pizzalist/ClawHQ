@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, ChiefInlineAction, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
+import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
@@ -231,76 +231,40 @@ export function chiefHandleMeetingChange() {
     if (meeting.status === 'completed' && !reportedMeetingCompletions.has(meeting.id)) {
       reportedMeetingCompletions.add(meeting.id);
 
-      const proposalCount = meeting.proposals?.length || 0;
-      if (proposalCount === 0) continue;
+      const contributionCount = meeting.proposals?.length || 0;
+      if (contributionCount === 0) continue;
 
-      const isReviewMeeting = meeting.character === 'review' || meeting.type === 'review';
+      // Collaborative model: show consolidated report, no winner selection
+      const participantSummary = meeting.proposals
+        .map(p => `• ${p.agentName}: ${p.content.slice(0, 100).replace(/\n/g, ' ')}${p.content.length > 100 ? '...' : ''}`)
+        .join('\n');
 
-      if (isReviewMeeting) {
-        // Review meetings → consolidated feedback, NO winner selection
-        const allReviews = meeting.proposals.flatMap(p => p.reviews || []);
-        const avgScore = allReviews.length > 0
-          ? (allReviews.reduce((s, r) => s + r.score, 0) / allReviews.length).toFixed(1)
-          : 'N/A';
-        const keyFeedback = allReviews.slice(0, 3).map(r => `• ${r.summary || r.pros.join(', ')}`).join('\n');
+      const reportPreview = meeting.report
+        ? meeting.report.slice(0, 400).replace(/\n{3,}/g, '\n\n') + (meeting.report.length > 400 ? '...' : '')
+        : participantSummary;
 
-        notifyChief({
-          id: `notif-meeting-review-${meeting.id}-${Date.now()}`,
-          type: 'meeting_review_complete',
-          title: meeting.title,
-          summary: `🔍 [리뷰 완료] "${meeting.title}"\n평균 점수: ${avgScore}/10\n\n주요 피드백:\n${keyFeedback}\n\n이대로 확정할까요?`,
-          actions: [
-            { id: `view-meeting-${meeting.id}`, label: '📄 전체 리뷰 보기', action: 'view_result', params: { meetingId: meeting.id } },
-            { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
-            { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
-          ],
-          meetingId: meeting.id,
-          createdAt: new Date().toISOString(),
-        });
-      } else {
-        // Proposal meetings → present choices
-        const proposalActions: ChiefInlineAction[] = meeting.proposals.map((p, i) => ({
-          id: `select-${meeting.id}-${p.agentId}`,
-          label: `${String.fromCharCode(65 + i)}안: ${p.agentName}`,
-          action: 'select_proposal' as const,
-          params: { meetingId: meeting.id, agentId: p.agentId, agentName: p.agentName },
-        }));
-
-        const proposalSummaries = meeting.proposals.map((p, i) =>
-          `${String.fromCharCode(65 + i)}안 (${p.agentName}):\n${p.content.slice(0, 150)}${p.content.length > 150 ? '...' : ''}`
-        ).join('\n\n');
-
-        notifyChief({
-          id: `notif-meeting-${meeting.id}-${Date.now()}`,
-          type: 'meeting_complete',
-          title: meeting.title,
-          summary: `🏛️ [미팅 완료] "${meeting.title}"\n\n${proposalCount}개의 제안:\n\n${proposalSummaries}\n\n어떤 안으로 진행할까요?`,
-          actions: [
-            { id: `view-meeting-${meeting.id}`, label: '📄 상세 보기', action: 'view_result', params: { meetingId: meeting.id } },
-            ...proposalActions,
-          ],
-          meetingId: meeting.id,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      // Also emit check-in for backward compat
-      const options: ChiefCheckInOption[] = meeting.proposals.map((p, i) => ({
-        id: `proposal-${p.agentId}`,
-        label: `${String.fromCharCode(65 + i)}안: ${p.agentName}`,
-        description: p.content.slice(0, 80) + (p.content.length > 80 ? '...' : ''),
-      }));
+      notifyChief({
+        id: `notif-meeting-${meeting.id}-${Date.now()}`,
+        type: 'meeting_complete',
+        title: meeting.title,
+        summary: `🏛️ [회의 완료] "${meeting.title}"\n\n${contributionCount}명의 전문가가 논의를 완료했습니다.\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
+        actions: [
+          { id: `view-meeting-${meeting.id}`, label: '📄 회의 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
+          { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
+          { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
+        ],
+        meetingId: meeting.id,
+        createdAt: new Date().toISOString(),
+      });
 
       emitCheckIn({
         id: `checkin-meeting-${meeting.id}-${Date.now()}`,
         stage: 'decision',
-        message: isReviewMeeting
-          ? `리뷰 완료: "${meeting.title}" 🔍\n결과를 확인해주세요.`
-          : `미팅 완료: "${meeting.title}" 🏛️\n${proposalCount}개의 제안이 나왔습니다.`,
-        options: isReviewMeeting ? [
-          { id: 'approve', label: '✅ 확정' },
-          { id: 'revise', label: '🔄 수정 요청' },
-        ] : options,
+        message: `회의 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 전문가가 각자 관점에서 분석을 완료했습니다. 결과를 확인해주세요.`,
+        options: [
+          { id: 'approve', label: '✅ 확정', description: '회의 결과를 확정합니다' },
+          { id: 'revise', label: '🔄 수정 요청', description: '추가 논의가 필요합니다' },
+        ],
         meetingId: meeting.id,
         createdAt: new Date().toISOString(),
       });

@@ -69,7 +69,16 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
   const handleAction = useStore((s) => s.handleChiefInlineAction);
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const [acting, setActing] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState(false);
   const style = NOTIF_STYLES[notification.type] || NOTIF_STYLES.info;
+
+  if (dismissed) {
+    return (
+      <div className={`rounded-xl border ${style.border} ${style.bg} p-2 opacity-50`}>
+        <div className="text-xs text-gray-400">✓ 처리됨</div>
+      </div>
+    );
+  }
 
   const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
     setActing(actionId);
@@ -81,6 +90,10 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
     }
     await handleAction(notification.id, actionId, params);
     setActing(null);
+    // Dismiss after handling (except view_result)
+    if (action !== 'view_result') {
+      setDismissed(true);
+    }
   };
 
   return (

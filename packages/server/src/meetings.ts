@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal, MeetingReview } from '@ai-office/shared';
+import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
@@ -40,9 +40,8 @@ function saveMeeting(m: Meeting) {
   emitChange();
 }
 
-// Track pending proposals per meeting
-const pendingProposals = new Map<string, { total: number; done: number }>();
-const pendingReviews = new Map<string, { total: number; done: number }>();
+// Track pending contributions per meeting
+const pendingContributions = new Map<string, { total: number; done: number }>();
 
 export function createMeeting(title: string, description: string, type: MeetingType, participantIds: string[], character?: MeetingCharacter): Meeting {
   const id = uuid();
@@ -52,16 +51,68 @@ export function createMeeting(title: string, description: string, type: MeetingT
   return meeting;
 }
 
-export function startPlanningMeeting(title: string, description: string, pmAgentIds: string[], character?: MeetingCharacter): Meeting {
-  const meeting = createMeeting(title, description, 'planning', pmAgentIds, character);
-  pendingProposals.set(meeting.id, { total: pmAgentIds.length, done: 0 });
+/** Role-specific focus areas for meeting contributions */
+const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
+  pm: {
+    label: 'PM',
+    focus: '전략, 우선순위, 실행계획, 리소스 배분, 일정 관리',
+  },
+  developer: {
+    label: '개발자',
+    focus: '기술적 분석, 구현 가능성, 기술 스택, 기술 리스크, 아키텍처',
+  },
+  reviewer: {
+    label: '리뷰어',
+    focus: '품질, 리스크, 개선점, 놓친 부분, 잠재적 문제',
+  },
+  designer: {
+    label: '디자이너',
+    focus: 'UX/UI, 사용자 관점, 디자인 방향, 사용성',
+  },
+  devops: {
+    label: 'DevOps',
+    focus: '인프라, 배포, 운영, 모니터링, 확장성',
+  },
+  qa: {
+    label: 'QA',
+    focus: '테스트 전략, 안정성, 엣지케이스, 품질 보증',
+  },
+};
 
-  for (const agentId of pmAgentIds) {
+/**
+ * Start a collaborative planning meeting.
+ * Each agent contributes their expert perspective on the topic (NOT a competing proposal).
+ * When all contributions are in, a consolidated report is generated.
+ */
+export function startPlanningMeeting(title: string, description: string, participantIds: string[], character?: MeetingCharacter): Meeting {
+  const meeting = createMeeting(title, description, 'planning', participantIds, character);
+  pendingContributions.set(meeting.id, { total: participantIds.length, done: 0 });
+
+  for (const agentId of participantIds) {
     const agent = getAgent(agentId);
     if (!agent) continue;
 
+    const roleInfo = ROLE_FOCUS[agent.role] || { label: agent.role, focus: '전반적인 분석' };
     const sessionId = `meeting-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
-    const prompt = `You are ${agent.name}, a ${agent.role} in the AI Office.\n\nYou are in a planning meeting. Create a detailed proposal for:\n\n## ${title}\n\n${description}\n\nProvide:\n1. Executive Summary\n2. Detailed Plan with steps\n3. Timeline estimate\n4. Resource requirements\n5. Risk assessment\n\nBe specific and actionable.`;
+
+    const prompt = `당신은 ${agent.name}, AI 오피스 팀의 ${roleInfo.label}입니다.
+
+팀이 다음 주제에 대해 회의를 진행하고 있습니다:
+
+## "${title}"
+
+${description}
+
+${roleInfo.label} 관점에서 전문적인 분석과 의견을 공유해주세요.
+
+집중해야 할 영역:
+- ${roleInfo.focus}
+- 이 주제에 대한 구체적인 분석
+- 실행 가능한 제안
+
+"제안서"나 "proposal" 형식으로 작성하지 마세요. 회의에서 발언하듯이 자연스럽게 분석과 의견을 직접 공유해주세요.
+
+반드시 한국어로 응답하세요.`;
 
     try { transitionAgent(agentId, 'working', null, sessionId); } catch { /* may already be working */ }
 
@@ -71,174 +122,74 @@ export function startPlanningMeeting(title: string, description: string, pmAgent
       role: agent.role,
       model: agent.model,
       prompt,
-      onComplete: (run) => handleProposalComplete(meeting.id, agentId, agent.name, run),
+      onComplete: (run) => handleContributionComplete(meeting.id, agentId, agent.name, agent.role, run),
     });
   }
 
   return meeting;
 }
 
-function handleProposalComplete(meetingId: string, agentId: string, agentName: string, run: AgentRun) {
+function handleContributionComplete(meetingId: string, agentId: string, agentName: string, agentRole: string, run: AgentRun) {
   const meeting = getMeeting(meetingId);
   if (!meeting) return;
 
   const content = run.exitCode === 0
     ? parseAgentOutput(run.stdout)
-    : `[Error generating proposal: exit ${run.exitCode}]`;
+    : `[오류 발생: exit ${run.exitCode}]`;
 
-  const proposal: MeetingProposal = {
+  // We reuse MeetingProposal type but treat it as a "contribution"
+  const contribution: MeetingProposal = {
     agentId,
     agentName,
     content,
     taskId: run.sessionId,
-    reviews: [],
+    reviews: [], // Not used in collaborative model
   };
 
-  meeting.proposals.push(proposal);
+  meeting.proposals.push(contribution);
   saveMeeting(meeting);
 
   // Reset agent
-  try { transitionAgent(agentId, 'reviewing', null); } catch { /* ignore */ }
+  try { transitionAgent(agentId, 'done', null); } catch { /* ignore */ }
   setTimeout(() => {
-    try { transitionAgent(agentId, 'done', null); } catch { /* ignore */ }
-    setTimeout(() => {
-      try { transitionAgent(agentId, 'idle', null, null); } catch { /* ignore */ }
-    }, 1000);
-  }, 500);
+    try { transitionAgent(agentId, 'idle', null, null); } catch { /* ignore */ }
+  }, 1000);
 
   cleanupRun(run.sessionId);
 
-  // Check if all proposals are in
-  const tracker = pendingProposals.get(meetingId);
+  // Check if all contributions are in
+  const tracker = pendingContributions.get(meetingId);
   if (tracker) {
     tracker.done++;
     if (tracker.done >= tracker.total) {
-      pendingProposals.delete(meetingId);
-      // Auto-start review phase
-      startReviewPhase(meetingId);
+      pendingContributions.delete(meetingId);
+      // All contributions received — generate consolidated report
+      finalizeMeeting(meetingId);
     }
   }
 }
 
-export function startReviewPhase(meetingId: string) {
+/**
+ * Finalize meeting: generate a consolidated report from all contributions.
+ * No review phase, no winner selection — just a unified summary.
+ */
+function finalizeMeeting(meetingId: string) {
   const meeting = getMeeting(meetingId);
   if (!meeting) return;
 
-  meeting.status = 'reviewing';
+  meeting.status = 'completed';
+  meeting.report = generateConsolidatedReport(meeting);
   saveMeeting(meeting);
-
-  // Find reviewer agents (not participants)
-  const participantSet = new Set(meeting.participants);
-  const reviewers = listAgents().filter(a => a.role === 'reviewer' && !participantSet.has(a.id));
-
-  if (reviewers.length === 0) {
-    // No reviewers available — mark complete
-    meeting.status = 'completed';
-    saveMeeting(meeting);
-    return;
-  }
-
-  // Each reviewer reviews all proposals; first reviewer is the devil's advocate (깐깐이)
-  let totalReviews = reviewers.length * meeting.proposals.length;
-  pendingReviews.set(meetingId, { total: totalReviews, done: 0 });
-
-  for (let ri = 0; ri < reviewers.length; ri++) {
-    const reviewer = reviewers[ri];
-    const isDevilsAdvocate = ri === 0;
-
-    for (let pi = 0; pi < meeting.proposals.length; pi++) {
-      const proposal = meeting.proposals[pi];
-      const sessionId = `review-${meetingId.slice(0, 8)}-${reviewer.name.toLowerCase()}-p${pi}-${Date.now()}`;
-
-      const devilPrompt = isDevilsAdvocate
-        ? `You are 깐깐이 (Devil's Advocate). Be EXTREMELY critical. Find EVERY flaw, weakness, and risk. Do not hold back.\n\n`
-        : '';
-
-      const prompt = `You are ${reviewer.name}, a reviewer in the AI Office.\n\n${devilPrompt}Review this proposal critically for the meeting "${meeting.title}".\n\nProposal by ${proposal.agentName}:\n${proposal.content.slice(0, 3000)}\n\nRespond in this EXACT format:\nSCORE: [1-10]\nPROS:\n- [pro 1]\n- [pro 2]\nCONS:\n- [con 1]\n- [con 2]\nRISKS:\n- [risk 1]\nSUMMARY: [one paragraph summary]`;
-
-      try { transitionAgent(reviewer.id, 'working', null, sessionId); } catch { /* ignore */ }
-
-      spawnAgentSession({
-        sessionId,
-        agentName: reviewer.name,
-        role: reviewer.role,
-        model: reviewer.model,
-        prompt,
-        onComplete: (run) => handleReviewComplete(meetingId, pi, reviewer.id, reviewer.name, isDevilsAdvocate, run),
-      });
-    }
-  }
 }
 
-function parseReviewOutput(text: string): Omit<MeetingReview, 'reviewerAgentId' | 'reviewerName' | 'isDevilsAdvocate'> {
-  const scoreMatch = text.match(/SCORE:\s*(\d+)/i);
-  const score = scoreMatch ? Math.min(10, Math.max(1, parseInt(scoreMatch[1]))) : 5;
-
-  const extractList = (label: string): string[] => {
-    const regex = new RegExp(`${label}:\\s*\\n((?:[-•*]\\s+.+\\n?)+)`, 'i');
-    const match = text.match(regex);
-    if (!match) return [];
-    return match[1].split('\n').map(l => l.replace(/^[-•*]\s+/, '').trim()).filter(Boolean);
-  };
-
-  const summaryMatch = text.match(/SUMMARY:\s*(.+)/i);
-
-  return {
-    score,
-    pros: extractList('PROS'),
-    cons: extractList('CONS'),
-    risks: extractList('RISKS'),
-    summary: summaryMatch ? summaryMatch[1].trim() : text.slice(0, 200),
-  };
-}
-
-function handleReviewComplete(meetingId: string, proposalIndex: number, reviewerAgentId: string, reviewerName: string, isDevilsAdvocate: boolean, run: AgentRun) {
-  const meeting = getMeeting(meetingId);
-  if (!meeting || !meeting.proposals[proposalIndex]) return;
-
-  const output = run.exitCode === 0 ? parseAgentOutput(run.stdout) : 'Review failed';
-  const parsed = parseReviewOutput(output);
-
-  const review: MeetingReview = {
-    reviewerAgentId,
-    reviewerName,
-    ...parsed,
-    isDevilsAdvocate,
-  };
-
-  if (!meeting.proposals[proposalIndex].reviews) {
-    meeting.proposals[proposalIndex].reviews = [];
-  }
-  meeting.proposals[proposalIndex].reviews!.push(review);
-  saveMeeting(meeting);
-
-  // Reset reviewer
-  try { transitionAgent(reviewerAgentId, 'reviewing', null); } catch { /* ignore */ }
-  setTimeout(() => {
-    try { transitionAgent(reviewerAgentId, 'done', null); } catch { /* ignore */ }
-    setTimeout(() => {
-      try { transitionAgent(reviewerAgentId, 'idle', null, null); } catch { /* ignore */ }
-    }, 1000);
-  }, 500);
-
-  cleanupRun(run.sessionId);
-
-  const tracker = pendingReviews.get(meetingId);
-  if (tracker) {
-    tracker.done++;
-    if (tracker.done >= tracker.total) {
-      pendingReviews.delete(meetingId);
-      meeting.status = 'completed';
-      meeting.report = generateMeetingReport(meeting);
-      saveMeeting(meeting);
-    }
-  }
-}
-
-function generateMeetingReport(meeting: Meeting): string {
+/**
+ * Generate a consolidated meeting report combining all agent perspectives.
+ */
+function generateConsolidatedReport(meeting: Meeting): string {
   const agents = listAgents();
   const agentMap = new Map(agents.map(a => [a.id, a]));
-  const participantNames = meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ');
+  const date = new Date().toLocaleDateString('ko-KR');
+
   const charLabels: Record<string, string> = {
     brainstorm: '🧠 자유 토론',
     planning: '📋 기획 회의',
@@ -246,49 +197,43 @@ function generateMeetingReport(meeting: Meeting): string {
     retrospective: '🔄 회고',
   };
   const charLabel = meeting.character ? (charLabels[meeting.character] || meeting.character) : meeting.type;
-  const date = new Date().toLocaleDateString('ko-KR');
 
-  let report = `# 회의 보고서: ${meeting.title}\n\n`;
-  report += `**유형:** ${charLabel} | **날짜:** ${date} | **참가자:** ${participantNames}\n\n`;
+  // Build participant list
+  const participantLines = meeting.proposals.map(p => {
+    const agent = agentMap.get(p.agentId);
+    const roleInfo = ROLE_FOCUS[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
+    return `- ${p.agentName} (${roleInfo.label}): ${roleInfo.focus.split(',')[0].trim()} 관점`;
+  }).join('\n');
+
+  // Build per-perspective summaries
+  const perspectiveSections = meeting.proposals.map(p => {
+    const agent = agentMap.get(p.agentId);
+    const roleInfo = ROLE_FOCUS[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
+    // Take first ~500 chars as summary, or full content if short
+    const summary = p.content.length > 600
+      ? p.content.slice(0, 600).replace(/\n*$/, '') + '...'
+      : p.content;
+    return `### ${roleInfo.label} 관점 (${p.agentName})\n\n${summary}`;
+  }).join('\n\n');
+
+  // Extract common themes (simple keyword-based)
+  const allContent = meeting.proposals.map(p => p.content).join('\n');
+
+  let report = `# ${meeting.title} 회의 결과\n\n`;
+  report += `**유형:** ${charLabel} | **날짜:** ${date}\n\n`;
+  report += `## 참여자\n${participantLines}\n\n`;
   report += `## 안건\n\n${meeting.description || '(설명 없음)'}\n\n`;
-
-  report += `## 제안서\n\n`;
-  for (const p of meeting.proposals) {
-    report += `### ${p.agentName}\n\n${p.content.slice(0, 1000)}\n\n`;
-  }
-
-  report += `## 리뷰 결과\n\n`;
-  for (const p of meeting.proposals) {
-    if (p.reviews && p.reviews.length > 0) {
-      report += `### ${p.agentName}의 제안서 리뷰\n\n`;
-      for (const r of p.reviews) {
-        report += `**${r.reviewerName}** ${r.isDevilsAdvocate ? '(깐깐이)' : ''} — 점수: ${r.score}/10\n`;
-        if (r.pros.length) report += `- 장점: ${r.pros.join(', ')}\n`;
-        if (r.cons.length) report += `- 단점: ${r.cons.join(', ')}\n`;
-        if (r.risks.length) report += `- 리스크: ${r.risks.join(', ')}\n`;
-        report += '\n';
-      }
-    }
-  }
-
-  report += `## 종합 점수\n\n`;
-  for (const p of meeting.proposals) {
-    const reviews = p.reviews || [];
-    const avg = reviews.length > 0 ? (reviews.reduce((s, r) => s + r.score, 0) / reviews.length).toFixed(1) : 'N/A';
-    report += `- **${p.agentName}**: ${avg}/10\n`;
-  }
-  report += '\n';
-
-  report += `## 결론\n\n`;
-  if (meeting.decision) {
-    const winner = meeting.proposals.find(p => p.agentId === meeting.decision!.winnerId);
-    report += `✅ **${winner?.agentName || '알 수 없음'}**의 제안서가 채택되었습니다.\n`;
-    if (meeting.decision.feedback) report += `\n피드백: ${meeting.decision.feedback}\n`;
-  } else {
-    report += `사용자 결정 대기 중\n`;
-  }
+  report += `## 핵심 논의 내용\n\n${perspectiveSections}\n\n`;
+  report += `## 종합\n\n`;
+  report += `${meeting.proposals.length}명의 전문가가 각자의 관점에서 "${meeting.title}" 주제를 분석했습니다. `;
+  report += `위 내용을 바탕으로 다음 단계를 결정해주세요.\n`;
 
   return report;
+}
+
+// Keep startReviewPhase for backward compatibility but redirect to finalize
+export function startReviewPhase(meetingId: string) {
+  finalizeMeeting(meetingId);
 }
 
 export function decideMeeting(meetingId: string, winnerId: string, feedback: string): Meeting {
@@ -296,7 +241,9 @@ export function decideMeeting(meetingId: string, winnerId: string, feedback: str
   if (!meeting) throw new Error('Meeting not found');
   meeting.decision = { winnerId, feedback };
   meeting.status = 'completed';
-  meeting.report = generateMeetingReport(meeting);
+  if (!meeting.report) {
+    meeting.report = generateConsolidatedReport(meeting);
+  }
   saveMeeting(meeting);
   return meeting;
 }

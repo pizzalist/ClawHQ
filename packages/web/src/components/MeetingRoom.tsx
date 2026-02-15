@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import type { Meeting, MeetingProposal, MeetingReview, MeetingCharacter } from '@ai-office/shared';
+import type { Meeting, MeetingProposal, MeetingCharacter } from '@ai-office/shared';
 import Spinner from './Spinner';
 
 const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
@@ -10,86 +10,29 @@ const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
   retrospective: '🔄 회고',
 };
 
-function ReviewCard({ review }: { review: MeetingReview }) {
-  return (
-    <div className={`mt-2 p-3 rounded-lg border ${review.isDevilsAdvocate ? 'border-red-500/40 bg-red-500/5' : 'border-gray-600/40 bg-gray-800/30'}`}>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm font-medium">
-          {review.isDevilsAdvocate ? '😈 깐깐이' : '🔍'} {review.reviewerName}
-        </span>
-        <span className={`ml-auto text-lg font-bold ${review.score >= 7 ? 'text-green-400' : review.score >= 4 ? 'text-yellow-400' : 'text-red-400'}`}>
-          {review.score}/10
-        </span>
-      </div>
-      <p className="text-xs text-gray-400 mb-2">{review.summary}</p>
-      {review.pros.length > 0 && review.pros.map((p, i) => (
-        <div key={`pro-${i}`} className="text-xs text-green-400/80 flex items-start gap-1">
-          <span>✅</span><span>{p}</span>
-        </div>
-      ))}
-      {review.cons.length > 0 && review.cons.map((c, i) => (
-        <div key={`con-${i}`} className="text-xs text-red-400/80 flex items-start gap-1">
-          <span>❌</span><span>{c}</span>
-        </div>
-      ))}
-      {review.risks.length > 0 && review.risks.map((r, i) => (
-        <div key={`risk-${i}`} className="text-xs text-yellow-400/80 flex items-start gap-1">
-          <span>⚠️</span><span>{r}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
+const ROLE_ICONS: Record<string, string> = {
+  pm: '📋', developer: '💻', reviewer: '🔍', designer: '🎨', devops: '🛠️', qa: '🧪',
+};
 
-function ProposalCard({ proposal, meeting, onChoose }: { proposal: MeetingProposal; meeting: Meeting; onChoose: () => void }) {
+function ContributionCard({ contribution }: { contribution: MeetingProposal }) {
   const [expanded, setExpanded] = useState(false);
-  const avgScore = proposal.reviews && proposal.reviews.length > 0
-    ? (proposal.reviews.reduce((s, r) => s + r.score, 0) / proposal.reviews.length).toFixed(1)
-    : null;
-  const isWinner = meeting.decision?.winnerId === proposal.agentId;
+  const agents = useStore(s => s.agents);
+  const agent = agents.find(a => a.id === contribution.agentId);
+  const roleIcon = ROLE_ICONS[agent?.role || ''] || '👤';
 
   return (
-    <div className={`flex-1 min-w-[300px] p-4 rounded-xl border transition-all ${
-      isWinner ? 'border-green-500/60 bg-green-500/10 ring-2 ring-green-500/30' : 'border-gray-700/50 bg-surface'
-    }`}>
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <span className="text-sm font-semibold text-gray-200">{proposal.agentName}</span>
-          {avgScore && (
-            <span className={`ml-2 text-xs font-bold px-2 py-0.5 rounded-full ${
-              parseFloat(avgScore) >= 7 ? 'bg-green-500/20 text-green-400' :
-              parseFloat(avgScore) >= 4 ? 'bg-yellow-500/20 text-yellow-400' :
-              'bg-red-500/20 text-red-400'
-            }`}>
-              Avg: {avgScore}
-            </span>
-          )}
-        </div>
-        {isWinner && <span className="text-green-400 text-sm font-bold">🏆 Winner</span>}
+    <div className="p-4 rounded-xl border border-gray-700/50 bg-surface">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">{roleIcon}</span>
+        <span className="text-sm font-semibold text-gray-200">{contribution.agentName}</span>
+        {agent && <span className="text-xs text-gray-500">({agent.role})</span>}
       </div>
-
-      <div className={`text-xs text-gray-300 whitespace-pre-wrap ${expanded ? '' : 'max-h-48 overflow-hidden'}`}>
-        {proposal.content}
+      <div className={`text-xs text-gray-300 whitespace-pre-wrap leading-relaxed ${expanded ? '' : 'max-h-48 overflow-hidden'}`}>
+        {contribution.content}
       </div>
-      {proposal.content.length > 500 && (
+      {contribution.content.length > 500 && (
         <button onClick={() => setExpanded(!expanded)} className="text-xs text-accent hover:underline mt-1">
-          {expanded ? 'Show less' : 'Show more...'}
-        </button>
-      )}
-
-      {proposal.reviews && proposal.reviews.length > 0 && (
-        <div className="mt-3 border-t border-gray-700/30 pt-2">
-          <div className="text-xs font-semibold text-gray-400 mb-1">Reviews</div>
-          {proposal.reviews.map((r, i) => <ReviewCard key={i} review={r} />)}
-        </div>
-      )}
-
-      {meeting.status === 'completed' && !meeting.decision && (
-        <button
-          onClick={onChoose}
-          className="mt-3 w-full py-2 bg-accent hover:bg-accent/80 text-white text-sm font-bold rounded-lg transition-all hover:scale-[1.02] active:scale-95"
-        >
-          ✅ 이 제안 채택
+          {expanded ? '접기' : '더 보기...'}
         </button>
       )}
     </div>
@@ -98,15 +41,14 @@ function ProposalCard({ proposal, meeting, onChoose }: { proposal: MeetingPropos
 
 function MeetingReport({ report }: { report: string }) {
   return (
-    <div className="mt-5 p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/5">
-      <h3 className="text-sm font-semibold text-indigo-300 mb-2">📝 회의 결과 보고서</h3>
-      <pre className="text-xs text-gray-200 whitespace-pre-wrap font-mono leading-relaxed">{report}</pre>
+    <div className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/5">
+      <h3 className="text-sm font-semibold text-indigo-300 mb-3">📝 회의 종합 결과</h3>
+      <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{report}</div>
     </div>
   );
 }
 
 function MeetingDetail({ meeting }: { meeting: Meeting }) {
-  const decideMeeting = useStore(s => s.decideMeeting);
   const agents = useStore(s => s.agents);
   const agentMap = new Map(agents.map(a => [a.id, a]));
 
@@ -117,56 +59,47 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
   };
 
   return (
-    <div className="p-4">
-      <div className="flex items-center gap-3 mb-4">
+    <div className="p-4 space-y-4">
+      <div className="flex items-center gap-3">
         <h2 className="text-lg font-bold">{meeting.title}</h2>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[meeting.status] || ''}`}>
-          {meeting.status}
+          {meeting.status === 'active' ? '진행 중' : meeting.status === 'completed' ? '완료' : meeting.status}
         </span>
       </div>
-      {meeting.description && <p className="text-sm text-gray-400 mb-3">{meeting.description}</p>}
+      {meeting.description && <p className="text-sm text-gray-400">{meeting.description}</p>}
 
-      <div className="text-xs text-gray-500 mb-2">
-        참가자: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
+      <div className="text-xs text-gray-500">
+        참여자: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
       </div>
       {meeting.character && (
-        <div className="text-xs text-indigo-300 mb-3">유형: {MEETING_CHARACTER_LABELS[meeting.character]}</div>
+        <div className="text-xs text-indigo-300">유형: {MEETING_CHARACTER_LABELS[meeting.character]}</div>
       )}
 
       {meeting.status === 'active' && meeting.proposals.length < meeting.participants.length && (
-        <div className="flex items-center gap-2 mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+        <div className="flex items-center gap-2 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
           <Spinner />
           <span className="text-sm text-blue-300">
-            제안서 생성 중... {meeting.proposals.length}/{meeting.participants.length}
+            전문가 의견 수집 중... {meeting.proposals.length}/{meeting.participants.length}
           </span>
         </div>
       )}
 
-      {meeting.status === 'reviewing' && (
-        <div className="flex items-center gap-2 mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <Spinner />
-          <span className="text-sm text-yellow-300">리뷰 진행 중...</span>
-        </div>
-      )}
-
-      {meeting.status === 'completed' && !meeting.decision && (
-        <div className="mb-4 p-3 bg-accent/10 border border-accent/30 rounded-lg">
-          <span className="text-sm text-accent font-semibold">🗳️ 제안서가 준비됐어요! 아래에서 채택해 주세요.</span>
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-4">
-        {meeting.proposals.map((p, i) => (
-          <ProposalCard
-            key={i}
-            proposal={p}
-            meeting={meeting}
-            onChoose={() => decideMeeting(meeting.id, p.agentId, '')}
-          />
-        ))}
-      </div>
-
+      {/* Show consolidated report first if available */}
       {meeting.report && <MeetingReport report={meeting.report} />}
+
+      {/* Individual contributions */}
+      {meeting.proposals.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            개별 의견 ({meeting.proposals.length}건)
+          </h3>
+          <div className="space-y-3">
+            {meeting.proposals.map((p, i) => (
+              <ContributionCard key={i} contribution={p} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -180,7 +113,7 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [character, setCharacter] = useState<MeetingCharacter>('planning');
 
-  const candidates = agents.filter(a => a.role === 'pm' || a.role === 'reviewer' || a.role === 'developer' || a.role === 'designer');
+  const candidates = agents.filter(a => ['pm', 'developer', 'reviewer', 'designer', 'devops', 'qa'].includes(a.role));
 
   const toggle = (id: string) => {
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
@@ -195,7 +128,7 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-surface border border-gray-700/50 rounded-xl p-6 w-full max-w-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold mb-4">🏛️ 새 미팅 시작</h2>
+        <h2 className="text-lg font-bold mb-4">🏛️ 새 회의 시작</h2>
         <div className="space-y-3">
           <div>
             <label className="text-xs text-gray-400 mb-1 block">회의 제목</label>
@@ -216,7 +149,7 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">회의 성격 (사용자 확인)</label>
+            <label className="text-xs text-gray-400 mb-1 block">회의 성격</label>
             <div className="grid grid-cols-2 gap-2">
               {(Object.keys(MEETING_CHARACTER_LABELS) as MeetingCharacter[]).map((c) => (
                 <button
@@ -232,7 +165,7 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
             </div>
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">참가자 선택 (최소 2명)</label>
+            <label className="text-xs text-gray-400 mb-1 block">참여자 선택 (최소 2명)</label>
             <div className="flex flex-wrap gap-2">
               {candidates.map(a => (
                 <button
@@ -277,12 +210,12 @@ export default function MeetingRoom() {
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/30">
-        <h2 className="text-sm font-semibold text-gray-300">🏛️ 미팅 룸</h2>
+        <h2 className="text-sm font-semibold text-gray-300">🏛️ 회의실</h2>
         <button
           onClick={() => setShowNew(true)}
           className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs font-semibold rounded-lg transition-all"
         >
-          + 새 미팅
+          + 새 회의
         </button>
       </div>
 
@@ -290,7 +223,7 @@ export default function MeetingRoom() {
         <div className="w-72 border-r border-gray-700/30 overflow-y-auto shrink-0">
           {meetings.length === 0 && (
             <div className="p-4 text-sm text-gray-500 text-center">
-              아직 미팅이 없어요.<br />새 미팅을 시작해보세요.
+              아직 회의가 없어요.<br />새 회의를 시작해보세요.
             </div>
           )}
           {meetings.map(m => (
@@ -306,8 +239,7 @@ export default function MeetingRoom() {
                 <span className="text-sm font-medium text-gray-200 truncate">{m.title}</span>
               </div>
               <div className="text-xs text-gray-500 mt-0.5">
-                {m.proposals.length} proposals · {m.status}
-                {m.status === 'completed' && !m.decision && ' · ⚡ 결정 필요'}
+                {m.proposals.length}명 참여 · {m.status === 'active' ? '진행 중' : m.status === 'completed' ? '완료' : m.status}
               </div>
             </button>
           ))}
@@ -318,7 +250,7 @@ export default function MeetingRoom() {
             <MeetingDetail meeting={selectedMeeting} />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-              미팅을 선택하거나 새로 시작하세요
+              회의를 선택하거나 새로 시작하세요
             </div>
           )}
         </div>
