@@ -72,9 +72,74 @@ export function summarizeOfficeState(): string {
   return `현재 인력 ${agents.length}명(가용 ${idle}, 작업중 ${working}), 작업 ${tasks.length}건(대기 ${pendingTasks}, 진행 ${activeTasks}), 미팅 ${meetings.length}건(활성 ${activeMeetings})입니다.`;
 }
 
+/** Role aliases for Korean/English parsing */
+const ROLE_ALIASES: Record<string, AgentRole> = {
+  pm: 'pm', 'project manager': 'pm', '피엠': 'pm', '기획': 'pm', '기획자': 'pm', '매니저': 'pm',
+  dev: 'developer', developer: 'developer', '개발': 'developer', '개발자': 'developer', '프론트': 'developer', '백엔드': 'developer',
+  '리뷰어': 'reviewer', '코드리뷰': 'reviewer', reviewer: 'reviewer', review: 'reviewer', '리뷰': 'reviewer', '검토': 'reviewer',
+  designer: 'designer', design: 'designer', '디자이너': 'designer', '디자인': 'designer',
+  devops: 'devops', '데브옵스': 'devops', '인프라': 'devops', '운영': 'devops',
+  qa: 'qa', '큐에이': 'qa', '테스터': 'qa', '테스트': 'qa', '품질': 'qa',
+};
+
+/**
+ * Parse explicit role+count requests from user text.
+ * Supports patterns like: "pm 2명", "리뷰어3명", "developer 1", "pm2 리뷰어3"
+ */
+function parseExplicitRoleCounts(text: string): Record<AgentRole, number> | null {
+  const result: Partial<Record<AgentRole, number>> = {};
+  let found = false;
+
+  // Sort aliases by length descending to match longer aliases first (e.g. "리뷰어" before "리뷰")
+  const sortedAliases = Object.entries(ROLE_ALIASES).sort((a, b) => b[0].length - a[0].length);
+
+  // Pattern: role name followed by number (with optional 명/명으로/명으로)
+  // e.g. "pm 2명", "pm2명", "리뷰어 3명", "developer 1"
+  for (const [alias, role] of sortedAliases) {
+    // Escaped alias for regex
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const patterns = [
+      new RegExp(`${escaped}\\s*(\\d+)\\s*명?`, 'i'),
+      new RegExp(`(\\d+)\\s*명?\\s*의?\\s*${escaped}`, 'i'),
+    ];
+    if (result[role] !== undefined) continue; // Already matched this role via another alias
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const count = parseInt(match[1], 10);
+        if (count > 0) {
+          result[role] = count;
+          found = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!found) return null;
+
+  // Deduplicate: return only roles with counts
+  const plan: Record<AgentRole, number> = { pm: 0, developer: 0, reviewer: 0, designer: 0, devops: 0, qa: 0 };
+  for (const [role, count] of Object.entries(result)) {
+    plan[role as AgentRole] = Math.max(plan[role as AgentRole], count);
+  }
+  return plan;
+}
+
 export function generatePlanFromPrompt(userText: string): TeamPlanSuggestion[] {
   const text = userText.toLowerCase();
 
+  // First: try to parse explicit role+count requests
+  const explicit = parseExplicitRoleCounts(text);
+  if (explicit) {
+    return clampSuggestions(
+      (Object.keys(explicit) as AgentRole[])
+        .filter(role => explicit[role] > 0)
+        .map(role => ({ role, count: explicit[role] }))
+    );
+  }
+
+  // Fallback: keyword-based heuristic
   const plan: Record<AgentRole, number> = {
     pm: 1,
     developer: 2,
@@ -131,11 +196,20 @@ export function chatWithChief(sessionId: string, userMessage: string) {
     ? suggestions.map((s) => `${s.role} ${s.count}명`).join(', ')
     : '현재 추가 편성 없이 진행 가능';
 
-  const reply = [
-    `상황 보고: ${stateSummary}`,
-    `제안 편성: ${suggestionText}`,
-    '이 구성으로 팀을 생성할까요? 승인하시면 바로 적용하고, 이어서 킥오프 미팅까지 시작할 수 있습니다.',
-  ].join('\n\n');
+  // Check if user explicitly requested specific composition
+  const isExplicitRequest = parseExplicitRoleCounts(userMessage) !== null;
+
+  const reply = isExplicitRequest
+    ? [
+        `상황 보고: ${stateSummary}`,
+        `요청 편성: ${suggestionText}`,
+        '요청하신 구성으로 팀을 생성할까요? 승인하시면 바로 적용합니다.',
+      ].join('\n\n')
+    : [
+        `상황 보고: ${stateSummary}`,
+        `제안 편성: ${suggestionText}`,
+        '이 구성으로 팀을 생성할까요? 승인하시면 바로 적용하고, 이어서 킥오프 미팅까지 시작할 수 있습니다.',
+      ].join('\n\n');
 
   pushMessage(sessionId, {
     id: `chief-${Date.now()}`,
