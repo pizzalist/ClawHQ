@@ -50,6 +50,24 @@ export interface ChiefResponse {
         meetings: Meeting[];
     };
 }
+export type ChiefCheckInStage = 'planning' | 'progress' | 'decision' | 'completion';
+export interface ChiefCheckInOption {
+    id: string;
+    label: string;
+    description?: string;
+}
+export interface ChiefCheckIn {
+    id: string;
+    stage: ChiefCheckInStage;
+    message: string;
+    options?: ChiefCheckInOption[];
+    /** Related entity IDs for context */
+    taskId?: string;
+    meetingId?: string;
+    /** Summary of agent result if applicable */
+    resultSummary?: string;
+    createdAt: string;
+}
 export interface TeamPreset {
     id: string;
     name: string;
@@ -200,7 +218,7 @@ export interface TeamPlanSuggestion {
     role: AgentRole;
     count: number;
 }
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin';
 export interface WSMessage {
     type: WSMessageType;
     payload: unknown;

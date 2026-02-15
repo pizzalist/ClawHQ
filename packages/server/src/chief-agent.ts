@@ -1,8 +1,8 @@
 import { v4 as uuid } from 'uuid';
-import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, Meeting, TeamPlanSuggestion } from '@ai-office/shared';
+import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
-import { listMeetings, startPlanningMeeting } from './meetings.js';
+import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, type AgentRun } from './openclaw-adapter.js';
 
 const MAX_HISTORY = 50;
@@ -27,6 +27,225 @@ const pendingProposals = new Map<string, ChiefAction[]>();
 type ChiefResponseCallback = (sessionId: string, response: ChiefResponse) => void;
 let responseCallback: ChiefResponseCallback | null = null;
 export function onChiefResponse(cb: ChiefResponseCallback) { responseCallback = cb; }
+
+// Callbacks for proactive check-ins
+type ChiefCheckInCallback = (checkIn: ChiefCheckIn) => void;
+let checkInCallback: ChiefCheckInCallback | null = null;
+export function onChiefCheckIn(cb: ChiefCheckInCallback) { checkInCallback = cb; }
+
+function emitCheckIn(checkIn: ChiefCheckIn) {
+  // Also add to default session messages so it appears in chat history
+  pushMessage('chief-default', {
+    id: checkIn.id,
+    role: 'chief',
+    content: checkIn.message,
+    createdAt: checkIn.createdAt,
+  });
+  if (checkInCallback) checkInCallback(checkIn);
+}
+
+// Track which tasks/meetings we've already reported on to avoid duplicates
+const reportedTaskCompletions = new Set<string>();
+const reportedTaskFailures = new Set<string>();
+const reportedMeetingCompletions = new Set<string>();
+
+/**
+ * Called by index.ts when a task event fires.
+ * Chief monitors progress and proactively communicates with the user.
+ */
+export function chiefHandleTaskEvent(event: AppEvent) {
+  if (event.type === 'task_completed' && event.taskId) {
+    if (reportedTaskCompletions.has(event.taskId)) return;
+    reportedTaskCompletions.add(event.taskId);
+
+    const tasks = listTasks();
+    const task = tasks.find(t => t.id === event.taskId);
+    if (!task) return;
+
+    // Skip sub-tasks (chain children) — only report root tasks
+    if (task.parentTaskId) return;
+
+    const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
+    const resultPreview = task.result ? task.result.slice(0, 300) : '(결과 없음)';
+
+    // Check how many tasks remain
+    const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in-progress').length;
+    const completedCount = tasks.filter(t => t.status === 'completed').length;
+
+    if (pendingCount === 0 && completedCount > 0) {
+      // All tasks done → completion stage check-in
+      emitCheckIn({
+        id: `checkin-completion-${Date.now()}`,
+        stage: 'completion',
+        message: `모든 작업이 완료되었습니다! 🎉\n\n` +
+          `완료된 작업 ${completedCount}건의 최종 결과를 확인해주세요.\n\n` +
+          `마지막 완료: "${task.title}" (${assignee?.name || '미배정'})\n` +
+          `결과 미리보기:\n${resultPreview}\n\n` +
+          `최종 결과를 확정할까요? 추가 수정이 필요하면 말씀해주세요.`,
+        options: [
+          { id: 'confirm', label: '✅ 확정', description: '현재 결과로 확정합니다' },
+          { id: 'revise', label: '🔄 수정 요청', description: '수정사항을 지시합니다' },
+          { id: 'add-task', label: '➕ 추가 작업', description: '후속 작업을 만듭니다' },
+        ],
+        taskId: task.id,
+        resultSummary: resultPreview,
+        createdAt: new Date().toISOString(),
+      });
+    } else {
+      // Mid-progress check-in
+      emitCheckIn({
+        id: `checkin-progress-${Date.now()}`,
+        stage: 'progress',
+        message: `작업 완료 보고: "${task.title}" ✅\n\n` +
+          `담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n` +
+          `결과 미리보기:\n${resultPreview}\n\n` +
+          `남은 작업 ${pendingCount}건이 있습니다. 이 결과 괜찮으세요? 수정이 필요하면 알려주세요.`,
+        options: [
+          { id: 'ok', label: '👍 괜찮아요', description: '계속 진행합니다' },
+          { id: 'revise', label: '🔄 수정해줘', description: '이 작업을 재작업합니다' },
+          { id: 'pause', label: '⏸️ 잠깐 멈춰', description: '전체 진행을 잠시 멈춥니다' },
+        ],
+        taskId: task.id,
+        resultSummary: resultPreview,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  if (event.type === 'task_failed' && event.taskId) {
+    if (reportedTaskFailures.has(event.taskId)) return;
+    reportedTaskFailures.add(event.taskId);
+
+    const tasks = listTasks();
+    const task = tasks.find(t => t.id === event.taskId);
+    if (!task || task.parentTaskId) return;
+
+    const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
+
+    emitCheckIn({
+      id: `checkin-failure-${Date.now()}`,
+      stage: 'decision',
+      message: `⚠️ 작업 실패: "${task.title}"\n\n` +
+        `담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n` +
+        `오류: ${task.result || event.message || '알 수 없는 오류'}\n\n` +
+        `어떻게 처리할까요?`,
+      options: [
+        { id: 'retry', label: '🔄 재시도', description: '같은 에이전트로 재시도합니다' },
+        { id: 'reassign', label: '👤 다른 에이전트', description: '다른 에이전트에게 배정합니다' },
+        { id: 'skip', label: '⏭️ 건너뛰기', description: '이 작업을 건너뜁니다' },
+        { id: 'modify', label: '✏️ 수정 후 재시도', description: '작업 내용을 수정합니다' },
+      ],
+      taskId: task.id,
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
+/**
+ * Called by index.ts when a meeting changes state.
+ * Chief reports meeting progress and asks for decisions.
+ */
+export function chiefHandleMeetingChange() {
+  const meetings = listMeetings();
+  for (const meeting of meetings) {
+    if (meeting.status === 'completed' && !reportedMeetingCompletions.has(meeting.id)) {
+      reportedMeetingCompletions.add(meeting.id);
+
+      const proposalCount = meeting.proposals?.length || 0;
+      if (proposalCount === 0) continue;
+
+      // Build options from proposals
+      const options: ChiefCheckInOption[] = meeting.proposals.map((p, i) => ({
+        id: `proposal-${p.agentId}`,
+        label: `${String.fromCharCode(65 + i)}안: ${p.agentName}`,
+        description: p.content.slice(0, 80) + (p.content.length > 80 ? '...' : ''),
+      }));
+
+      const proposalSummaries = meeting.proposals.map((p, i) =>
+        `${String.fromCharCode(65 + i)}안 (${p.agentName}):\n${p.content.slice(0, 150)}${p.content.length > 150 ? '...' : ''}`
+      ).join('\n\n');
+
+      emitCheckIn({
+        id: `checkin-meeting-${meeting.id}-${Date.now()}`,
+        stage: 'decision',
+        message: `미팅 완료: "${meeting.title}" 🏛️\n\n` +
+          `${proposalCount}개의 제안이 나왔습니다:\n\n${proposalSummaries}\n\n` +
+          `어떤 안으로 진행할까요?`,
+        options,
+        meetingId: meeting.id,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+}
+
+/**
+ * Handle user's response to a check-in option.
+ * Returns a chief message with follow-up or action.
+ */
+export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string): { reply: string; actions?: ChiefAction[] } {
+  // We generate contextual responses based on the option chosen
+  const now = new Date().toISOString();
+  const msgId = `chief-checkin-reply-${Date.now()}`;
+
+  let reply: string;
+  let actions: ChiefAction[] | undefined;
+
+  // Parse the check-in context from the ID
+  if (checkInId.includes('completion')) {
+    switch (optionId) {
+      case 'confirm':
+        reply = '좋습니다! 모든 결과가 확정되었습니다. 추가 작업이 필요하면 언제든 말씀해주세요. ✅';
+        break;
+      case 'revise':
+        reply = '어떤 부분을 수정해야 할까요? 구체적으로 말씀해주시면 수정 작업을 만들겠습니다.';
+        break;
+      case 'add-task':
+        reply = '어떤 후속 작업이 필요한가요? 설명해주시면 작업을 생성하고 적절한 에이전트에게 배정하겠습니다.';
+        break;
+      default:
+        reply = userComment || '알겠습니다. 어떻게 진행할까요?';
+    }
+  } else if (checkInId.includes('progress')) {
+    switch (optionId) {
+      case 'ok':
+        reply = '👍 좋습니다! 나머지 작업을 계속 진행합니다.';
+        break;
+      case 'revise':
+        reply = '어떤 부분이 마음에 안 드시나요? 수정 방향을 알려주시면 재작업 지시하겠습니다.';
+        break;
+      case 'pause':
+        reply = '⏸️ 진행을 멈췄습니다. 재개하려면 말씀해주세요.';
+        break;
+      default:
+        reply = userComment || '알겠습니다.';
+    }
+  } else if (checkInId.includes('failure')) {
+    switch (optionId) {
+      case 'retry':
+        reply = '같은 에이전트로 재시도합니다. 잠시 기다려주세요.';
+        break;
+      case 'reassign':
+        reply = '다른 에이전트에게 배정할게요. 가용한 에이전트를 확인 중입니다...';
+        break;
+      case 'skip':
+        reply = '이 작업을 건너뜁니다. 다른 작업은 계속 진행합니다.';
+        break;
+      case 'modify':
+        reply = '작업 내용을 어떻게 수정할까요? 구체적으로 알려주세요.';
+        break;
+      default:
+        reply = userComment || '알겠습니다.';
+    }
+  } else if (checkInId.includes('meeting')) {
+    reply = `선택하신 안으로 진행하겠습니다. ${userComment ? `추가 의견: ${userComment}` : '결정이 반영됩니다.'}`;
+  } else {
+    reply = userComment || '알겠습니다. 계속 진행합니다.';
+  }
+
+  pushMessage('chief-default', { id: msgId, role: 'chief', content: reply, createdAt: now });
+  return { reply, actions };
+}
 
 function getSessionMessages(sessionId: string): ChiefChatMessage[] {
   const existing = sessionMessages.get(sessionId);

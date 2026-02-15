@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, TeamPlanSuggestion } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, TeamPlanSuggestion } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -16,6 +16,7 @@ interface Store {
   chiefProposedActions: ChiefAction[];   // proposed, awaiting approval
   chiefExecutedActions: ChiefAction[];   // approved & executed results
   chiefPendingMessageId: string | null;  // messageId of proposal awaiting approval
+  chiefCheckIns: ChiefCheckIn[];         // proactive check-ins from Chief
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -28,6 +29,9 @@ interface Store {
   setChiefState: (messages: ChiefChatMessage[], suggestions: TeamPlanSuggestion[], meetingDraft?: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null) => void;
   setChiefThinking: (v: boolean) => void;
   handleChiefResponse: (response: ChiefResponse) => void;
+  handleChiefCheckIn: (checkIn: ChiefCheckIn) => void;
+  respondToCheckIn: (checkInId: string, optionId: string, comment?: string) => Promise<void>;
+  dismissCheckIn: (checkInId: string) => void;
   approveProposal: (messageId: string, selectedIndices?: number[]) => Promise<void>;
   rejectProposal: (messageId: string) => Promise<void>;
   addEvent: (event: AppEvent) => void;
@@ -64,6 +68,7 @@ export const useStore = create<Store>((set, get) => ({
   chiefProposedActions: [],
   chiefExecutedActions: [],
   chiefPendingMessageId: null,
+  chiefCheckIns: [],
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -92,6 +97,48 @@ export const useStore = create<Store>((set, get) => ({
       chiefPendingMessageId: response.actions.length > 0 ? response.messageId : null,
       chiefThinking: false,
     }));
+  },
+  handleChiefCheckIn: (checkIn) => {
+    // Add check-in message to chat and to check-in queue
+    const chiefMsg: ChiefChatMessage = {
+      id: checkIn.id,
+      role: 'chief',
+      content: checkIn.message,
+      createdAt: checkIn.createdAt,
+    };
+    set((s) => ({
+      chiefMessages: [...s.chiefMessages, chiefMsg],
+      chiefCheckIns: [...s.chiefCheckIns, checkIn],
+    }));
+  },
+  respondToCheckIn: async (checkInId, optionId, comment) => {
+    try {
+      const res = await fetch(`${API}/api/chief/checkin/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkInId, optionId, comment }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json();
+      // Add chief's follow-up reply
+      if (data.reply) {
+        const replyMsg: ChiefChatMessage = {
+          id: `checkin-reply-${Date.now()}`,
+          role: 'chief',
+          content: data.reply,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({
+          chiefMessages: [...s.chiefMessages, replyMsg],
+          chiefCheckIns: s.chiefCheckIns.filter(c => c.id !== checkInId),
+        }));
+      }
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to respond', 'error');
+    }
+  },
+  dismissCheckIn: (checkInId) => {
+    set((s) => ({ chiefCheckIns: s.chiefCheckIns.filter(c => c.id !== checkInId) }));
   },
   approveProposal: async (messageId, selectedIndices) => {
     const { setLoading } = get();
@@ -419,6 +466,10 @@ export function connectWS() {
       }
       case 'chief_response': {
         store.handleChiefResponse(msg.payload as ChiefResponse);
+        break;
+      }
+      case 'chief_checkin': {
+        store.handleChiefCheckIn(msg.payload as ChiefCheckIn);
         break;
       }
       case 'event': {

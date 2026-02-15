@@ -13,7 +13,7 @@ import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgent
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
-import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal } from './chief-agent.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -47,6 +47,7 @@ onEvent((event) => {
 
 onMeetingChange(() => {
   broadcast({ type: 'meetings_update', payload: listMeetings() });
+  chiefHandleMeetingChange();
 });
 
 onTechSpecChange(() => {
@@ -56,16 +57,22 @@ onTechSpecChange(() => {
 // Forward chief LLM responses to WebSocket clients
 onChiefResponse((_sessionId, response) => {
   broadcast({ type: 'chief_response', payload: response });
-  // Also broadcast updated state
   broadcast({ type: 'agents_update', payload: listAgents() });
   broadcast({ type: 'tasks_update', payload: listTasks() });
   broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
+
+// Forward chief proactive check-ins to WebSocket clients
+onChiefCheckIn((checkIn) => {
+  broadcast({ type: 'chief_checkin', payload: checkIn });
 });
 
 onTaskEvent((event) => {
   broadcast({ type: 'event', payload: event });
   broadcast({ type: 'tasks_update', payload: listTasks() });
   broadcast({ type: 'agents_update', payload: listAgents() });
+  // Chief monitors task events for proactive check-ins
+  chiefHandleTaskEvent(event);
 });
 
 // WebSocket connection
@@ -132,6 +139,19 @@ app.post('/api/chief/proposal/approve', (req, res) => {
     broadcast({ type: 'agents_update', payload: listAgents() });
     broadcast({ type: 'tasks_update', payload: listTasks() });
     broadcast({ type: 'meetings_update', payload: listMeetings() });
+    res.json({ ok: true, ...result });
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/chief/checkin/respond', (req, res) => {
+  const { checkInId, optionId, comment } = req.body || {};
+  if (!checkInId || !optionId) {
+    return res.status(400).json({ error: 'checkInId and optionId are required' });
+  }
+  try {
+    const result = respondToCheckIn(checkInId, optionId, comment);
     res.json({ ok: true, ...result });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
