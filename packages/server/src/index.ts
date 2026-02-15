@@ -12,6 +12,7 @@ import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seed
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
+import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -44,6 +45,10 @@ onEvent((event) => {
 });
 
 onMeetingChange(() => {
+  broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
+
+onTechSpecChange(() => {
   broadcast({ type: 'meetings_update', payload: listMeetings() });
 });
 
@@ -558,6 +563,41 @@ app.post('/api/meetings/:id/decide', (req, res) => {
   try {
     const meeting = decideMeeting(req.params.id, winnerId, feedback || '');
     res.json(meeting);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Tech Spec Meeting API ----
+app.get('/api/tech-spec/suggest-agents', (_req, res) => {
+  res.json(suggestTechSpecAgents());
+});
+
+app.post('/api/tech-spec/start', (req, res) => {
+  const { title, description, assignments } = req.body;
+  if (!title || !assignments || !Array.isArray(assignments)) {
+    return res.status(400).json({ error: 'title and assignments array required' });
+  }
+  try {
+    const meeting = startTechSpecMeeting(title, description || '', assignments);
+    res.status(201).json(meeting);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get('/api/tech-spec/:id', (req, res) => {
+  const data = getTechSpecData(req.params.id);
+  if (!data) return res.status(404).json({ error: 'Tech spec data not found' });
+  res.json(data);
+});
+
+app.post('/api/tech-spec/:id/rerun', (req, res) => {
+  const { role } = req.body;
+  if (!role) return res.status(400).json({ error: 'role required' });
+  try {
+    rerunTechSpecRole(req.params.id, role);
+    res.json({ ok: true });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

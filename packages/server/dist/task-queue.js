@@ -1,5 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-office/shared';
+import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun } from './openclaw-adapter.js';
@@ -40,6 +41,24 @@ export function listTasks() {
     return stmts.listTasks.all().map(rowToTask);
 }
 export function createTask(title, description, assigneeId, parentTaskId, expectedDeliverables) {
+    // Auto-detect deliverable type if not explicitly provided
+    if (!expectedDeliverables || expectedDeliverables.length === 0) {
+        // If assigneeId is provided, use role-aware detection
+        if (assigneeId) {
+            const assignee = getAgent(assigneeId);
+            if (assignee) {
+                const detected = detectDeliverableTypeForRole(`${title} ${description}`, assignee.role);
+                expectedDeliverables = [detected];
+            }
+            else {
+                expectedDeliverables = [detectDeliverableType(`${title} ${description}`)];
+            }
+        }
+        else {
+            const detected = detectDeliverableType(`${title} ${description}`);
+            expectedDeliverables = [detected];
+        }
+    }
     const id = uuid();
     stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
     // If specific assignee requested, set it on the task
@@ -126,10 +145,19 @@ function assignTask(agentId, task) {
         onComplete: (run) => handleRunComplete(agent.id, task.id, task.title, run),
     });
 }
+const ROLE_INSTRUCTIONS = {
+    pm: 'You are a Project Manager. Create a detailed plan/specification, NOT the actual implementation. Break down the task into actionable steps for developers. Produce a structured report or document.',
+    developer: 'You are a Developer. Implement the task by writing working code. Produce complete, runnable code.',
+    designer: 'You are a Designer. Create design specifications, mockups, or UI implementations.',
+    reviewer: 'You are a Code Reviewer. Review the work and produce a structured report with findings and recommendations.',
+    devops: 'You are a DevOps Engineer. Create infrastructure code, deployment configs, or operational documents.',
+    qa: 'You are a QA Engineer. Test and validate the work, then produce a structured test report.',
+};
 function buildPrompt(name, role, task) {
+    const roleInstruction = ROLE_INSTRUCTIONS[role] || `Complete this task concisely and report what you did.`;
     const parts = [
         `You are ${name}, a ${role} in the AI Office.`,
-        `Complete this task concisely and report what you did.`,
+        roleInstruction,
         ``,
         `## Task: ${task.title}`,
         task.description ? `\n${task.description}` : '',
@@ -227,7 +255,27 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         const prevStepLabel = CHAIN_STEP_LABELS[agent.role] || agent.role;
         const chainTitle = `[${stepLabel}] ${title}`;
         const chainDesc = `Auto-chained from ${agent.name}'s ${prevStepLabel} step.\n\nPrevious result:\n${result.slice(0, 1000)}`;
-        const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId);
+        // Carry the original expected deliverable from the parent task to the chained task.
+        // E.g. user asked for 'web' → PM produces 'report' → Developer should inherit 'web'.
+        // Walk up to the root task to find the original expected deliverable.
+        const currentTask = rowToTask(stmts.getTask.get(taskId));
+        let rootTask = currentTask;
+        while (rootTask.parentTaskId) {
+            const parent = stmts.getTask.get(rootTask.parentTaskId);
+            if (!parent)
+                break;
+            rootTask = rowToTask(parent);
+        }
+        const originalExpected = rootTask.expectedDeliverables;
+        // Use original type if the next agent's role allows it; otherwise role-aware detect
+        let chainedDeliverables;
+        if (originalExpected && originalExpected.length > 0) {
+            const nextAgent = getAgent(nextAgentId);
+            if (nextAgent) {
+                chainedDeliverables = [detectDeliverableTypeForRole(originalExpected[0], nextAgent.role)];
+            }
+        }
+        const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables);
         emitTaskEvent('chain_spawned', nextAgentId, newTask.id, `🔗 Chain: ${agent.name} (${prevStepLabel}) → ${nextAgentName} (${stepLabel})`);
     }
     catch (err) {

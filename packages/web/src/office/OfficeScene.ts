@@ -51,6 +51,14 @@ export class OfficeScene {
     this.floor.container.zIndex = 0;
     this.container.addChild(this.floor.container);
 
+    // Meeting table
+    const mtPos = gridToIso(MEETING_POS[0], MEETING_POS[1]);
+    this.meetingTablePos = mtPos;
+    const meetingTable = createMeetingTable();
+    meetingTable.position.set(mtPos.x, mtPos.y);
+    (meetingTable as any).zIndex = mtPos.y + 2;
+    this.container.addChild(meetingTable);
+
     // Decorations (placed by grid position, converted to iso)
     this.addDecorations();
 
@@ -102,6 +110,10 @@ export class OfficeScene {
     );
   }
 
+  setMeetingParticipants(ids: string[]) {
+    this.meetingParticipants = new Set(ids);
+  }
+
   setSelectedAgent(id: string | null) {
     for (const [agentId, sprite] of this.agentSprites) {
       sprite.setSelected(agentId === id);
@@ -143,14 +155,23 @@ export class OfficeScene {
       }
       sprite.update(agent);
 
-      // Position at desk — use deskIndex modulo available desks
-      const deskIdx = agent.deskIndex % this.desks.length;
-      const desk = this.desks[deskIdx];
-      if (desk) {
-        const sx = desk.container.x + desk.seatOffset.x;
-        const sy = desk.container.y + desk.seatOffset.y;
+      // Position: meeting table or desk
+      if (this.meetingParticipants.has(agent.id)) {
+        const seatIdx = [...this.meetingParticipants].indexOf(agent.id) % MEETING_SEATS.length;
+        const seat = MEETING_SEATS[seatIdx];
+        const sx = this.meetingTablePos.x + seat.x;
+        const sy = this.meetingTablePos.y + seat.y;
         sprite.moveTo(sx, sy);
         sprite.container.zIndex = sy + 5;
+      } else {
+        const deskIdx = agent.deskIndex % this.desks.length;
+        const desk = this.desks[deskIdx];
+        if (desk) {
+          const sx = desk.container.x + desk.seatOffset.x;
+          const sy = desk.container.y + desk.seatOffset.y;
+          sprite.moveTo(sx, sy);
+          sprite.container.zIndex = sy + 5;
+        }
       }
     }
 

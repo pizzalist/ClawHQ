@@ -33,6 +33,8 @@ interface Store {
   applyPreset: (presetId: string) => Promise<void>;
   createMeeting: (title: string, description: string, participantIds: string[]) => Promise<void>;
   decideMeeting: (meetingId: string, winnerId: string, feedback: string) => Promise<void>;
+  startTechSpec: (title: string, description: string, assignments: Array<{ role: string; agentId: string }>) => Promise<void>;
+  rerunTechSpecRole: (meetingId: string, role: string) => Promise<void>;
   setLoading: (key: string, v: boolean) => void;
 }
 
@@ -173,6 +175,42 @@ export const useStore = create<Store>((set, get) => ({
       toast(e instanceof Error ? e.message : 'Failed to decide', 'error');
     } finally {
       setLoading('decideMeeting', false);
+    }
+  },
+
+  startTechSpec: async (title, description, assignments) => {
+    const { setLoading } = get();
+    setLoading('startTechSpec', true);
+    try {
+      const res = await fetch(`${API}/api/tech-spec/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description, assignments }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Tech Spec meeting started! Agents are generating specs...', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to start tech spec', 'error');
+    } finally {
+      setLoading('startTechSpec', false);
+    }
+  },
+
+  rerunTechSpecRole: async (meetingId, role) => {
+    const { setLoading } = get();
+    setLoading('rerunRole', true);
+    try {
+      const res = await fetch(`${API}/api/tech-spec/${meetingId}/rerun`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast(`Re-running ${role} spec...`, 'info');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to re-run', 'error');
+    } finally {
+      setLoading('rerunRole', false);
     }
   },
 

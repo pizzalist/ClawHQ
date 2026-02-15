@@ -50,6 +50,45 @@ db.exec(`
     FOREIGN KEY (task_id) REFERENCES tasks(id)
   );
 
+  CREATE TABLE IF NOT EXISTS decision_items (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'pending',
+    chosen_proposal_id TEXT,
+    decided_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY,
+    decision_item_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    agent_role TEXT NOT NULL,
+    agent_model TEXT NOT NULL,
+    content TEXT NOT NULL,
+    pros TEXT NOT NULL DEFAULT '[]',
+    cons TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (decision_item_id) REFERENCES decision_items(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS review_scores (
+    id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL,
+    reviewer_name TEXT NOT NULL,
+    reviewer_role TEXT NOT NULL,
+    score REAL NOT NULL DEFAULT 5,
+    key_points TEXT NOT NULL DEFAULT '[]',
+    is_devils_advocate INTEGER NOT NULL DEFAULT 0,
+    sentiment TEXT NOT NULL DEFAULT 'caution',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (proposal_id) REFERENCES proposals(id)
+  );
+
   CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -58,6 +97,21 @@ db.exec(`
     message TEXT NOT NULL,
     metadata TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+// Meetings table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS meetings (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'planning',
+    status TEXT NOT NULL DEFAULT 'active',
+    participants TEXT NOT NULL DEFAULT '[]',
+    proposals TEXT NOT NULL DEFAULT '[]',
+    decision TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
 // Migration: add parent_task_id if missing
@@ -84,6 +138,7 @@ export const stmts = {
   `),
     countAgents: db.prepare('SELECT COUNT(*) as count FROM agents'),
     deleteAgent: db.prepare('DELETE FROM agents WHERE id = ?'),
+    unlinkAgentTasks: db.prepare('UPDATE tasks SET assignee_id = NULL WHERE assignee_id = ?'),
     deleteAllAgents: db.prepare('DELETE FROM agents'),
     findAgentByRole: db.prepare('SELECT * FROM agents WHERE role = ? AND state = \'idle\' LIMIT 1'),
     listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
@@ -148,6 +203,46 @@ export const stmts = {
     listDeliverablesByTask: db.prepare('SELECT * FROM deliverables WHERE task_id = ? ORDER BY created_at'),
     getDeliverable: db.prepare('SELECT * FROM deliverables WHERE id = ?'),
     deleteDeliverablesByTask: db.prepare('DELETE FROM deliverables WHERE task_id = ?'),
+    // Decision queries
+    listDecisionItems: db.prepare('SELECT * FROM decision_items ORDER BY created_at DESC'),
+    listPendingDecisions: db.prepare("SELECT * FROM decision_items WHERE status = 'pending' ORDER BY created_at DESC"),
+    getDecisionItem: db.prepare('SELECT * FROM decision_items WHERE id = ?'),
+    insertDecisionItem: db.prepare(`
+    INSERT INTO decision_items (id, task_id, title, description, priority, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+  `),
+    updateDecisionStatus: db.prepare(`
+    UPDATE decision_items SET status = ?, chosen_proposal_id = ?, decided_at = datetime('now') WHERE id = ?
+  `),
+    countPendingDecisions: db.prepare("SELECT COUNT(*) as count FROM decision_items WHERE status = 'pending'"),
+    listDecisionHistory: db.prepare("SELECT * FROM decision_items WHERE status != 'pending' ORDER BY decided_at DESC LIMIT 100"),
+    listProposalsByDecision: db.prepare('SELECT * FROM proposals WHERE decision_item_id = ? ORDER BY created_at'),
+    insertProposal: db.prepare(`
+    INSERT INTO proposals (id, decision_item_id, agent_id, agent_name, agent_role, agent_model, content, pros, cons, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `),
+    listReviewsByProposal: db.prepare('SELECT * FROM review_scores WHERE proposal_id = ? ORDER BY created_at'),
+    listReviewsByDecision: db.prepare(`
+    SELECT rs.* FROM review_scores rs
+    JOIN proposals p ON p.id = rs.proposal_id
+    WHERE p.decision_item_id = ?
+    ORDER BY rs.created_at
+  `),
+    insertReviewScore: db.prepare(`
+    INSERT INTO review_scores (id, proposal_id, reviewer_name, reviewer_role, score, key_points, is_devils_advocate, sentiment, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `),
+    // Meetings
+    listMeetings: db.prepare('SELECT * FROM meetings ORDER BY created_at DESC LIMIT 50'),
+    getMeeting: db.prepare('SELECT * FROM meetings WHERE id = ?'),
+    insertMeeting: db.prepare(`
+    INSERT INTO meetings (id, title, description, type, status, participants, proposals, decision, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'active', ?, '[]', NULL, datetime('now'), datetime('now'))
+  `),
+    updateMeeting: db.prepare(`
+    UPDATE meetings SET status = ?, proposals = ?, decision = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `),
     listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),
     insertEvent: db.prepare(`
     INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)

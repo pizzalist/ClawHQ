@@ -10,6 +10,8 @@ import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
+import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
+import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { stmts } from './db.js';
 const app = express();
 app.use(cors());
@@ -35,6 +37,12 @@ onEvent((event) => {
     broadcast({ type: 'event', payload: event });
     broadcast({ type: 'agents_update', payload: listAgents() });
 });
+onMeetingChange(() => {
+    broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
+onTechSpecChange(() => {
+    broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
 onTaskEvent((event) => {
     broadcast({ type: 'event', payload: event });
     broadcast({ type: 'tasks_update', payload: listTasks() });
@@ -47,6 +55,7 @@ wss.on('connection', (ws) => {
         agents: listAgents(),
         tasks: listTasks(),
         events: listEvents(),
+        meetings: listMeetings(),
     };
     ws.send(JSON.stringify({ type: 'initial_state', payload: initial }));
     ws.on('close', () => console.log('[ws] Client disconnected'));
@@ -338,6 +347,209 @@ app.get('/api/export/csv', (_req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="ai-office-tasks.csv"');
     res.send(csv);
 });
+// ---- Decision API ----
+import { randomUUID } from 'crypto';
+function hydrateDecisionItem(row) {
+    const id = row.id;
+    const proposalRows = stmts.listProposalsByDecision.all(id);
+    const reviewRows = stmts.listReviewsByDecision.all(id);
+    const proposals = proposalRows.map((p) => ({
+        id: p.id,
+        decisionItemId: p.decision_item_id,
+        agentId: p.agent_id,
+        agentName: p.agent_name,
+        agentRole: p.agent_role,
+        agentModel: p.agent_model,
+        content: p.content,
+        pros: JSON.parse(p.pros || '[]'),
+        cons: JSON.parse(p.cons || '[]'),
+        createdAt: p.created_at,
+    }));
+    const reviews = reviewRows.map((r) => ({
+        id: r.id,
+        proposalId: r.proposal_id,
+        reviewerName: r.reviewer_name,
+        reviewerRole: r.reviewer_role,
+        score: r.score,
+        keyPoints: JSON.parse(r.key_points || '[]'),
+        isDevilsAdvocate: !!r.is_devils_advocate,
+        sentiment: r.sentiment,
+        createdAt: r.created_at,
+    }));
+    return {
+        id,
+        taskId: row.task_id,
+        title: row.title,
+        description: row.description || '',
+        priority: row.priority || 'medium',
+        status: row.status || 'pending',
+        proposals,
+        reviews,
+        chosenProposalId: row.chosen_proposal_id || null,
+        decidedAt: row.decided_at || null,
+        createdAt: row.created_at,
+    };
+}
+app.get('/api/decisions', (_req, res) => {
+    const rows = stmts.listDecisionItems.all();
+    res.json(rows.map(hydrateDecisionItem));
+});
+app.get('/api/decisions/pending', (_req, res) => {
+    const rows = stmts.listPendingDecisions.all();
+    res.json(rows.map(hydrateDecisionItem));
+});
+app.get('/api/decisions/pending/count', (_req, res) => {
+    const row = stmts.countPendingDecisions.get();
+    res.json({ count: row.count });
+});
+app.get('/api/decisions/history', (_req, res) => {
+    const rows = stmts.listDecisionHistory.all();
+    res.json(rows.map(hydrateDecisionItem));
+});
+app.get('/api/decisions/:id', (req, res) => {
+    const row = stmts.getDecisionItem.get(req.params.id);
+    if (!row)
+        return res.status(404).json({ error: 'Decision item not found' });
+    res.json(hydrateDecisionItem(row));
+});
+app.post('/api/decisions', (req, res) => {
+    const { taskId, title, description, priority } = req.body;
+    if (!title)
+        return res.status(400).json({ error: 'title is required' });
+    const id = randomUUID();
+    stmts.insertDecisionItem.run(id, taskId || '', title, description || '', priority || 'medium');
+    const row = stmts.getDecisionItem.get(id);
+    res.status(201).json(hydrateDecisionItem(row));
+});
+app.post('/api/decisions/:id/proposals', (req, res) => {
+    const { agentId, agentName, agentRole, agentModel, content, pros, cons } = req.body;
+    if (!content)
+        return res.status(400).json({ error: 'content is required' });
+    const id = randomUUID();
+    stmts.insertProposal.run(id, req.params.id, agentId || '', agentName || 'Unknown', agentRole || 'pm', agentModel || 'claude-sonnet-4', content, JSON.stringify(pros || []), JSON.stringify(cons || []));
+    res.status(201).json({ id });
+});
+app.post('/api/decisions/:id/reviews', (req, res) => {
+    const { proposalId, reviewerName, reviewerRole, score, keyPoints, isDevilsAdvocate, sentiment } = req.body;
+    if (!proposalId)
+        return res.status(400).json({ error: 'proposalId is required' });
+    const id = randomUUID();
+    stmts.insertReviewScore.run(id, proposalId, reviewerName || 'Reviewer', reviewerRole || 'reviewer', score ?? 5, JSON.stringify(keyPoints || []), isDevilsAdvocate ? 1 : 0, sentiment || 'caution');
+    res.status(201).json({ id });
+});
+app.post('/api/decisions/:id/decide', (req, res) => {
+    const { action, chosenProposalId } = req.body;
+    if (!action || !['approved', 'revised', 'rejected'].includes(action)) {
+        return res.status(400).json({ error: 'action must be approved, revised, or rejected' });
+    }
+    stmts.updateDecisionStatus.run(action, chosenProposalId || null, req.params.id);
+    broadcast({ type: 'tasks_update', payload: listTasks() });
+    const row = stmts.getDecisionItem.get(req.params.id);
+    if (!row)
+        return res.status(404).json({ error: 'Not found' });
+    res.json(hydrateDecisionItem(row));
+});
+// Seed demo decisions from completed tasks
+app.post('/api/decisions/seed-from-tasks', (_req, res) => {
+    const tasks = listTasks().filter(t => t.status === 'completed' && t.result);
+    const agents = listAgents();
+    let created = 0;
+    for (const task of tasks) {
+        // Check if decision already exists for this task
+        const existing = stmts.listDecisionItems.all()
+            .find(d => d.task_id === task.id);
+        if (existing)
+            continue;
+        const id = randomUUID();
+        const priority = ['low', 'medium', 'high', 'critical'][Math.floor(Math.random() * 3)];
+        stmts.insertDecisionItem.run(id, task.id, task.title, task.description || '', priority);
+        // Create proposals from agent results
+        const assignee = agents.find(a => a.id === task.assigneeId);
+        if (assignee) {
+            const p1Id = randomUUID();
+            stmts.insertProposal.run(p1Id, id, assignee.id, assignee.name, assignee.role, assignee.model, task.result || 'No content', JSON.stringify(['Completed on time', 'Follows requirements']), JSON.stringify(['Needs testing']));
+            // Add reviews
+            const reviewers = agents.filter(a => a.role === 'reviewer');
+            for (const reviewer of reviewers) {
+                const score = 5 + Math.floor(Math.random() * 5);
+                const isDA = reviewer.name.includes('깐깐이') || reviewer.name.includes('Diana');
+                stmts.insertReviewScore.run(randomUUID(), p1Id, reviewer.name, reviewer.role, score, JSON.stringify(isDA ? ['Needs more error handling', 'Edge cases not covered'] : ['Good structure', 'Clean code']), isDA ? 1 : 0, score >= 7 ? 'positive' : score >= 5 ? 'caution' : 'critical');
+            }
+        }
+        created++;
+    }
+    res.json({ created });
+});
+// Meetings API
+app.get('/api/meetings', (_req, res) => {
+    res.json(listMeetings());
+});
+app.get('/api/meetings/:id', (req, res) => {
+    const meeting = getMeeting(req.params.id);
+    if (!meeting)
+        return res.status(404).json({ error: 'Meeting not found' });
+    res.json(meeting);
+});
+app.post('/api/meetings', (req, res) => {
+    const { title, description, type, participantIds } = req.body;
+    if (!title || !participantIds || !Array.isArray(participantIds) || participantIds.length < 2) {
+        return res.status(400).json({ error: 'title and at least 2 participantIds required' });
+    }
+    try {
+        const meeting = startPlanningMeeting(title, description || '', participantIds);
+        res.status(201).json(meeting);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/meetings/:id/decide', (req, res) => {
+    const { winnerId, feedback } = req.body;
+    if (!winnerId)
+        return res.status(400).json({ error: 'winnerId required' });
+    try {
+        const meeting = decideMeeting(req.params.id, winnerId, feedback || '');
+        res.json(meeting);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+// ---- Tech Spec Meeting API ----
+app.get('/api/tech-spec/suggest-agents', (_req, res) => {
+    res.json(suggestTechSpecAgents());
+});
+app.post('/api/tech-spec/start', (req, res) => {
+    const { title, description, assignments } = req.body;
+    if (!title || !assignments || !Array.isArray(assignments)) {
+        return res.status(400).json({ error: 'title and assignments array required' });
+    }
+    try {
+        const meeting = startTechSpecMeeting(title, description || '', assignments);
+        res.status(201).json(meeting);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.get('/api/tech-spec/:id', (req, res) => {
+    const data = getTechSpecData(req.params.id);
+    if (!data)
+        return res.status(404).json({ error: 'Tech spec data not found' });
+    res.json(data);
+});
+app.post('/api/tech-spec/:id/rerun', (req, res) => {
+    const { role } = req.body;
+    if (!role)
+        return res.status(400).json({ error: 'role required' });
+    try {
+        rerunTechSpecRole(req.params.id, role);
+        res.json({ ok: true });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
 // Health check
 app.get('/api/health', async (_req, res) => {
     const sessions = await listSessions();
@@ -360,10 +572,38 @@ if (existsSync(webDistPath)) {
         res.sendFile(fileURLToPath(new URL('../../web/dist/index.html', import.meta.url)));
     });
 }
+// Recover stuck tasks/agents on startup (e.g. after server restart killed running processes)
+function recoverStuckState() {
+    const agents = listAgents();
+    const tasks = listTasks();
+    let recovered = 0;
+    // Reset agents that are "working" but have no running process
+    for (const agent of agents) {
+        if (agent.state === 'working' || agent.state === 'reviewing') {
+            resetAgent(agent.id);
+            recovered++;
+            console.log(`[recovery] Reset stuck agent: ${agent.name} (was ${agent.state})`);
+        }
+    }
+    // Re-queue tasks stuck in "in-progress" so they can be retried
+    for (const task of tasks) {
+        if (task.status === 'in-progress') {
+            stmts.updateTask.run(task.assigneeId, 'pending', task.result, task.id);
+            recovered++;
+            console.log(`[recovery] Re-queued stuck task: ${task.title}`);
+        }
+    }
+    if (recovered > 0) {
+        console.log(`[recovery] Recovered ${recovered} stuck items`);
+        broadcast({ type: 'agents_update', payload: listAgents() });
+        broadcast({ type: 'tasks_update', payload: listTasks() });
+    }
+}
 // Start
 async function main() {
     await checkOpenClaw();
     seedDemoAgents();
+    recoverStuckState();
     server.listen(SERVER_PORT, () => {
         console.log(`[server] AI Office server running on http://localhost:${SERVER_PORT}`);
         console.log(`[server] WebSocket available at ws://localhost:${SERVER_PORT}/ws`);

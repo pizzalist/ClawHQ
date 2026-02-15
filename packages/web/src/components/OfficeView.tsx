@@ -6,6 +6,7 @@ export default function OfficeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<OfficeScene | null>(null);
   const agents = useStore((s) => s.agents);
+  const meetings = useStore((s) => s.meetings);
   const selectedAgentId = useStore((s) => s.selectedAgentId);
   const setSelectedAgent = useStore((s) => s.setSelectedAgent);
 
@@ -17,8 +18,12 @@ export default function OfficeView() {
   }, [setSelectedAgent]);
 
   useEffect(() => {
+    // Compute active meeting participants
+    const activeMeetings = meetings.filter(m => m.status === 'active' || m.status === 'reviewing');
+    const meetingParticipantIds = activeMeetings.flatMap(m => m.participants);
+    sceneRef.current?.setMeetingParticipants(meetingParticipantIds);
     sceneRef.current?.updateAgents(agents);
-  }, [agents]);
+  }, [agents, meetings]);
 
   useEffect(() => {
     sceneRef.current?.setSelectedAgent(selectedAgentId);
