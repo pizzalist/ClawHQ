@@ -8,10 +8,11 @@ import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages } from './chief-agent.js';
 import { stmts } from './db.js';
 const app = express();
 app.use(cors());
@@ -77,6 +78,37 @@ app.post('/api/agents', (req, res) => {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
 });
+app.post('/api/chief/chat', (req, res) => {
+    const { message, sessionId } = req.body || {};
+    if (!message || typeof message !== 'string') {
+        return res.status(400).json({ error: 'message is required' });
+    }
+    const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
+        ? sessionId.trim()
+        : (req.header('x-chief-session-id') || req.ip || 'default');
+    const result = chatWithChief(resolvedSessionId, message.trim());
+    res.json(result);
+});
+app.post('/api/chief/plan/apply', (req, res) => {
+    const { suggestions, sessionId } = req.body || {};
+    if (!Array.isArray(suggestions)) {
+        return res.status(400).json({ error: 'suggestions array is required' });
+    }
+    try {
+        const applied = applyChiefPlan(suggestions);
+        const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
+            ? sessionId.trim()
+            : (req.header('x-chief-session-id') || req.ip || 'default');
+        res.json({
+            ok: true,
+            ...applied,
+            messages: getChiefMessages(resolvedSessionId),
+        });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
 // Live preview endpoint — extract HTML from task result
 app.get('/api/tasks/:id/preview', (req, res) => {
     const row = stmts.getTask.get(req.params.id);
@@ -91,7 +123,18 @@ app.get('/api/tasks/:id/preview', (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
 });
+function unescapeJsonString(s) {
+    return s
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+}
 function extractHtmlFromResult(result) {
+    // If result looks like it has escaped newlines (literal \n in text), unescape first
+    if (result.includes('\\n')) {
+        result = unescapeJsonString(result);
+    }
     // Markdown code blocks
     const htmlBlock = result.match(/```html\s*\n([\s\S]*?)```/i);
     if (htmlBlock)
@@ -132,6 +175,10 @@ app.get('/api/tasks/:id', (req, res) => {
         updatedAt: row.updated_at,
     };
     res.json(task);
+});
+app.get('/api/tasks/:id/chain', (req, res) => {
+    const children = getChainChildren(req.params.id);
+    res.json(children);
 });
 app.get('/api/tasks', (req, res) => {
     const { assigneeId } = req.query;
@@ -491,17 +538,26 @@ app.get('/api/meetings/:id', (req, res) => {
     res.json(meeting);
 });
 app.post('/api/meetings', (req, res) => {
-    const { title, description, type, participantIds } = req.body;
+    const { title, description, type, participantIds, character } = req.body;
     if (!title || !participantIds || !Array.isArray(participantIds) || participantIds.length < 2) {
         return res.status(400).json({ error: 'title and at least 2 participantIds required' });
     }
     try {
-        const meeting = startPlanningMeeting(title, description || '', participantIds);
+        const meeting = startPlanningMeeting(title, description || '', participantIds, character);
         res.status(201).json(meeting);
     }
     catch (err) {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
+});
+app.get('/api/meetings/:id/report', (req, res) => {
+    const meeting = getMeeting(req.params.id);
+    if (!meeting)
+        return res.status(404).json({ error: 'Meeting not found' });
+    if (!meeting.report)
+        return res.status(404).json({ error: 'No report available yet' });
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.send(meeting.report);
 });
 app.post('/api/meetings/:id/decide', (req, res) => {
     const { winnerId, feedback } = req.body;

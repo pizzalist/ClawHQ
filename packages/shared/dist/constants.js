@@ -22,6 +22,15 @@ export const ROLE_EMOJI = {
     devops: '🔧',
     qa: '🧪',
 };
+// Office character badges (Naruto-themed) used for in-office avatars only
+export const OFFICE_CHARACTER_EMOJI = {
+    pm: '🍥', // Naruto
+    developer: '⚡', // Sasuke
+    reviewer: '👁️', // Kakashi / Sharingan
+    designer: '🌸', // Sakura
+    devops: '🐍', // Orochimaru vibe
+    qa: '🐸', // Jiraiya / toad
+};
 export const STATE_COLORS = {
     idle: '#6b7280',
     working: '#3b82f6',
@@ -75,10 +84,13 @@ export const TEAM_PRESETS = [
     },
 ];
 // Chain defines the role flow: PM → Developer → Reviewer → Done
+// For report-only tasks, PM skips Developer and goes straight to Reviewer.
 export const CHAIN_NEXT_ROLE = {
     pm: 'developer',
     developer: 'reviewer',
 };
+/** Deliverable types that skip the Developer step (PM → Reviewer directly) */
+export const REPORT_ONLY_TYPES = ['report', 'document'];
 export const CHAIN_STEP_LABELS = {
     pm: 'Plan',
     developer: 'Implement',

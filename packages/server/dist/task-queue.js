@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-office/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
 import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
@@ -146,7 +146,16 @@ function assignTask(agentId, task) {
     });
 }
 const ROLE_INSTRUCTIONS = {
-    pm: 'You are a Project Manager. Create a detailed plan/specification, NOT the actual implementation. Break down the task into actionable steps for developers. Produce a structured report or document.',
+    pm: `You are a Project Manager. Your job is to create REPORTS, PLANS, and ANALYSIS only.
+
+CRITICAL RULES — VIOLATION = FAILURE:
+- NEVER write code. No HTML, no JavaScript, no CSS, no programming code of ANY kind.
+- NEVER use code blocks (\`\`\`html, \`\`\`js, etc.) — only markdown text.
+- Your output is ALWAYS a structured markdown document with headers (# ## ###), bullet points, and tables.
+- If the task says "만들어줘" or "build", produce a PLAN/SPECIFICATION for how to build it. DO NOT build it.
+- If the task says "분석" or "리포트" or "report", produce a concise markdown report.
+- Keep reports focused and actionable. Use Korean if the task is in Korean.
+- Structure: 1) 개요 2) 핵심 내용 3) 결론/권장사항`,
     developer: 'You are a Developer. Implement the task by writing working code. Produce complete, runnable code.',
     designer: 'You are a Designer. Create design specifications, mockups, or UI implementations.',
     reviewer: 'You are a Code Reviewer. Review the work and produce a structured report with findings and recommendations.',
@@ -178,6 +187,69 @@ function buildPrompt(name, role, task) {
     parts.push(``, `Respond with a clear summary of what you accomplished.`);
     return parts.join('\n');
 }
+/** Walk up parentTaskId chain to find the root task */
+function findRootTask(taskId) {
+    let current = rowToTask(stmts.getTask.get(taskId));
+    while (current.parentTaskId) {
+        const parent = stmts.getTask.get(current.parentTaskId);
+        if (!parent)
+            break;
+        current = rowToTask(parent);
+    }
+    return current;
+}
+/** Get all chain children of a task (direct + nested) in order */
+function getChainChildren(rootTaskId) {
+    const all = stmts.listTasks.all().map(rowToTask);
+    const children = [];
+    const findChildren = (parentId) => {
+        const kids = all.filter(t => t.parentTaskId === parentId);
+        for (const kid of kids) {
+            children.push(kid);
+            findChildren(kid.id);
+        }
+    };
+    findChildren(rootTaskId);
+    return children;
+}
+/** When a chain step completes, update root task with progress or final result */
+function updateRootTaskFromChain(taskId, result) {
+    const currentTask = rowToTask(stmts.getTask.get(taskId));
+    const rootTask = findRootTask(taskId);
+    if (rootTask.id === taskId)
+        return; // This IS the root task
+    const agent = currentTask.assigneeId ? getAgent(currentTask.assigneeId) : null;
+    const nextRole = agent ? CHAIN_NEXT_ROLE[agent.role] : undefined;
+    if (!nextRole) {
+        // TERMINAL step (reviewer). Aggregate and complete root task.
+        const children = getChainChildren(rootTask.id);
+        const allSteps = [rootTask, ...children];
+        // Find dev step's result as the main deliverable
+        const devStep = allSteps.find(t => {
+            const a = t.assigneeId ? getAgent(t.assigneeId) : null;
+            return a?.role === 'developer';
+        });
+        const finalResult = devStep?.result || result;
+        // Update root task with final result and completed status
+        stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult, rootTask.id);
+        // Copy dev's deliverables to root task
+        try {
+            createDeliverablesFromResult(rootTask.id, finalResult, 'developer');
+        }
+        catch (e) {
+            console.error('[deliverables] root copy error:', e);
+        }
+        emitTaskEvent('task_completed', rootTask.assigneeId, rootTask.id, `Task "${rootTask.title}" completed (pipeline finished)`);
+    }
+    else {
+        // Intermediate step — update root with progress
+        const children = getChainChildren(rootTask.id);
+        const completedSteps = 1 + children.filter(c => c.status === 'completed').length;
+        const totalSteps = 1 + Object.keys(CHAIN_NEXT_ROLE).length; // PM + Dev + Reviewer = 3
+        const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
+        stmts.updateTask.run(rootTask.assigneeId, 'in-progress', `⏳ Step ${completedSteps}/${totalSteps}: ${stepLabel} starting...`, rootTask.id);
+    }
+}
 function handleRunComplete(agentId, taskId, title, run) {
     try {
         const success = run.exitCode === 0;
@@ -195,9 +267,10 @@ function handleRunComplete(agentId, taskId, title, run) {
                 try {
                     transitionAgent(agentId, 'done', taskId);
                     stmts.updateTask.run(agentId, 'completed', result, taskId);
-                    // Auto-create deliverables from result
+                    // Auto-create deliverables from result (pass agent role for type enforcement)
+                    const agentRole = getAgent(agentId)?.role;
                     try {
-                        createDeliverablesFromResult(taskId, result);
+                        createDeliverablesFromResult(taskId, result, agentRole);
                     }
                     catch (e) {
                         console.error('[deliverables] parse error:', e);
@@ -205,6 +278,8 @@ function handleRunComplete(agentId, taskId, title, run) {
                     emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
                     // Auto-chain: spawn next step based on agent role
                     spawnChainFollowUp(agentId, taskId, title, result);
+                    // Update root task with chain progress/completion
+                    updateRootTaskFromChain(taskId, result);
                     // Return to idle after brief pause
                     setTimeout(() => {
                         try {
@@ -242,9 +317,19 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         const agent = getAgent(agentId);
         if (!agent)
             return;
-        const nextRole = CHAIN_NEXT_ROLE[agent.role];
+        let nextRole = CHAIN_NEXT_ROLE[agent.role];
         if (!nextRole)
             return; // No next step (e.g. reviewer is terminal)
+        // Skip Developer for report-only tasks (PM → Reviewer directly)
+        if (nextRole === 'developer' && agent.role === 'pm') {
+            const rootTask = findRootTask(taskId);
+            const expected = rootTask.expectedDeliverables || [];
+            const isReportOnly = expected.length > 0 && expected.every(t => REPORT_ONLY_TYPES.includes(t));
+            if (isReportOnly) {
+                // Skip developer, go straight to reviewer
+                nextRole = 'reviewer';
+            }
+        }
         // Find an agent with the next role
         const nextAgentRow = stmts.findAgentByRole.get(nextRole);
         if (!nextAgentRow)
@@ -282,6 +367,7 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         console.error('[task-queue] Chain follow-up error:', err);
     }
 }
+export { getChainChildren, findRootTask };
 export function listEvents() {
     return stmts.listEvents.all().map(row => ({
         id: row.id,

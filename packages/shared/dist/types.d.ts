@@ -109,6 +109,7 @@ export interface DecisionHistoryEntry {
     decidedAt: string;
 }
 export type MeetingType = 'planning' | 'review' | 'debate' | 'tech-spec';
+export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective';
 export type TechSpecRole = 'cto' | 'frontend-lead' | 'backend-lead' | 'qa-devils-advocate';
 export interface TechSpecParticipant {
     agentId: string;
@@ -161,8 +162,20 @@ export interface Meeting {
         feedback: string;
     } | null;
     techSpec?: TechSpecMeetingData;
+    character?: MeetingCharacter;
+    report?: string;
     createdAt: string;
     updatedAt: string;
+}
+export interface ChiefChatMessage {
+    id: string;
+    role: 'user' | 'chief';
+    content: string;
+    createdAt: string;
+}
+export interface TeamPlanSuggestion {
+    role: AgentRole;
+    count: number;
 }
 export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update';
 export interface WSMessage {

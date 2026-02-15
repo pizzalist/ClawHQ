@@ -4,10 +4,13 @@ export declare const AGENT_ROLES: AgentRole[];
 export declare const AGENT_MODELS: AgentModel[];
 export declare const ROLE_LABELS: Record<AgentRole, string>;
 export declare const ROLE_EMOJI: Record<AgentRole, string>;
+export declare const OFFICE_CHARACTER_EMOJI: Record<AgentRole, string>;
 export declare const STATE_COLORS: Record<AgentState, string>;
 export declare const STATE_TRANSITIONS: Record<AgentState, AgentState[]>;
 export declare const TEAM_PRESETS: import('./types.js').TeamPreset[];
 export declare const CHAIN_NEXT_ROLE: Partial<Record<import('./types.js').AgentRole, import('./types.js').AgentRole>>;
+/** Deliverable types that skip the Developer step (PM → Reviewer directly) */
+export declare const REPORT_ONLY_TYPES: import('./types.js').DeliverableType[];
 export declare const CHAIN_STEP_LABELS: Partial<Record<import('./types.js').AgentRole, string>>;
 export declare const TECH_SPEC_ROLES: Record<import('./types.js').TechSpecRole, {
     label: string;

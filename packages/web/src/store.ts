@@ -101,7 +101,12 @@ export const useStore = create<Store>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, sessionId }),
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = 'Failed';
+        try { errMsg = JSON.parse(text).error || errMsg; } catch { errMsg = `Server error (${res.status})`; }
+        throw new Error(errMsg);
+      }
       const data = await res.json();
       setChiefState(data.messages || [], data.suggestions || [], null);
     } catch (e: unknown) {

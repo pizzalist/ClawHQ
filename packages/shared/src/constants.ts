@@ -95,10 +95,14 @@ export const TEAM_PRESETS: import('./types.js').TeamPreset[] = [
 ];
 
 // Chain defines the role flow: PM → Developer → Reviewer → Done
+// For report-only tasks, PM skips Developer and goes straight to Reviewer.
 export const CHAIN_NEXT_ROLE: Partial<Record<import('./types.js').AgentRole, import('./types.js').AgentRole>> = {
   pm: 'developer',
   developer: 'reviewer',
 };
+
+/** Deliverable types that skip the Developer step (PM → Reviewer directly) */
+export const REPORT_ONLY_TYPES: import('./types.js').DeliverableType[] = ['report', 'document'];
 
 export const CHAIN_STEP_LABELS: Partial<Record<import('./types.js').AgentRole, string>> = {
   pm: 'Plan',

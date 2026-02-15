@@ -166,6 +166,14 @@ export function createDeliverablesFromResult(taskId: string, result: string, age
   // Delete existing deliverables for this task (in case of re-run)
   stmts.deleteDeliverablesByTask.run(taskId);
 
+  // Unescape literal \n sequences that LLM output sometimes contains
+  if (result.includes('\\n')) {
+    result = result
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"');
+  }
+
   let artifacts = parseResultToArtifacts(result);
 
   // PM role enforcement: force all artifacts to report/document type

@@ -114,6 +114,15 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+// Migration: add character and report to meetings
+try {
+    db.exec(`ALTER TABLE meetings ADD COLUMN character TEXT`);
+}
+catch { /* column already exists */ }
+try {
+    db.exec(`ALTER TABLE meetings ADD COLUMN report TEXT`);
+}
+catch { /* column already exists */ }
 // Migration: add parent_task_id if missing
 try {
     db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id)`);
@@ -236,11 +245,11 @@ export const stmts = {
     listMeetings: db.prepare('SELECT * FROM meetings ORDER BY created_at DESC LIMIT 50'),
     getMeeting: db.prepare('SELECT * FROM meetings WHERE id = ?'),
     insertMeeting: db.prepare(`
-    INSERT INTO meetings (id, title, description, type, status, participants, proposals, decision, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'active', ?, '[]', NULL, datetime('now'), datetime('now'))
+    INSERT INTO meetings (id, title, description, type, status, participants, proposals, decision, character, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'active', ?, '[]', NULL, ?, datetime('now'), datetime('now'))
   `),
     updateMeeting: db.prepare(`
-    UPDATE meetings SET status = ?, proposals = ?, decision = ?, updated_at = datetime('now')
+    UPDATE meetings SET status = ?, proposals = ?, decision = ?, report = ?, updated_at = datetime('now')
     WHERE id = ?
   `),
     listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),

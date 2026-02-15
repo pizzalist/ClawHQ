@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import type { Task, TaskStatus, AppEvent } from '@ai-office/shared';
-import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-office/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
 import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
@@ -156,20 +156,16 @@ function assignTask(agentId: string, task: Task) {
 }
 
 const ROLE_INSTRUCTIONS: Record<string, string> = {
-  pm: `You are a Project Manager. Your job is to create PROJECT PLANS and SPECIFICATIONS only.
+  pm: `You are a Project Manager. Your job is to create REPORTS, PLANS, and ANALYSIS only.
 
-IMPORTANT RULES:
-- DO NOT write any code (no HTML, no JavaScript, no CSS, no programming code of any kind)
-- DO NOT produce code blocks with programming languages
-- Instead, create a detailed project plan in markdown with:
-  1. Project Overview & Goals
-  2. Requirements (functional and non-functional)
-  3. User Stories
-  4. Technical Approach (describe, don't implement)
-  5. Task Breakdown for developers
-  6. Timeline / Priority
-- Your output should ALWAYS be a structured markdown document/report
-- If asked to "make" or "build" something, plan HOW it should be built, not build it yourself`,
+CRITICAL RULES — VIOLATION = FAILURE:
+- NEVER write code. No HTML, no JavaScript, no CSS, no programming code of ANY kind.
+- NEVER use code blocks (\`\`\`html, \`\`\`js, etc.) — only markdown text.
+- Your output is ALWAYS a structured markdown document with headers (# ## ###), bullet points, and tables.
+- If the task says "만들어줘" or "build", produce a PLAN/SPECIFICATION for how to build it. DO NOT build it.
+- If the task says "분석" or "리포트" or "report", produce a concise markdown report.
+- Keep reports focused and actionable. Use Korean if the task is in Korean.
+- Structure: 1) 개요 2) 핵심 내용 3) 결론/권장사항`,
   developer: 'You are a Developer. Implement the task by writing working code. Produce complete, runnable code.',
   designer: 'You are a Designer. Create design specifications, mockups, or UI implementations.',
   reviewer: 'You are a Code Reviewer. Review the work and produce a structured report with findings and recommendations.',
@@ -331,8 +327,19 @@ function spawnChainFollowUp(agentId: string, taskId: string, title: string, resu
     const agent = getAgent(agentId);
     if (!agent) return;
 
-    const nextRole = CHAIN_NEXT_ROLE[agent.role];
+    let nextRole = CHAIN_NEXT_ROLE[agent.role];
     if (!nextRole) return; // No next step (e.g. reviewer is terminal)
+
+    // Skip Developer for report-only tasks (PM → Reviewer directly)
+    if (nextRole === 'developer' && agent.role === 'pm') {
+      const rootTask = findRootTask(taskId);
+      const expected = rootTask.expectedDeliverables || [];
+      const isReportOnly = expected.length > 0 && expected.every(t => REPORT_ONLY_TYPES.includes(t as any));
+      if (isReportOnly) {
+        // Skip developer, go straight to reviewer
+        nextRole = 'reviewer';
+      }
+    }
 
     // Find an agent with the next role
     const nextAgentRow = stmts.findAgentByRole.get(nextRole) as Record<string, unknown> | undefined;

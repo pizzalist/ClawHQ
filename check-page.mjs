@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const browser=await chromium.launch({headless:true});
+const page=await browser.newPage({viewport:{width:1720,height:980}});
+page.on('console',m=>console.log('console',m.type(),m.text()));
+page.on('pageerror',e=>console.log('pageerror',e.message));
+await page.goto('http://localhost:3001',{waitUntil:'domcontentloaded'});
+await page.waitForTimeout(8000);
+const txt=await page.evaluate(()=>document.body.innerText.slice(0,500));
+console.log('TEXT:',JSON.stringify(txt));
+await page.screenshot({path:'/home/noah/.openclaw/workspace/company/ai-office/app/debug-page.png',fullPage:true});
+await browser.close();
