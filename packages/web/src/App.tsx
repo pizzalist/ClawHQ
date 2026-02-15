@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { connectWS, useStore } from './store';
 import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';

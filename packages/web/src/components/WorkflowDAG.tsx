@@ -4,16 +4,18 @@ import type { Task, Agent } from '@ai-office/shared';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: '#6b7280',
-  working: '#3b82f6',
+  'in-progress': '#3b82f6',
   completed: '#22c55e',
   failed: '#ef4444',
+  cancelled: '#6b7280',
 };
 
 const STATUS_BG: Record<string, string> = {
   pending: '#374151',
-  working: '#1e3a5f',
+  'in-progress': '#1e3a5f',
   completed: '#14532d',
   failed: '#7f1d1d',
+  cancelled: '#374151',
 };
 
 const ROLE_EMOJI: Record<string, string> = {

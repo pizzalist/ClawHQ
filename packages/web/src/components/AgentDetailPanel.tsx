@@ -12,6 +12,7 @@ const STATE_BADGE: Record<string, { bg: string; text: string }> = {
   reviewing: { bg: 'bg-yellow-500/15', text: 'text-yellow-400' },
   done: { bg: 'bg-green-500/15', text: 'text-green-400' },
   error: { bg: 'bg-red-500/15', text: 'text-red-400' },
+  waiting: { bg: 'bg-purple-500/15', text: 'text-purple-400' },
 };
 
 const STATUS_ICONS: Record<string, string> = {

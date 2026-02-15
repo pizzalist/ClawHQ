@@ -175,7 +175,7 @@ export default function TechSpecMeeting({ meeting, onApprove, onRequestChanges, 
             </div>
           )}
           {techSpec.synthesisStatus === 'done' && techSpec.synthesis && (
-            <div className={`text-sm text-gray-300 whitespace-pre-wrap leading-relaxed ${showSynthesis ? '' : 'max-h-40 overflow-hidden'}`}>
+            <div className={`text-sm text-gray-300 whitespace-pre-wrap leading-relaxed relative ${showSynthesis ? '' : 'max-h-40 overflow-hidden'}`}>
               {techSpec.synthesis}
               {!showSynthesis && (
                 <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-[#0f0f1a] to-transparent" />

@@ -261,14 +261,14 @@ export function connectWS() {
         break;
       case 'meetings_update': {
         const newMeetings = msg.payload as Meeting[];
-        const prevMeetings = (store as any).meetings || [];
-        if ((store as any).setMeetings) (store as any).setMeetings(newMeetings);
+        const prevMeetings = store.meetings;
+        store.setMeetings(newMeetings);
         // Check for newly completed meetings
         for (const m of newMeetings) {
-          if ((m as any).status === 'completed' && !(m as any).decision) {
-            const prev = prevMeetings.find((pm: any) => pm.id === (m as any).id);
-            if (!prev || (prev as any).status !== 'completed') {
-              toast(`Meeting complete! ${(m as any).proposals?.length || 0} proposals ready for your review`, 'info', {
+          if (m.status === 'completed' && !m.decision) {
+            const prev = prevMeetings.find((pm) => pm.id === m.id);
+            if (!prev || prev.status !== 'completed') {
+              toast(`Meeting complete! ${m.proposals?.length || 0} proposals ready for your review`, 'info', {
                 label: '🗳️ Review',
                 onClick: () => { /* handled by UI */ },
               });

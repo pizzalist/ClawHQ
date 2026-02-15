@@ -136,10 +136,8 @@ export class AgentSprite {
     const t = Date.now() / 1000 + this.animPhase;
 
     if (this.state === 'working') {
-      // Typing bob — small fast oscillation on arms
-      const armBob = Math.sin(t * 8) * 1.5;
+      // Typing bob
       this.body.pivot.y = Math.sin(t * 4) * 0.5;
-      // We'll just bob the whole body slightly for "typing"
       this.body.position.y = Math.sin(t * 6) * 0.8;
     } else {
       // Idle breathing — gentle vertical bob

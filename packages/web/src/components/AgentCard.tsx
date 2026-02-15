@@ -7,6 +7,7 @@ const STATE_STYLES: Record<string, { bg: string; text: string; dot: string; puls
   reviewing: { bg: 'bg-yellow-500/15', text: 'text-yellow-400', dot: 'bg-yellow-500', pulse: true },
   done: { bg: 'bg-green-500/15', text: 'text-green-400', dot: 'bg-green-500', pulse: false },
   error: { bg: 'bg-red-500/15', text: 'text-red-400', dot: 'bg-red-500', pulse: false },
+  waiting: { bg: 'bg-purple-500/15', text: 'text-purple-400', dot: 'bg-purple-500', pulse: true },
 };
 
 export default function AgentCard({
