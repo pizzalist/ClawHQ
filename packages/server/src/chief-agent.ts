@@ -730,15 +730,54 @@ export function generatePlanFromPrompt(userText: string): TeamPlanSuggestion[] {
 }
 
 function keywordChat(sessionId: string, userMessage: string) {
-  const stateSummary = `현재 인력 ${listAgents().length}명, 작업 ${listTasks().length}건, 미팅 ${listMeetings().length}건`;
+  const message = userMessage.trim();
+  const lower = message.toLowerCase();
+  const agents = listAgents();
+  const tasks = listTasks();
+  const meetings = listMeetings();
+  const stateSummary = `현재 인력 ${agents.length}명, 작업 ${tasks.length}건, 미팅 ${meetings.length}건`;
+
+  // 1) Simple status query → short, direct response
+  if (/(상태|현황|진행|status|how many|몇\s*명|몇\s*건)/i.test(lower) && !/(추가|생성|만들|취소|리셋|reset)/i.test(lower)) {
+    const pending = tasks.filter(t => t.status === 'pending').length;
+    const inProgress = tasks.filter(t => t.status === 'in-progress').length;
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    return {
+      reply: `인력 ${agents.length}명 · 대기 ${pending} · 진행 ${inProgress} · 완료 ${completed}입니다.`,
+      suggestions: [],
+    };
+  }
+
+  // 2) Cancel pending tasks quickly
+  if (/(전체\s*취소|모두\s*취소|대기\s*작업\s*취소|cancel all|cancel pending)/i.test(lower)) {
+    const result = stmts.cancelAllPending.run();
+    const count = result.changes;
+    return {
+      reply: `대기 중 작업 ${count}건을 취소했습니다.`,
+      suggestions: [],
+    };
+  }
+
+  // 3) Reset busy agents quickly
+  if (/(에이전트\s*리셋|agent\s*reset|전체\s*리셋|reset all)/i.test(lower)) {
+    const resettable = agents.filter(a => a.state !== 'idle');
+    for (const a of resettable) {
+      stmts.updateAgentState.run('idle', null, null, a.id);
+    }
+    return {
+      reply: `에이전트 ${resettable.length}명을 idle로 리셋했습니다.`,
+      suggestions: [],
+    };
+  }
+
   const suggestions = generatePlanFromPrompt(userMessage);
   const suggestionText = suggestions.length > 0
     ? suggestions.map((s) => `${s.role} ${s.count}명`).join(', ')
     : '현재 추가 편성 없이 진행 가능';
   const isExplicitRequest = parseExplicitRoleCounts(userMessage) !== null;
   const reply = isExplicitRequest
-    ? `상황 보고: ${stateSummary}\n\n요청 편성: ${suggestionText}\n\n요청하신 구성으로 팀을 생성할까요? 승인하시면 바로 적용합니다.`
-    : `상황 보고: ${stateSummary}\n\n제안 편성: ${suggestionText}\n\n이 구성으로 팀을 생성할까요?`;
+    ? `요청 편성: ${suggestionText}\n승인하면 바로 적용합니다.`
+    : `상황: ${stateSummary}\n제안 편성: ${suggestionText}\n이대로 생성할까요?`;
   return { reply, suggestions };
 }
 
