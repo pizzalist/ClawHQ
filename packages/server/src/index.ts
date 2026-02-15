@@ -7,7 +7,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
 import type { WSMessage, InitialState } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { listAgents, createAgent, deleteAgent, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
+import { TEAM_PRESETS } from '@ai-office/shared';
+import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { stmts } from './db.js';
 
@@ -94,6 +95,27 @@ app.post('/api/tasks', (req, res) => {
   try {
     const task = createTask(title, description || '', assigneeId || null);
     res.status(201).json(task);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Presets
+app.get('/api/presets', (_req, res) => {
+  res.json(TEAM_PRESETS);
+});
+
+app.post('/api/presets/apply', (req, res) => {
+  const { presetId } = req.body;
+  const preset = TEAM_PRESETS.find(p => p.id === presetId);
+  if (!preset) {
+    return res.status(400).json({ error: `Unknown preset: ${presetId}` });
+  }
+  try {
+    deleteAllAgents();
+    const created = preset.agents.map(a => createAgent(a.name, a.role, a.model));
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    res.json({ ok: true, agents: created });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

@@ -59,8 +59,16 @@ export default function FailureTimeline() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-gray-600 text-sm py-8 text-center">
-          {failures.length === 0 ? 'No failures recorded 🎉' : 'No failures for this agent'}
+        <div className="flex-1 flex items-center justify-center">
+          {failures.length === 0 ? (
+            <div className="flex flex-col items-center py-16 text-center">
+              <div className="text-5xl mb-4 opacity-60">🎉</div>
+              <h3 className="text-lg font-semibold text-gray-300 mb-1">No failures recorded</h3>
+              <p className="text-sm text-gray-500">Everything is running smoothly</p>
+            </div>
+          ) : (
+            <div className="text-gray-600 text-sm py-8 text-center">No failures for this agent</div>
+          )}
         </div>
       ) : (
         <div className="relative border-l-2 border-red-500/30 ml-3 space-y-0">
@@ -72,7 +80,7 @@ export default function FailureTimeline() {
                 key={f.taskId}
                 type="button"
                 onClick={() => setExpandedId(expanded ? null : f.taskId)}
-                className="block w-full text-left pl-6 py-3 relative hover:bg-surface/50 rounded-r transition-colors"
+                className="block w-full text-left pl-6 py-3 relative hover:bg-surface/50 rounded-r transition-all duration-200 hover:pl-7"
               >
                 {/* Timeline dot */}
                 <div className="absolute left-[-7px] top-4 w-3 h-3 rounded-full bg-red-500 border-2 border-[#0f0f1a]" />

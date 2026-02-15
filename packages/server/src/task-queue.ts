@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import type { Task, TaskStatus, AppEvent } from '@ai-office/shared';
-import { MAX_CONCURRENT_TASKS } from '@ai-office/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
@@ -34,6 +34,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     assigneeId: (row.assignee_id as string) ?? null,
     status: row.status as TaskStatus,
     result: (row.result as string) ?? null,
+    parentTaskId: (row.parent_task_id as string) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -43,9 +44,9 @@ export function listTasks(): Task[] {
   return (stmts.listTasks.all() as Record<string, unknown>[]).map(rowToTask);
 }
 
-export function createTask(title: string, description: string, assigneeId?: string | null): Task {
+export function createTask(title: string, description: string, assigneeId?: string | null, parentTaskId?: string | null): Task {
   const id = uuid();
-  stmts.insertTask.run(id, title, description);
+  stmts.insertTask.run(id, title, description, parentTaskId || null);
   // If specific assignee requested, set it on the task
   if (assigneeId) {
     stmts.updateTask.run(assigneeId, 'pending', null, id);
@@ -165,6 +166,9 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
           stmts.updateTask.run(agentId, 'completed', result, taskId);
           emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
 
+          // Auto-chain: spawn next step based on agent role
+          spawnChainFollowUp(agentId, taskId, title, result);
+
           // Return to idle after brief pause
           setTimeout(() => {
             try {
@@ -191,6 +195,34 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
     }
   } catch (err) {
     console.error(`[task-queue] Error handling completion for task ${taskId}:`, err);
+  }
+}
+
+function spawnChainFollowUp(agentId: string, taskId: string, title: string, result: string) {
+  try {
+    const agent = getAgent(agentId);
+    if (!agent) return;
+
+    const nextRole = CHAIN_NEXT_ROLE[agent.role];
+    if (!nextRole) return; // No next step (e.g. reviewer is terminal)
+
+    // Find an agent with the next role
+    const nextAgentRow = stmts.findAgentByRole.get(nextRole) as Record<string, unknown> | undefined;
+    if (!nextAgentRow) return; // No agent with that role exists
+
+    const nextAgentId = nextAgentRow.id as string;
+    const nextAgentName = nextAgentRow.name as string;
+    const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
+    const prevStepLabel = CHAIN_STEP_LABELS[agent.role] || agent.role;
+
+    const chainTitle = `[${stepLabel}] ${title}`;
+    const chainDesc = `Auto-chained from ${agent.name}'s ${prevStepLabel} step.\n\nPrevious result:\n${result.slice(0, 1000)}`;
+
+    const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId);
+    emitTaskEvent('chain_spawned', nextAgentId, newTask.id,
+      `🔗 Chain: ${agent.name} (${prevStepLabel}) → ${nextAgentName} (${stepLabel})`);
+  } catch (err) {
+    console.error('[task-queue] Chain follow-up error:', err);
   }
 }
 

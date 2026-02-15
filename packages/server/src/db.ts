@@ -34,9 +34,11 @@ db.exec(`
     assignee_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     result TEXT,
+    parent_task_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (assignee_id) REFERENCES agents(id)
+    FOREIGN KEY (assignee_id) REFERENCES agents(id),
+    FOREIGN KEY (parent_task_id) REFERENCES tasks(id)
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -49,6 +51,11 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// Migration: add parent_task_id if missing
+try {
+  db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id)`);
+} catch { /* column already exists */ }
 
 // Prepared statements
 export const stmts = {
@@ -64,12 +71,14 @@ export const stmts = {
   `),
   countAgents: db.prepare('SELECT COUNT(*) as count FROM agents'),
   deleteAgent: db.prepare('DELETE FROM agents WHERE id = ?'),
+  deleteAllAgents: db.prepare('DELETE FROM agents'),
+  findAgentByRole: db.prepare('SELECT * FROM agents WHERE role = ? AND state = \'idle\' LIMIT 1'),
 
   listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
   getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),
   insertTask: db.prepare(`
-    INSERT INTO tasks (id, title, description, status, created_at, updated_at)
-    VALUES (?, ?, ?, 'pending', datetime('now'), datetime('now'))
+    INSERT INTO tasks (id, title, description, status, parent_task_id, created_at, updated_at)
+    VALUES (?, ?, ?, 'pending', ?, datetime('now'), datetime('now'))
   `),
   updateTask: db.prepare(`
     UPDATE tasks SET assignee_id = ?, status = ?, result = ?, updated_at = datetime('now')

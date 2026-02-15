@@ -99,6 +99,14 @@ export function resetAgent(id: string): Agent {
   return getAgent(id)!;
 }
 
+export function deleteAllAgents(): void {
+  const agents = listAgents();
+  const working = agents.filter(a => a.state === 'working');
+  if (working.length > 0) throw new Error('Cannot clear team while agents are working');
+  stmts.deleteAllAgents.run();
+  emitEvent('agent_created', null, null, 'All agents removed (team reset)');
+}
+
 // Seed demo agents if DB is empty
 export function seedDemoAgents() {
   const count = (stmts.countAgents.get() as { count: number }).count;

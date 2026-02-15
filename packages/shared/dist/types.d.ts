@@ -2,7 +2,7 @@ export type AgentState = 'idle' | 'working' | 'reviewing' | 'error' | 'done' | '
 export type AgentRole = 'pm' | 'developer' | 'reviewer' | 'designer' | 'devops' | 'qa';
 export type AgentModel = 'claude-opus-4-6' | 'claude-sonnet-4' | 'openai-codex/o3' | 'openai-codex/gpt-5.3-codex';
 export type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'failed' | 'cancelled';
-export type EventType = 'agent_created' | 'agent_state_changed' | 'task_created' | 'task_assigned' | 'task_completed' | 'task_failed' | 'message';
+export type EventType = 'agent_created' | 'agent_state_changed' | 'task_created' | 'task_assigned' | 'task_completed' | 'task_failed' | 'message' | 'chain_spawned';
 export interface Agent {
     id: string;
     name: string;
@@ -22,8 +22,19 @@ export interface Task {
     assigneeId: string | null;
     status: TaskStatus;
     result: string | null;
+    parentTaskId: string | null;
     createdAt: string;
     updatedAt: string;
+}
+export interface TeamPreset {
+    id: string;
+    name: string;
+    description: string;
+    agents: Array<{
+        name: string;
+        role: AgentRole;
+        model: AgentModel;
+    }>;
 }
 export interface AppEvent {
     id: string;

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Agent, Task, AppEvent, WSMessage, InitialState } from '@ai-office/shared';
+import { toast } from './components/Toast';
 
 const API = '';
 
@@ -8,13 +9,16 @@ interface Store {
   tasks: Task[];
   events: AppEvent[];
   connected: boolean;
+  initialized: boolean;
   selectedAgentId: string | null;
+  sidebarOpen: boolean;
   loading: Record<string, boolean>;
   setAgents: (agents: Agent[]) => void;
   setTasks: (tasks: Task[]) => void;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
+  setSidebarOpen: (v: boolean) => void;
   init: (state: InitialState) => void;
   // API actions
   createTask: (title: string, description: string, assigneeId?: string | null) => Promise<void>;
@@ -22,6 +26,7 @@ interface Store {
   deleteAgent: (id: string) => Promise<void>;
   stopAgent: (id: string) => Promise<void>;
   resetAgent: (id: string) => Promise<void>;
+  applyPreset: (presetId: string) => Promise<void>;
   setLoading: (key: string, v: boolean) => void;
 }
 
@@ -30,7 +35,9 @@ export const useStore = create<Store>((set, get) => ({
   tasks: [],
   events: [],
   connected: false,
+  initialized: false,
   selectedAgentId: null,
+  sidebarOpen: true,
   loading: {},
   setAgents: (agents) => set((s) => ({
     agents,
@@ -40,19 +47,24 @@ export const useStore = create<Store>((set, get) => ({
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
-  init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, selectedAgentId: null }),
+  setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+  init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, selectedAgentId: null, initialized: true }),
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),
 
   createTask: async (title, description, assigneeId) => {
     const { setLoading } = get();
     setLoading('createTask', true);
     try {
-      await fetch(`${API}/api/tasks`, {
+      const res = await fetch(`${API}/api/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, description, assigneeId }),
       });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       await fetch(`${API}/api/tasks/process`, { method: 'POST' });
+      toast('Task created', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to create task', 'error');
     } finally {
       setLoading('createTask', false);
     }
@@ -62,11 +74,15 @@ export const useStore = create<Store>((set, get) => ({
     const { setLoading } = get();
     setLoading('createAgent', true);
     try {
-      await fetch(`${API}/api/agents`, {
+      const res = await fetch(`${API}/api/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, role, model }),
       });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast(`Agent "${name}" added`, 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to add agent', 'error');
     } finally {
       setLoading('createAgent', false);
     }
@@ -76,7 +92,11 @@ export const useStore = create<Store>((set, get) => ({
     const { setLoading } = get();
     setLoading(`delete-${id}`, true);
     try {
-      await fetch(`${API}/api/agents/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/api/agents/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Agent removed', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to remove agent', 'error');
     } finally {
       setLoading(`delete-${id}`, false);
     }
@@ -86,9 +106,27 @@ export const useStore = create<Store>((set, get) => ({
     const { setLoading } = get();
     setLoading(`stop-${id}`, true);
     try {
-      await fetch(`${API}/api/agents/${id}/stop`, { method: 'POST' });
+      const res = await fetch(`${API}/api/agents/${id}/stop`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Agent stopped', 'info');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to stop agent', 'error');
     } finally {
       setLoading(`stop-${id}`, false);
+    }
+  },
+
+  applyPreset: async (presetId) => {
+    const { setLoading } = get();
+    setLoading('applyPreset', true);
+    try {
+      await fetch(`${API}/api/presets/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presetId }),
+      });
+    } finally {
+      setLoading('applyPreset', false);
     }
   },
 
@@ -96,7 +134,11 @@ export const useStore = create<Store>((set, get) => ({
     const { setLoading } = get();
     setLoading(`reset-${id}`, true);
     try {
-      await fetch(`${API}/api/agents/${id}/reset`, { method: 'POST' });
+      const res = await fetch(`${API}/api/agents/${id}/reset`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Agent reset', 'info');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to reset agent', 'error');
     } finally {
       setLoading(`reset-${id}`, false);
     }
@@ -130,9 +172,13 @@ export function connectWS() {
       case 'tasks_update':
         store.setTasks(msg.payload as Task[]);
         break;
-      case 'event':
-        store.addEvent(msg.payload as AppEvent);
+      case 'event': {
+        const evt = msg.payload as AppEvent;
+        store.addEvent(evt);
+        if (evt.type === 'task_completed') toast(evt.message, 'success');
+        else if (evt.type === 'task_failed') toast(evt.message, 'error');
         break;
+      }
     }
   };
 
