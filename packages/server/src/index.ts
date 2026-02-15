@@ -78,6 +78,23 @@ app.post('/api/agents', (req, res) => {
   }
 });
 
+app.get('/api/tasks/:id', (req, res) => {
+  const row = stmts.getTask.get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Task not found' });
+  const task = {
+    id: row.id as string,
+    title: row.title as string,
+    description: row.description as string,
+    assigneeId: (row.assignee_id as string) ?? null,
+    status: row.status as string,
+    result: (row.result as string) ?? null,
+    parentTaskId: (row.parent_task_id as string) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+  res.json(task);
+});
+
 app.get('/api/tasks', (req, res) => {
   const { assigneeId } = req.query;
   const tasks = listTasks();

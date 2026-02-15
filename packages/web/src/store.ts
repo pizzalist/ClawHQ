@@ -11,6 +11,7 @@ interface Store {
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
+  selectedTaskId: string | null;
   sidebarOpen: boolean;
   loading: Record<string, boolean>;
   setAgents: (agents: Agent[]) => void;
@@ -18,6 +19,7 @@ interface Store {
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
+  setSelectedTask: (id: string | null) => void;
   setSidebarOpen: (v: boolean) => void;
   init: (state: InitialState) => void;
   // API actions
@@ -37,6 +39,7 @@ export const useStore = create<Store>((set, get) => ({
   connected: false,
   initialized: false,
   selectedAgentId: null,
+  selectedTaskId: null,
   sidebarOpen: true,
   loading: {},
   setAgents: (agents) => set((s) => ({
@@ -47,6 +50,7 @@ export const useStore = create<Store>((set, get) => ({
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
+  setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, selectedAgentId: null, initialized: true }),
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),
@@ -175,8 +179,19 @@ export function connectWS() {
       case 'event': {
         const evt = msg.payload as AppEvent;
         store.addEvent(evt);
-        if (evt.type === 'task_completed') toast(evt.message, 'success');
-        else if (evt.type === 'task_failed') toast(evt.message, 'error');
+        if (evt.type === 'task_completed') {
+          const taskId = evt.taskId;
+          toast(evt.message, 'success', taskId ? {
+            label: '👁 View Result',
+            onClick: () => useStore.getState().setSelectedTask(taskId),
+          } : undefined);
+        } else if (evt.type === 'task_failed') {
+          const taskId = evt.taskId;
+          toast(evt.message, 'error', taskId ? {
+            label: '👁 View Details',
+            onClick: () => useStore.getState().setSelectedTask(taskId),
+          } : undefined);
+        }
         break;
       }
     }

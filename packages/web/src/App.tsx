@@ -11,8 +11,10 @@ import WorkflowDAG from './components/WorkflowDAG';
 import AgentDetailPanel from './components/AgentDetailPanel';
 import CommandInput from './components/CommandInput';
 import ToastContainer from './components/Toast';
+import TaskListView from './components/TaskListView';
+import TaskResultModal from './components/TaskResultModal';
 
-type View = 'office' | 'dashboard' | 'workflow' | 'failures' | 'history';
+type View = 'office' | 'dashboard' | 'workflow' | 'failures' | 'history' | 'tasks';
 
 export default function App() {
   const [view, setView] = useState<View>('office');
@@ -22,6 +24,7 @@ export default function App() {
 
   const tabs: [View, string][] = [
     ['office', '🏢 Office'],
+    ['tasks', '📋 Tasks'],
     ['dashboard', '📊 Dashboard'],
     ['workflow', '🔗 Workflow'],
     ['failures', '⚠️ Failures'],
@@ -82,6 +85,7 @@ export default function App() {
               <ActivityLog />
             </>
           )}
+          {view === 'tasks' && <TaskListView />}
           {view === 'dashboard' && <Dashboard />}
           {view === 'workflow' && <WorkflowDAG />}
           {view === 'failures' && <FailureTimeline />}
@@ -90,6 +94,7 @@ export default function App() {
         </main>
       </div>
       <AgentDetailPanel />
+      <TaskResultModal />
       {/* Mobile bottom bar */}
       <div className="sm:hidden flex items-center justify-around bg-panel border-t border-gray-700/50 py-2 shrink-0">
         {tabs.map(([v, label]) => (

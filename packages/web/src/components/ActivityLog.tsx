@@ -11,8 +11,12 @@ const TYPE_CONFIG: Record<string, { icon: string; color: string }> = {
   chain_spawned: { icon: '🔗', color: 'text-orange-400' },
 };
 
+const CLICKABLE_TYPES = new Set(['task_completed', 'task_failed', 'task_assigned']);
+
 export default function ActivityLog() {
   const events = useStore((s) => s.events);
+  const tasks = useStore((s) => s.tasks);
+  const setSelectedTask = useStore((s) => s.setSelectedTask);
 
   return (
     <div className="h-48 bg-panel border-t border-gray-700/50 flex flex-col shrink-0">
@@ -23,18 +27,35 @@ export default function ActivityLog() {
       <div className="flex-1 overflow-y-auto px-3 py-1 font-mono text-xs">
         {events.map((e, i) => {
           const cfg = TYPE_CONFIG[e.type] || { icon: '📎', color: 'text-gray-400' };
+          const clickable = CLICKABLE_TYPES.has(e.type) && e.taskId;
+          const task = clickable ? tasks.find((t) => t.id === e.taskId) : null;
+          const resultPreview = task?.result ? task.result.slice(0, 100) : null;
+
           return (
             <div
               key={e.id}
+              onClick={clickable ? () => setSelectedTask(e.taskId!) : undefined}
               className={`py-1 flex gap-2 text-gray-400 hover:text-gray-200 hover:bg-gray-800/30 rounded px-1 -mx-1 transition-colors ${
                 i === 0 ? 'animate-fadeIn' : ''
-              }`}
+              } ${clickable ? 'cursor-pointer' : ''}`}
             >
               <span className="shrink-0 w-5 text-center">{cfg.icon}</span>
               <span className="text-gray-600 shrink-0 tabular-nums">
                 {new Date(e.createdAt).toLocaleTimeString()}
               </span>
-              <span className={`truncate ${cfg.color}`}>{e.message}</span>
+              <div className="min-w-0 flex-1">
+                <span className={`${cfg.color} ${clickable ? 'underline decoration-dotted underline-offset-2' : ''}`}>
+                  {e.message}
+                </span>
+                {resultPreview && (
+                  <div className="text-[10px] text-gray-600 truncate mt-0.5">
+                    💬 {resultPreview}{task!.result!.length > 100 ? '...' : ''}
+                  </div>
+                )}
+              </div>
+              {clickable && (
+                <span className="text-[10px] text-gray-600 shrink-0">👁</span>
+              )}
             </div>
           );
         })}
