@@ -13,12 +13,14 @@ const ROLE_BODY_COLORS: Record<AgentRole, number> = {
 
 type PixelMap = string[];
 type Palette = Record<string, number>;
+type Facing = 'left' | 'right' | 'up' | 'down';
 
 const PIXEL_SIZE = 2;
 const SPRITE_ORIGIN_X = -16;
 const SPRITE_ORIGIN_Y = -34;
+const WALK_SPEED = 2;
 
-const SPRITE_BASE_MAP: PixelMap = [
+const SPRITE_UPPER_MAP: PixelMap = [
   '....hhhhhhhh....',
   '...hhhhhhhhhh...',
   '...hffffffffh...',
@@ -35,15 +37,139 @@ const SPRITE_BASE_MAP: PixelMap = [
   '..tttttttttttt..',
   '...tttttttttt...',
   '....tttttttt....',
-  '....aat..taa....',
-  '....aattttaa....',
-  '....aat..taa....',
-  '....ll....ll....',
-  '....ll....ll....',
-  '....ll....ll....',
-  '....ll....ll....',
-  '...bbb....bbb...',
 ];
+
+const LOWER_IDLE: Record<Facing, PixelMap> = {
+  down: [
+    '....aat..taa....',
+    '....aattttaa....',
+    '....aat..taa....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '...bbb....bbb...',
+  ],
+  up: [
+    '....aattttaa....',
+    '.....tttttt.....',
+    '....tt....tt....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '....ll....ll....',
+    '...bbb....bbb...',
+  ],
+  left: [
+    '...aaattt.......',
+    '...aaattttt.....',
+    '...aaattt.......',
+    '...lll..lll.....',
+    '...lll..lll.....',
+    '...lll..lll.....',
+    '...lll..lll.....',
+    '..bbbb..bbb.....',
+  ],
+  right: [
+    '.......tttaa... ',
+    '.....tttttaaa... ',
+    '.......tttaa... ',
+    '.....lll..lll...',
+    '.....lll..lll...',
+    '.....lll..lll...',
+    '.....lll..lll...',
+    '.....bbb..bbbb..',
+  ].map((row) => row.replace(/ /g, '.')),
+};
+
+const LOWER_WALK: Record<Facing, PixelMap[]> = {
+  down: [
+    [
+      '....aat..taa....',
+      '....aattttaa....',
+      '....aat..taa....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '..bbbb....bbb...',
+    ],
+    [
+      '....aattttaa....',
+      '....aattttaa....',
+      '....aattttaa....',
+      '....ll....lll...',
+      '....ll....lll...',
+      '....ll....lll...',
+      '....ll....lll...',
+      '...bbb....bbbb..',
+    ],
+    [
+      '....taa..taa....',
+      '....aattttaa....',
+      '....taa..taa....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '...bbb....bbb...',
+    ],
+    [
+      '....tta..aat....',
+      '....aattttaa....',
+      '....tta..aat....',
+      '....lll....ll...',
+      '....lll....ll...',
+      '....lll....ll...',
+      '....lll....ll...',
+      '..bbbb....bbb...',
+    ],
+  ],
+  up: [
+    [
+      '....tt....tt....',
+      '....tt....tt....',
+      '....tt....tt....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '...lll....ll....',
+      '..bbbb....bbb...',
+    ],
+    [
+      '....tt....tt....',
+      '....tt....tt....',
+      '....tt....tt....',
+      '....ll....lll...',
+      '....ll....lll...',
+      '....ll....lll...',
+      '....ll....lll...',
+      '...bbb....bbbb..',
+    ],
+    [
+      '....tt....tt....',
+      '....tt....tt....',
+      '....tt....tt....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '....ll....ll....',
+      '...bbb....bbb...',
+    ],
+    [
+      '....tt....tt....',
+      '....tt....tt....',
+      '....tt....tt....',
+      '....lll....ll...',
+      '....lll....ll...',
+      '....lll....ll...',
+      '....lll....ll...',
+      '..bbbb....bbb...',
+    ],
+  ],
+  left: [LOWER_IDLE.left, LOWER_IDLE.left, LOWER_IDLE.left, LOWER_IDLE.left],
+  right: [LOWER_IDLE.right, LOWER_IDLE.right, LOWER_IDLE.right, LOWER_IDLE.right],
+};
 
 const ROLE_PALETTES: Record<AgentRole, Palette> = {
   pm: {
@@ -155,48 +281,49 @@ export class AgentSprite {
   container: PIXI.Container;
   private body: PIXI.Graphics;
   private accessory: PIXI.Graphics;
+  private effects: PIXI.Graphics;
   private statusDot: PIXI.Graphics;
   private nameLabel: PIXI.Text;
   private emojiLabel: PIXI.Text;
   private selectionRing: PIXI.Graphics;
   private state: AgentState = 'idle';
   private role: AgentRole;
-  private animPhase = Math.random() * Math.PI * 2; // desync animations
+  private animPhase = Math.random() * Math.PI * 2;
   private tickerFn: () => void;
   private targetX: number | undefined;
   private targetY: number | undefined;
+  private facing: Facing = 'down';
+  private walkFrame = 0;
+  private lastBodyKey = '';
+  private lastAccessoryKind: 'idle' | 'working' | null = null;
 
   constructor(agent: Agent) {
     this.id = agent.id;
     this.role = agent.role;
     this.container = new PIXI.Container();
 
-    // Selection glow ring (drawn below everything)
     this.selectionRing = new PIXI.Graphics();
     this.selectionRing.visible = false;
     this.container.addChild(this.selectionRing);
 
-    // Body
+    this.effects = new PIXI.Graphics();
+    this.container.addChild(this.effects);
+
     this.body = new PIXI.Graphics();
-    this.drawBody(agent.role);
     this.container.addChild(this.body);
 
     this.accessory = new PIXI.Graphics();
-    this.drawAccessory('idle');
     this.container.addChild(this.accessory);
 
-    // Status indicator
     this.statusDot = new PIXI.Graphics();
     this.statusDot.position.set(16, -32);
     this.container.addChild(this.statusDot);
 
-    // Role emoji
     this.emojiLabel = new PIXI.Text(OFFICE_CHARACTER_EMOJI[agent.role], { fontSize: 16 });
     this.emojiLabel.anchor.set(0.5);
     this.emojiLabel.position.set(0, -44);
     this.container.addChild(this.emojiLabel);
 
-    // Name
     this.nameLabel = new PIXI.Text(agent.name, {
       fontSize: 10,
       fill: 0xccccdd,
@@ -206,10 +333,11 @@ export class AgentSprite {
     this.nameLabel.position.set(0, 24);
     this.container.addChild(this.nameLabel);
 
-    // Animate
     this.tickerFn = () => this.animate();
     PIXI.Ticker.shared.add(this.tickerFn);
 
+    this.redrawBody(false);
+    this.drawAccessory('idle');
     this.update(agent);
   }
 
@@ -233,34 +361,47 @@ export class AgentSprite {
     }
   }
 
-  private drawBody(role: AgentRole) {
+  private redrawBody(isMoving: boolean) {
+    const key = `${this.facing}:${this.walkFrame}:${isMoving ? 1 : 0}`;
+    if (key === this.lastBodyKey) return;
+    this.lastBodyKey = key;
+
     const g = this.body;
     g.clear();
 
-    // Pixel-style shadow on ground
     g.beginFill(0x000000, 0.2);
     g.drawRect(-12, 13, 24, 2);
     g.drawRect(-8, 15, 16, 2);
     g.endFill();
 
-    const palette = ROLE_PALETTES[role];
-    this.drawPixelMap(g, SPRITE_BASE_MAP, palette);
+    const palette = ROLE_PALETTES[this.role];
+    this.drawPixelMap(g, SPRITE_UPPER_MAP, palette);
 
-    // Eyes/mask details shared by roles (retro 2px accents)
-    if (role !== 'reviewer') {
+    const lower = isMoving ? LOWER_WALK[this.facing][this.walkFrame % 4] : LOWER_IDLE[this.facing];
+    this.drawPixelMap(g, lower, palette, 16);
+
+    if (this.role !== 'reviewer') {
       g.beginFill(palette.e);
-      g.drawRect(SPRITE_ORIGIN_X + 6 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
-      g.drawRect(SPRITE_ORIGIN_X + 9 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      if (this.facing === 'left') {
+        g.drawRect(SPRITE_ORIGIN_X + 5 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      } else if (this.facing === 'right') {
+        g.drawRect(SPRITE_ORIGIN_X + 10 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      } else {
+        g.drawRect(SPRITE_ORIGIN_X + 6 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+        g.drawRect(SPRITE_ORIGIN_X + 9 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 3 * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      }
       g.endFill();
     } else {
-      // Kakashi-like masked face look
       g.beginFill(palette.m);
-      g.drawRect(SPRITE_ORIGIN_X + 5 * PIXEL_SIZE, SPRITE_ORIGIN_Y + 4 * PIXEL_SIZE, 6 * PIXEL_SIZE, 2 * PIXEL_SIZE);
+      const lineY = this.facing === 'up' ? 3 : 4;
+      g.drawRect(SPRITE_ORIGIN_X + 5 * PIXEL_SIZE, SPRITE_ORIGIN_Y + lineY * PIXEL_SIZE, 6 * PIXEL_SIZE, 2 * PIXEL_SIZE);
       g.endFill();
     }
   }
 
   private drawAccessory(kind: 'idle' | 'working') {
+    if (this.lastAccessoryKind === kind) return;
+    this.lastAccessoryKind = kind;
     this.accessory.clear();
     const palette = ROLE_PALETTES[this.role];
     const accessory = kind === 'working' ? ROLE_ACCESSORY_WORK[this.role] : ROLE_ACCESSORY_IDLE[this.role];
@@ -270,53 +411,140 @@ export class AgentSprite {
   private drawSelectionRing(visible: boolean) {
     const g = this.selectionRing;
     g.clear();
-    if (!visible) { g.visible = false; return; }
+    if (!visible) {
+      g.visible = false;
+      return;
+    }
     g.visible = true;
     const color = ROLE_BODY_COLORS[this.role];
-    // Glowing ellipse
     g.lineStyle(2, color, 0.6);
     g.drawEllipse(0, 14, 20, 10);
     g.lineStyle(3, color, 0.25);
     g.drawEllipse(0, 14, 24, 12);
   }
 
+  private updateFacing(dx: number, dy: number) {
+    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      this.facing = dx >= 0 ? 'right' : 'left';
+    } else {
+      this.facing = dy >= 0 ? 'down' : 'up';
+    }
+  }
+
+  private drawRoleEffects(t: number, isMoving: boolean) {
+    const e = this.effects;
+    e.clear();
+
+    switch (this.role) {
+      case 'pm': {
+        const pulse = 0.45 + 0.2 * Math.sin(t * 4);
+        e.lineStyle(2, 0xf59e0b, pulse);
+        e.drawEllipse(0, 1, 13 + Math.sin(t * 3), 6 + Math.cos(t * 3) * 0.6);
+        e.lineStyle(1, 0xfb923c, 0.5);
+        e.drawEllipse(0, -6, 9 + Math.sin(t * 2.4), 4);
+        break;
+      }
+      case 'developer': {
+        e.lineStyle(1.5, 0x60a5fa, 0.55);
+        const x = Math.sin(t * 8) * 4;
+        e.moveTo(-8 + x, -10);
+        e.lineTo(-3 + x, -15);
+        e.lineTo(0 + x, -11);
+        e.moveTo(3 - x, -8);
+        e.lineTo(7 - x, -13);
+        e.lineTo(10 - x, -9);
+        e.lineStyle(1, 0xa855f7, 0.4);
+        e.drawCircle(-8, -3, 1.2);
+        e.drawCircle(8, -5, 1.2);
+        break;
+      }
+      case 'reviewer': {
+        const scanY = -28 + ((Math.sin(t * 5) + 1) / 2) * 9;
+        e.lineStyle(1.5, 0xcbd5e1, 0.6);
+        e.moveTo(-9, scanY);
+        e.lineTo(9, scanY);
+        e.lineStyle(1, 0xe2e8f0, 0.3);
+        e.drawRect(-10, scanY - 1, 20, 2);
+        break;
+      }
+      case 'designer': {
+        e.beginFill(0xf9a8d4, 0.55);
+        for (let i = 0; i < 4; i++) {
+          const px = Math.sin(t * 1.6 + i * 1.7) * (8 + i);
+          const py = -8 + Math.cos(t * 2 + i) * (4 + i * 0.8);
+          e.drawCircle(px, py, i % 2 === 0 ? 1.2 : 1.6);
+        }
+        e.endFill();
+        break;
+      }
+      case 'devops': {
+        e.beginFill(0x7c3aed, 0.2);
+        e.drawEllipse(-7 + Math.sin(t * 1.5) * 2, -6, 6, 4);
+        e.drawEllipse(7 + Math.cos(t * 1.3) * 2, -2, 6, 4);
+        e.endFill();
+        e.lineStyle(1, 0x6d28d9, 0.45);
+        e.drawEllipse(0, 6, 11, 3 + Math.sin(t * 3));
+        break;
+      }
+      case 'qa': {
+        e.lineStyle(1.2, 0x22c55e, 0.6);
+        e.drawRoundedRect(-8, -14, 16, 7, 2);
+        e.beginFill(0x86efac, 0.35);
+        e.drawCircle(-6 + Math.sin(t * 4) * 2, 0 + (isMoving ? Math.sin(t * 8) * 2 : 0), 1.4);
+        e.drawCircle(6 + Math.cos(t * 4.5) * 2, 2 + (isMoving ? Math.cos(t * 7) * 2 : 0), 1.2);
+        e.endFill();
+        break;
+      }
+    }
+  }
+
   private animate() {
     const t = Date.now() / 1000 + this.animPhase;
+    let isMoving = false;
 
-    // Smooth walking toward target
     if (this.targetX !== undefined && this.targetY !== undefined) {
       const dx = this.targetX - this.container.position.x;
       const dy = this.targetY - this.container.position.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
+
       if (dist < 2) {
         this.container.position.set(this.targetX, this.targetY);
         this.targetX = undefined;
         this.targetY = undefined;
       } else {
-        const speed = 2; // px per frame
-        const ratio = speed / dist;
+        const ratio = WALK_SPEED / dist;
         this.container.position.x += dx * ratio;
         this.container.position.y += dy * ratio;
-        // Walking bob
-        this.body.position.y = Math.sin(t * 8) * 2;
-        this.accessory.position.y = this.body.position.y;
+        this.updateFacing(dx, dy);
+        this.walkFrame = Math.floor((t * 10) % 4);
+        isMoving = true;
       }
     }
 
-    if (this.state === 'working') {
-      // Typing bob
-      this.body.pivot.y = Math.sin(t * 4) * 0.5;
-      if (this.targetX === undefined) this.body.position.y = Math.sin(t * 6) * 0.8;
+    this.redrawBody(isMoving);
+
+    if (isMoving) {
+      this.body.position.y = Math.sin(t * 10) * 1.7;
+      this.accessory.position.y = this.body.position.y;
+      this.accessory.alpha = 1;
       this.drawAccessory('working');
-    } else if (this.targetX === undefined) {
-      // Idle breathing — gentle vertical bob
-      this.body.position.y = Math.sin(t * 1.5) * 1.2;
-      this.drawAccessory(Math.sin(t * 2.2) > 0 ? 'idle' : 'working');
+    } else if (this.state === 'working') {
+      this.body.position.y = Math.sin(t * 5) * 0.9;
+      this.accessory.position.y = this.body.position.y;
+      this.accessory.alpha = 1;
+      this.drawAccessory('working');
+    } else {
+      const breathing = Math.sin(t * 1.7) * 1.1;
+      this.body.position.y = breathing;
+      this.accessory.position.y = breathing;
+      this.accessory.alpha = 0.75 + 0.25 * (Math.sin(t * 2.8) > 0 ? 1 : 0.65);
+      this.drawAccessory(Math.sin(t * 2.8) > 0 ? 'idle' : 'working');
     }
 
-    this.accessory.position.y = this.body.position.y;
+    this.drawRoleEffects(t, isMoving);
+    this.effects.position.y = this.body.position.y;
 
-    // Selection ring pulse
     if (this.selectionRing.visible) {
       this.selectionRing.alpha = 0.6 + 0.4 * Math.sin(t * 3);
     }
@@ -343,7 +571,6 @@ export class AgentSprite {
   }
 
   moveTo(x: number, y: number) {
-    // If not yet placed, teleport; otherwise animate
     if (this.container.position.x === 0 && this.container.position.y === 0) {
       this.container.position.set(x, y);
     } else {
