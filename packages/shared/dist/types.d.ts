@@ -15,6 +15,7 @@ export interface Agent {
     createdAt: string;
     updatedAt: string;
 }
+export type TaskType = 'standard' | 'meeting' | 'review' | 'planning';
 export interface Task {
     id: string;
     title: string;
@@ -23,9 +24,31 @@ export interface Task {
     status: TaskStatus;
     result: string | null;
     parentTaskId: string | null;
+    taskType?: TaskType;
+    linkedMeetingId?: string | null;
     expectedDeliverables?: DeliverableType[];
     createdAt: string;
     updatedAt: string;
+}
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task';
+export interface ChiefAction {
+    type: ChiefActionType;
+    params: Record<string, string>;
+    result?: {
+        ok: boolean;
+        message: string;
+        id?: string;
+    };
+}
+export interface ChiefResponse {
+    messageId: string;
+    reply: string;
+    actions: ChiefAction[];
+    state: {
+        agents: Agent[];
+        tasks: Task[];
+        meetings: Meeting[];
+    };
 }
 export interface TeamPreset {
     id: string;
@@ -177,7 +200,7 @@ export interface TeamPlanSuggestion {
     role: AgentRole;
     count: number;
 }
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response';
 export interface WSMessage {
     type: WSMessageType;
     payload: unknown;

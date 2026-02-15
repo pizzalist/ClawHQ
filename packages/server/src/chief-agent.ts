@@ -1,13 +1,15 @@
-import type { AgentRole, ChiefChatMessage, Meeting, TeamPlanSuggestion } from '@ai-office/shared';
-import { listAgents, createAgent } from './agent-manager.js';
-import { listTasks } from './task-queue.js';
-import { listMeetings } from './meetings.js';
+import { v4 as uuid } from 'uuid';
+import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, Meeting, TeamPlanSuggestion } from '@ai-office/shared';
+import { listAgents, createAgent, getAgent } from './agent-manager.js';
+import { listTasks, createTask } from './task-queue.js';
+import { listMeetings, startPlanningMeeting } from './meetings.js';
+import { spawnAgentSession, isDemoMode, parseAgentOutput, type AgentRun } from './openclaw-adapter.js';
 
 const MAX_HISTORY = 50;
 const MAX_COUNT_PER_ROLE = 5;
 const MAX_TOTAL_ADDITIONAL = 10;
 
-const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, 'claude-opus-4-6' | 'claude-sonnet-4' | 'openai-codex/o3' | 'openai-codex/gpt-5.3-codex'> = {
+const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, AgentModel> = {
   pm: 'claude-opus-4-6',
   developer: 'openai-codex/gpt-5.3-codex',
   reviewer: 'claude-opus-4-6',
@@ -17,6 +19,11 @@ const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, 'claude-opus-4-6' | 'claude-sonne
 };
 
 const sessionMessages = new Map<string, ChiefChatMessage[]>();
+
+// Callbacks for async chief responses (set by index.ts)
+type ChiefResponseCallback = (sessionId: string, response: ChiefResponse) => void;
+let responseCallback: ChiefResponseCallback | null = null;
+export function onChiefResponse(cb: ChiefResponseCallback) { responseCallback = cb; }
 
 function getSessionMessages(sessionId: string): ChiefChatMessage[] {
   const existing = sessionMessages.get(sessionId);
@@ -39,25 +46,6 @@ function pushMessage(sessionId: string, message: ChiefChatMessage) {
   }
 }
 
-function clampSuggestions(raw: TeamPlanSuggestion[]): TeamPlanSuggestion[] {
-  let total = 0;
-  const next: TeamPlanSuggestion[] = [];
-
-  for (const item of raw) {
-    const safeCount = Math.max(0, Math.min(MAX_COUNT_PER_ROLE, Math.floor(item.count)));
-    if (safeCount <= 0) continue;
-
-    const remaining = MAX_TOTAL_ADDITIONAL - total;
-    if (remaining <= 0) break;
-
-    const finalCount = Math.min(safeCount, remaining);
-    total += finalCount;
-    next.push({ role: item.role, count: finalCount });
-  }
-
-  return next;
-}
-
 export function summarizeOfficeState(): string {
   const agents = listAgents();
   const tasks = listTasks();
@@ -69,8 +57,135 @@ export function summarizeOfficeState(): string {
   const activeTasks = tasks.filter((t) => t.status === 'in-progress').length;
   const activeMeetings = meetings.filter((m: Meeting) => m.status !== 'completed').length;
 
-  return `현재 인력 ${agents.length}명(가용 ${idle}, 작업중 ${working}), 작업 ${tasks.length}건(대기 ${pendingTasks}, 진행 ${activeTasks}), 미팅 ${meetings.length}건(활성 ${activeMeetings})입니다.`;
+  const agentDetails = agents.map(a => `  - ${a.name} (${a.role}, ${a.model}, 상태: ${a.state})`).join('\n');
+  const recentTasks = tasks.slice(-5).map(t => `  - [${t.status}] ${t.title}`).join('\n');
+  const meetingList = meetings.slice(-3).map(m => `  - [${m.status}] ${m.title}`).join('\n');
+
+  return [
+    `## 현재 오피스 현황`,
+    `인력 ${agents.length}명 (가용 ${idle}, 작업중 ${working})`,
+    `작업 ${tasks.length}건 (대기 ${pendingTasks}, 진행 ${activeTasks})`,
+    `미팅 ${meetings.length}건 (활성 ${activeMeetings})`,
+    ``,
+    `### 에이전트 목록`,
+    agentDetails || '  (없음)',
+    ``,
+    `### 최근 작업`,
+    recentTasks || '  (없음)',
+    ``,
+    `### 최근 미팅`,
+    meetingList || '  (없음)',
+  ].join('\n');
 }
+
+function buildChiefSystemPrompt(): string {
+  const state = summarizeOfficeState();
+  return `당신은 AI 오피스의 총괄자(Chief)입니다. 한국어로 응답하세요.
+
+${state}
+
+## 사용 가능한 액션
+응답 안에 다음 형식의 액션 블록을 포함하면 서버에서 자동 실행됩니다:
+
+[ACTION:create_task title="작업 제목" description="작업 설명" assignRole="developer"]
+[ACTION:create_agent name="에이전트 이름" role="pm" model="claude-opus-4-6"]
+[ACTION:start_meeting title="미팅 제목" participants="pm,developer,reviewer" character="planning"]
+[ACTION:assign_task taskId="태스크ID" agentId="에이전트ID"]
+
+사용 가능한 role: pm, developer, reviewer, designer, devops, qa
+사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
+사용 가능한 character: brainstorm, planning, review, retrospective
+
+## 지침
+- 사용자의 요청을 이해하고, 필요한 액션을 직접 실행하세요
+- 액션 실행 후 결과를 자연스럽게 설명하세요
+- 팀 구성, 작업 생성, 미팅 시작 등을 적극적으로 수행하세요
+- 불확실한 경우 사용자에게 확인하세요`;
+}
+
+/** Parse [ACTION:type key="value" ...] blocks from LLM output */
+function parseActions(text: string): { actions: ChiefAction[]; cleanText: string } {
+  const actionRegex = /\[ACTION:(\w+)((?:\s+\w+="[^"]*")*)\]/g;
+  const actions: ChiefAction[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = actionRegex.exec(text)) !== null) {
+    const type = match[1] as ChiefAction['type'];
+    const paramsStr = match[2];
+    const params: Record<string, string> = {};
+    const paramRegex = /(\w+)="([^"]*)"/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = paramRegex.exec(paramsStr)) !== null) {
+      params[pm[1]] = pm[2];
+    }
+    actions.push({ type, params });
+  }
+
+  const cleanText = text.replace(actionRegex, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { actions, cleanText };
+}
+
+/** Execute parsed actions and return results */
+function executeActions(actions: ChiefAction[]): ChiefAction[] {
+  return actions.map(action => {
+    try {
+      switch (action.type) {
+        case 'create_task': {
+          const { title, description, assignRole } = action.params;
+          // Find an idle agent with matching role if specified
+          let assigneeId: string | null = null;
+          if (assignRole) {
+            const agents = listAgents();
+            const candidate = agents.find(a => a.role === assignRole && a.state === 'idle');
+            if (candidate) assigneeId = candidate.id;
+          }
+          const task = createTask(title || 'Untitled', description || '', assigneeId);
+          return { ...action, result: { ok: true, message: `작업 "${task.title}" 생성됨`, id: task.id } };
+        }
+        case 'create_agent': {
+          const { name, role, model } = action.params;
+          const agentRole = (role || 'developer') as AgentRole;
+          const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
+          const agent = createAgent(name || `${agentRole.toUpperCase()}-${Date.now()}`, agentRole, agentModel);
+          return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
+        }
+        case 'start_meeting': {
+          const { title, participants, character } = action.params;
+          const roles = (participants || 'pm,developer').split(',').map(r => r.trim());
+          const agents = listAgents();
+          const participantIds = roles
+            .map(role => agents.find(a => a.role === role && a.state === 'idle'))
+            .filter(Boolean)
+            .map(a => a!.id);
+          if (participantIds.length < 2) {
+            return { ...action, result: { ok: false, message: '미팅 참여자가 부족합니다 (최소 2명 필요)' } };
+          }
+          const meeting = startPlanningMeeting(
+            title || '총괄자 미팅',
+            `총괄자가 시작한 미팅`,
+            participantIds,
+            (character as any) || 'planning',
+          );
+          return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨`, id: meeting.id } };
+        }
+        case 'assign_task': {
+          const { taskId, agentId } = action.params;
+          if (!taskId || !agentId) {
+            return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
+          }
+          // Simple assignment via DB update would need task-queue export; for now report
+          return { ...action, result: { ok: false, message: 'assign_task는 아직 구현 중입니다' } };
+        }
+        default:
+          return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
+      }
+    } catch (err: unknown) {
+      return { ...action, result: { ok: false, message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+}
+
+// ---- Legacy keyword-based fallback (for demo mode) ----
 
 /** Role aliases for Korean/English parsing */
 const ROLE_ALIASES: Record<string, AgentRole> = {
@@ -82,43 +197,41 @@ const ROLE_ALIASES: Record<string, AgentRole> = {
   qa: 'qa', '큐에이': 'qa', '테스터': 'qa', '테스트': 'qa', '품질': 'qa',
 };
 
-/**
- * Parse explicit role+count requests from user text.
- * Supports patterns like: "pm 2명", "리뷰어3명", "developer 1", "pm2 리뷰어3"
- */
+function clampSuggestions(raw: TeamPlanSuggestion[]): TeamPlanSuggestion[] {
+  let total = 0;
+  const next: TeamPlanSuggestion[] = [];
+  for (const item of raw) {
+    const safeCount = Math.max(0, Math.min(MAX_COUNT_PER_ROLE, Math.floor(item.count)));
+    if (safeCount <= 0) continue;
+    const remaining = MAX_TOTAL_ADDITIONAL - total;
+    if (remaining <= 0) break;
+    const finalCount = Math.min(safeCount, remaining);
+    total += finalCount;
+    next.push({ role: item.role, count: finalCount });
+  }
+  return next;
+}
+
 function parseExplicitRoleCounts(text: string): Record<AgentRole, number> | null {
   const result: Partial<Record<AgentRole, number>> = {};
   let found = false;
-
-  // Sort aliases by length descending to match longer aliases first (e.g. "리뷰어" before "리뷰")
   const sortedAliases = Object.entries(ROLE_ALIASES).sort((a, b) => b[0].length - a[0].length);
-
-  // Pattern: role name followed by number (with optional 명/명으로/명으로)
-  // e.g. "pm 2명", "pm2명", "리뷰어 3명", "developer 1"
   for (const [alias, role] of sortedAliases) {
-    // Escaped alias for regex
     const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const patterns = [
       new RegExp(`${escaped}\\s*(\\d+)\\s*명?`, 'i'),
       new RegExp(`(\\d+)\\s*명?\\s*의?\\s*${escaped}`, 'i'),
     ];
-    if (result[role] !== undefined) continue; // Already matched this role via another alias
+    if (result[role] !== undefined) continue;
     for (const pattern of patterns) {
       const match = text.match(pattern);
       if (match) {
         const count = parseInt(match[1], 10);
-        if (count > 0) {
-          result[role] = count;
-          found = true;
-          break;
-        }
+        if (count > 0) { result[role] = count; found = true; break; }
       }
     }
   }
-
   if (!found) return null;
-
-  // Deduplicate: return only roles with counts
   const plan: Record<AgentRole, number> = { pm: 0, developer: 0, reviewer: 0, designer: 0, devops: 0, qa: 0 };
   for (const [role, count] of Object.entries(result)) {
     plan[role as AgentRole] = Math.max(plan[role as AgentRole], count);
@@ -128,103 +241,110 @@ function parseExplicitRoleCounts(text: string): Record<AgentRole, number> | null
 
 export function generatePlanFromPrompt(userText: string): TeamPlanSuggestion[] {
   const text = userText.toLowerCase();
-
-  // First: try to parse explicit role+count requests
   const explicit = parseExplicitRoleCounts(text);
   if (explicit) {
     return clampSuggestions(
-      (Object.keys(explicit) as AgentRole[])
-        .filter(role => explicit[role] > 0)
-        .map(role => ({ role, count: explicit[role] }))
+      (Object.keys(explicit) as AgentRole[]).filter(role => explicit[role] > 0).map(role => ({ role, count: explicit[role] }))
     );
   }
-
-  // Fallback: keyword-based heuristic
-  const plan: Record<AgentRole, number> = {
-    pm: 1,
-    developer: 2,
-    reviewer: 1,
-    designer: 0,
-    devops: 0,
-    qa: 0,
-  };
-
-  if (/(긴급|빠르|즉시|asap|hotfix|급함)/i.test(text)) {
-    plan.pm += 1;
-    plan.developer += 1;
-  }
-
-  if (/(디자인|ui|ux|브랜딩|랜딩)/i.test(text)) {
-    plan.designer += 1;
-  }
-
-  if (/(배포|인프라|운영|devops|서버|클라우드)/i.test(text)) {
-    plan.devops += 1;
-  }
-
-  if (/(qa|테스트|품질|검증|안정성)/i.test(text)) {
-    plan.qa += 1;
-    plan.reviewer += 1;
-  }
-
-  if (/(간단|작은|소규모|빠른 확인|프로토타입)/i.test(text)) {
-    plan.developer = Math.max(1, plan.developer - 1);
-    plan.pm = Math.max(1, plan.pm - 1);
-  }
-
-  return clampSuggestions(
-    (Object.keys(plan) as AgentRole[]).map((role) => ({ role, count: plan[role] }))
-  );
+  const plan: Record<AgentRole, number> = { pm: 1, developer: 2, reviewer: 1, designer: 0, devops: 0, qa: 0 };
+  if (/(긴급|빠르|즉시|asap|hotfix|급함)/i.test(text)) { plan.pm += 1; plan.developer += 1; }
+  if (/(디자인|ui|ux|브랜딩|랜딩)/i.test(text)) { plan.designer += 1; }
+  if (/(배포|인프라|운영|devops|서버|클라우드)/i.test(text)) { plan.devops += 1; }
+  if (/(qa|테스트|품질|검증|안정성)/i.test(text)) { plan.qa += 1; plan.reviewer += 1; }
+  if (/(간단|작은|소규모|빠른 확인|프로토타입)/i.test(text)) { plan.developer = Math.max(1, plan.developer - 1); plan.pm = Math.max(1, plan.pm - 1); }
+  return clampSuggestions((Object.keys(plan) as AgentRole[]).map((role) => ({ role, count: plan[role] })));
 }
+
+function keywordChat(sessionId: string, userMessage: string) {
+  const stateSummary = `현재 인력 ${listAgents().length}명, 작업 ${listTasks().length}건, 미팅 ${listMeetings().length}건`;
+  const suggestions = generatePlanFromPrompt(userMessage);
+  const suggestionText = suggestions.length > 0
+    ? suggestions.map((s) => `${s.role} ${s.count}명`).join(', ')
+    : '현재 추가 편성 없이 진행 가능';
+  const isExplicitRequest = parseExplicitRoleCounts(userMessage) !== null;
+  const reply = isExplicitRequest
+    ? `상황 보고: ${stateSummary}\n\n요청 편성: ${suggestionText}\n\n요청하신 구성으로 팀을 생성할까요? 승인하시면 바로 적용합니다.`
+    : `상황 보고: ${stateSummary}\n\n제안 편성: ${suggestionText}\n\n이 구성으로 팀을 생성할까요?`;
+  return { reply, suggestions };
+}
+
+// ---- Public API ----
 
 export function getChiefMessages(sessionId: string): ChiefChatMessage[] {
   return [...getSessionMessages(sessionId)];
 }
 
-export function chatWithChief(sessionId: string, userMessage: string) {
+/**
+ * Chat with Chief. In LLM mode, returns messageId for async processing.
+ * In demo/keyword mode, returns synchronous result.
+ */
+export function chatWithChief(sessionId: string, userMessage: string): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
   const now = new Date().toISOString();
-  pushMessage(sessionId, {
-    id: `user-${Date.now()}`,
-    role: 'user',
-    content: userMessage,
-    createdAt: now,
-  });
+  const userMsgId = `user-${Date.now()}`;
+  pushMessage(sessionId, { id: userMsgId, role: 'user', content: userMessage, createdAt: now });
 
-  const stateSummary = summarizeOfficeState();
-  const suggestions = generatePlanFromPrompt(userMessage);
-  const suggestionText = suggestions.length > 0
-    ? suggestions.map((s) => `${s.role} ${s.count}명`).join(', ')
-    : '현재 추가 편성 없이 진행 가능';
+  const messageId = `chief-${Date.now()}-${uuid().slice(0, 8)}`;
 
-  // Check if user explicitly requested specific composition
-  const isExplicitRequest = parseExplicitRoleCounts(userMessage) !== null;
+  // LLM mode
+  if (!isDemoMode()) {
+    // Start async LLM processing
+    const systemPrompt = buildChiefSystemPrompt();
+    const recentMessages = getSessionMessages(sessionId).slice(-10);
+    const conversationContext = recentMessages
+      .map(m => `${m.role === 'user' ? 'User' : 'Chief'}: ${m.content}`)
+      .join('\n\n');
 
-  const reply = isExplicitRequest
-    ? [
-        `상황 보고: ${stateSummary}`,
-        `요청 편성: ${suggestionText}`,
-        '요청하신 구성으로 팀을 생성할까요? 승인하시면 바로 적용합니다.',
-      ].join('\n\n')
-    : [
-        `상황 보고: ${stateSummary}`,
-        `제안 편성: ${suggestionText}`,
-        '이 구성으로 팀을 생성할까요? 승인하시면 바로 적용하고, 이어서 킥오프 미팅까지 시작할 수 있습니다.',
-      ].join('\n\n');
+    const fullPrompt = `${systemPrompt}\n\n## 대화 이력\n${conversationContext}\n\nUser: ${userMessage}\n\nChief:`;
 
-  pushMessage(sessionId, {
-    id: `chief-${Date.now()}`,
-    role: 'chief',
-    content: reply,
-    createdAt: new Date().toISOString(),
-  });
+    spawnAgentSession({
+      sessionId: `chief-llm-${messageId}`,
+      agentName: 'Chief',
+      role: 'chief',
+      model: 'claude-sonnet-4',
+      prompt: fullPrompt,
+      onComplete: (run: AgentRun) => {
+        const rawOutput = parseAgentOutput(run.stdout);
+        const { actions: parsedActions, cleanText } = parseActions(rawOutput);
+        const executedActions = executeActions(parsedActions);
+
+        const reply = cleanText || '처리가 완료되었습니다.';
+        pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+
+        const response: ChiefResponse = {
+          messageId,
+          reply,
+          actions: executedActions,
+          state: {
+            agents: listAgents(),
+            tasks: listTasks(),
+            meetings: listMeetings(),
+          },
+        };
+
+        if (responseCallback) {
+          responseCallback(sessionId, response);
+        }
+      },
+    });
+
+    return { messageId, async: true };
+  }
+
+  // Demo/keyword fallback
+  const { reply, suggestions } = keywordChat(sessionId, userMessage);
+  pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
   return {
+    messageId,
+    async: false,
     reply,
     suggestions,
     messages: getChiefMessages(sessionId),
   };
 }
 
+// Keep applyChiefPlan for backward compat
 export function applyChiefPlan(inputSuggestions: TeamPlanSuggestion[]) {
   const suggestions = clampSuggestions(inputSuggestions || []);
   const existing = listAgents();

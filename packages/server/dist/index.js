@@ -12,7 +12,7 @@ import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgent
 import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
-import { chatWithChief, applyChiefPlan, getChiefMessages } from './chief-agent.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse } from './chief-agent.js';
 import { stmts } from './db.js';
 const app = express();
 app.use(cors());
@@ -42,6 +42,14 @@ onMeetingChange(() => {
     broadcast({ type: 'meetings_update', payload: listMeetings() });
 });
 onTechSpecChange(() => {
+    broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
+// Forward chief LLM responses to WebSocket clients
+onChiefResponse((_sessionId, response) => {
+    broadcast({ type: 'chief_response', payload: response });
+    // Also broadcast updated state
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    broadcast({ type: 'tasks_update', payload: listTasks() });
     broadcast({ type: 'meetings_update', payload: listMeetings() });
 });
 onTaskEvent((event) => {
@@ -87,7 +95,14 @@ app.post('/api/chief/chat', (req, res) => {
         ? sessionId.trim()
         : (req.header('x-chief-session-id') || req.ip || 'default');
     const result = chatWithChief(resolvedSessionId, message.trim());
-    res.json(result);
+    if (result.async) {
+        // LLM mode: return immediately, results come via WebSocket
+        res.json({ status: 'processing', messageId: result.messageId });
+    }
+    else {
+        // Demo/keyword mode: return synchronous result
+        res.json(result);
+    }
 });
 app.post('/api/chief/plan/apply', (req, res) => {
     const { suggestions, sessionId } = req.body || {};

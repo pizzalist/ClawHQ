@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, TeamPlanSuggestion } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, TeamPlanSuggestion } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -12,6 +12,8 @@ interface Store {
   chiefMessages: ChiefChatMessage[];
   chiefSuggestions: TeamPlanSuggestion[];
   chiefMeetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null;
+  chiefThinking: boolean;
+  chiefActions: ChiefAction[];
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -22,6 +24,9 @@ interface Store {
   setTasks: (tasks: Task[]) => void;
   setMeetings: (meetings: Meeting[]) => void;
   setChiefState: (messages: ChiefChatMessage[], suggestions: TeamPlanSuggestion[], meetingDraft?: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null) => void;
+  setChiefThinking: (v: boolean) => void;
+  setChiefActions: (actions: ChiefAction[]) => void;
+  handleChiefResponse: (response: ChiefResponse) => void;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -52,6 +57,8 @@ export const useStore = create<Store>((set, get) => ({
   chiefMessages: [],
   chiefSuggestions: [],
   chiefMeetingDraft: null,
+  chiefThinking: false,
+  chiefActions: [],
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -65,6 +72,24 @@ export const useStore = create<Store>((set, get) => ({
   setTasks: (tasks) => set({ tasks }),
   setMeetings: (meetings) => set({ meetings }),
   setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({ chiefMessages, chiefSuggestions, chiefMeetingDraft }),
+  setChiefThinking: (chiefThinking) => set({ chiefThinking }),
+  setChiefActions: (chiefActions) => set({ chiefActions }),
+  handleChiefResponse: (response) => {
+    const chiefMsg: ChiefChatMessage = {
+      id: response.messageId,
+      role: 'chief',
+      content: response.reply,
+      createdAt: new Date().toISOString(),
+    };
+    set((s) => ({
+      chiefMessages: [...s.chiefMessages, chiefMsg],
+      chiefActions: response.actions,
+      chiefThinking: false,
+      agents: response.state.agents,
+      tasks: response.state.tasks,
+      meetings: response.state.meetings,
+    }));
+  },
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
@@ -93,8 +118,16 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   chiefChat: async (message, sessionId = 'chief-default') => {
-    const { setLoading, setChiefState } = get();
+    const { setLoading, setChiefState, setChiefThinking } = get();
     setLoading('chiefChat', true);
+    // Add user message optimistically
+    const userMsg: ChiefChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: message,
+      createdAt: new Date().toISOString(),
+    };
+    set((s) => ({ chiefMessages: [...s.chiefMessages, userMsg], chiefActions: [] }));
     try {
       const res = await fetch(`${API}/api/chief/chat`, {
         method: 'POST',
@@ -108,9 +141,16 @@ export const useStore = create<Store>((set, get) => ({
         throw new Error(errMsg);
       }
       const data = await res.json();
-      setChiefState(data.messages || [], data.suggestions || [], null);
+      if (data.status === 'processing') {
+        // Async LLM mode — response will come via WebSocket
+        setChiefThinking(true);
+      } else {
+        // Sync keyword mode
+        setChiefState(data.messages || [], data.suggestions || [], null);
+      }
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : '총괄자 대화에 실패했어요', 'error');
+      setChiefThinking(false);
     } finally {
       setLoading('chiefChat', false);
     }
@@ -332,6 +372,10 @@ export function connectWS() {
             }
           }
         }
+        break;
+      }
+      case 'chief_response': {
+        store.handleChiefResponse(msg.payload as ChiefResponse);
         break;
       }
       case 'event': {
