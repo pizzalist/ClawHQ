@@ -7,8 +7,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
 import type { WSMessage, InitialState } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { listAgents, createAgent, seedDemoAgents, onEvent } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue } from './task-queue.js';
+import { listAgents, createAgent, deleteAgent, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -87,13 +87,42 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.post('/api/tasks', (req, res) => {
-  const { title, description } = req.body;
+  const { title, description, assigneeId } = req.body;
   if (!title) {
     return res.status(400).json({ error: 'title is required' });
   }
   try {
-    const task = createTask(title, description || '');
+    const task = createTask(title, description || '', assigneeId || null);
     res.status(201).json(task);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Agent control endpoints
+app.post('/api/agents/:id/stop', (req, res) => {
+  try {
+    stopAgentTask(req.params.id);
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/agents/:id/reset', (req, res) => {
+  try {
+    const agent = resetAgent(req.params.id);
+    res.json(agent);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete('/api/agents/:id', (req, res) => {
+  try {
+    deleteAgent(req.params.id);
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    res.json({ ok: true });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

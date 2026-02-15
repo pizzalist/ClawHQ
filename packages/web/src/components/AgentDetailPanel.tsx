@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { ROLE_EMOJI, ROLE_LABELS, STATE_COLORS } from '@ai-office/shared';
 import type { Task } from '@ai-office/shared';
+import TaskModal from './TaskModal';
 
 const STATUS_ICONS: Record<string, string> = {
   pending: '⏳',
@@ -17,7 +18,12 @@ export default function AgentDetailPanel() {
   const tasks = useStore((s) => s.tasks);
   const events = useStore((s) => s.events);
   const setSelectedAgent = useStore((s) => s.setSelectedAgent);
+  const stopAgent = useStore((s) => s.stopAgent);
+  const resetAgent = useStore((s) => s.resetAgent);
+  const deleteAgent = useStore((s) => s.deleteAgent);
+  const loading = useStore((s) => s.loading);
   const [agentTasks, setAgentTasks] = useState<Task[]>([]);
+  const [showTaskModal, setShowTaskModal] = useState(false);
 
   const agent = agents.find((a) => a.id === selectedAgentId) ?? null;
   const currentTask = agent?.currentTaskId ? tasks.find((t) => t.id === agent.currentTaskId) ?? null : null;
@@ -91,6 +97,46 @@ export default function AgentDetailPanel() {
                   {agent.sessionId || '—'}
                 </span>
               </div>
+            </div>
+
+            {/* Control Buttons */}
+            <div className="px-5 py-3 border-b border-gray-700/30 flex gap-2 flex-wrap">
+              <button
+                onClick={() => setShowTaskModal(true)}
+                className="px-3 py-1.5 text-xs bg-accent/20 text-accent hover:bg-accent/30 rounded-md font-medium transition-colors"
+              >
+                📋 Assign Task
+              </button>
+              {agent.state === 'working' && (
+                <button
+                  onClick={() => stopAgent(agent.id)}
+                  disabled={loading[`stop-${agent.id}`]}
+                  className="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-md font-medium transition-colors disabled:opacity-50"
+                >
+                  ⏹ Stop
+                </button>
+              )}
+              {agent.state !== 'idle' && (
+                <button
+                  onClick={() => resetAgent(agent.id)}
+                  disabled={loading[`reset-${agent.id}`]}
+                  className="px-3 py-1.5 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded-md font-medium transition-colors disabled:opacity-50"
+                >
+                  🔄 Reset
+                </button>
+              )}
+              <button
+                onClick={async () => {
+                  if (confirm(`Remove agent "${agent.name}"?`)) {
+                    await deleteAgent(agent.id);
+                    setSelectedAgent(null);
+                  }
+                }}
+                disabled={loading[`delete-${agent.id}`] || agent.state === 'working'}
+                className="px-3 py-1.5 text-xs bg-gray-700/30 text-gray-400 hover:bg-red-500/20 hover:text-red-400 rounded-md font-medium transition-colors disabled:opacity-50 ml-auto"
+              >
+                🗑 Remove
+              </button>
             </div>
 
             {/* Current Task */}
@@ -179,6 +225,9 @@ export default function AgentDetailPanel() {
           </>
         )}
       </div>
+      {showTaskModal && agent && (
+        <TaskModal onClose={() => setShowTaskModal(false)} preAssignId={agent.id} />
+      )}
     </>
   );
 }

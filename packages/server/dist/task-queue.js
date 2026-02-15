@@ -1,8 +1,8 @@
 import { v4 as uuid } from 'uuid';
 import { MAX_CONCURRENT_TASKS } from '@ai-office/shared';
 import { stmts } from './db.js';
-import { listAgents, getAgent, transitionAgent } from './agent-manager.js';
-import { spawnAgentSession, parseAgentOutput, cleanupRun } from './openclaw-adapter.js';
+import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
+import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun } from './openclaw-adapter.js';
 const listeners = [];
 export function onTaskEvent(fn) {
     listeners.push(fn);
@@ -36,13 +36,36 @@ function rowToTask(row) {
 export function listTasks() {
     return stmts.listTasks.all().map(rowToTask);
 }
-export function createTask(title, description) {
+export function createTask(title, description, assigneeId) {
     const id = uuid();
     stmts.insertTask.run(id, title, description);
-    emitTaskEvent('task_created', null, id, `Task created: ${title}`);
+    // If specific assignee requested, set it on the task
+    if (assigneeId) {
+        stmts.updateTask.run(assigneeId, 'pending', null, id);
+    }
+    emitTaskEvent('task_created', assigneeId || null, id, `Task created: ${title}`);
     // Schedule queue processing async so the response returns immediately
     setTimeout(() => processQueue(), 100);
     return rowToTask(stmts.getTask.get(id));
+}
+export function stopAgentTask(agentId) {
+    const agent = getAgent(agentId);
+    if (!agent)
+        throw new Error(`Agent ${agentId} not found`);
+    if (agent.state !== 'working')
+        throw new Error(`Agent is not working (state: ${agent.state})`);
+    // Kill the running session
+    if (agent.sessionId) {
+        killAgentRun(agent.sessionId);
+        cleanupRun(agent.sessionId);
+    }
+    // Cancel the task
+    if (agent.currentTaskId) {
+        stmts.updateTask.run(agentId, 'cancelled', 'Stopped by user', agent.currentTaskId);
+        emitTaskEvent('task_failed', agentId, agent.currentTaskId, `Task stopped by user`);
+    }
+    // Reset agent to idle
+    resetAgent(agentId);
 }
 /**
  * Process the task queue: assign pending tasks to idle agents.
@@ -53,17 +76,32 @@ export function processQueue() {
     const activeCount = stmts.activeTasks.get().count;
     if (activeCount >= MAX_CONCURRENT_TASKS)
         return;
-    const pending = stmts.pendingTasks.all();
+    const pending = stmts.pendingTasks.all().map(rowToTask);
     if (pending.length === 0)
         return;
     const idleAgents = listAgents().filter(a => a.state === 'idle');
     if (idleAgents.length === 0)
         return;
-    const slots = Math.min(MAX_CONCURRENT_TASKS - activeCount, pending.length, idleAgents.length);
-    for (let i = 0; i < slots; i++) {
-        const task = rowToTask(pending[i]);
-        const agent = idleAgents[i];
+    let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
+    const usedAgents = new Set();
+    for (const task of pending) {
+        if (slotsLeft <= 0)
+            break;
+        // If task has a preferred assignee, try them first
+        let agent;
+        if (task.assigneeId) {
+            agent = idleAgents.find(a => a.id === task.assigneeId && !usedAgents.has(a.id));
+            if (!agent)
+                continue; // preferred agent not idle, skip for now
+        }
+        else {
+            agent = idleAgents.find(a => !usedAgents.has(a.id));
+            if (!agent)
+                break;
+        }
+        usedAgents.add(agent.id);
         assignTask(agent.id, task);
+        slotsLeft--;
     }
 }
 function assignTask(agentId, task) {

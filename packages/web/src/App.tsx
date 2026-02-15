@@ -6,6 +6,8 @@ import OfficeView from './components/OfficeView';
 import ActivityLog from './components/ActivityLog';
 import Dashboard from './components/Dashboard';
 import FailureTimeline from './components/FailureTimeline';
+import AgentDetailPanel from './components/AgentDetailPanel';
+import CommandInput from './components/CommandInput';
 
 type View = 'office' | 'dashboard' | 'failures';
 
@@ -48,8 +50,10 @@ export default function App() {
           )}
           {view === 'dashboard' && <Dashboard />}
           {view === 'failures' && <FailureTimeline />}
+          <CommandInput />
         </main>
       </div>
+      <AgentDetailPanel />
     </div>
   );
 }

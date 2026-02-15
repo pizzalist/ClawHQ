@@ -63,6 +63,7 @@ export const stmts = {
     WHERE id = ?
   `),
   countAgents: db.prepare('SELECT COUNT(*) as count FROM agents'),
+  deleteAgent: db.prepare('DELETE FROM agents WHERE id = ?'),
 
   listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
   getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),

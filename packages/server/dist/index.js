@@ -6,8 +6,9 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { listAgents, createAgent, seedDemoAgents, onEvent } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue } from './task-queue.js';
+import { listAgents, createAgent, deleteAgent, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
+import { stmts } from './db.js';
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -65,17 +66,51 @@ app.post('/api/agents', (req, res) => {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
 });
-app.get('/api/tasks', (_req, res) => {
-    res.json(listTasks());
+app.get('/api/tasks', (req, res) => {
+    const { assigneeId } = req.query;
+    const tasks = listTasks();
+    if (typeof assigneeId === 'string') {
+        return res.json(tasks.filter((t) => t.assigneeId === assigneeId));
+    }
+    res.json(tasks);
 });
 app.post('/api/tasks', (req, res) => {
-    const { title, description } = req.body;
+    const { title, description, assigneeId } = req.body;
     if (!title) {
         return res.status(400).json({ error: 'title is required' });
     }
     try {
-        const task = createTask(title, description || '');
+        const task = createTask(title, description || '', assigneeId || null);
         res.status(201).json(task);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+// Agent control endpoints
+app.post('/api/agents/:id/stop', (req, res) => {
+    try {
+        stopAgentTask(req.params.id);
+        res.json({ ok: true });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/agents/:id/reset', (req, res) => {
+    try {
+        const agent = resetAgent(req.params.id);
+        res.json(agent);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.delete('/api/agents/:id', (req, res) => {
+    try {
+        deleteAgent(req.params.id);
+        broadcast({ type: 'agents_update', payload: listAgents() });
+        res.json({ ok: true });
     }
     catch (err) {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -83,6 +118,45 @@ app.post('/api/tasks', (req, res) => {
 });
 app.get('/api/events', (_req, res) => {
     res.json(listEvents());
+});
+// Stats & Failures
+app.get('/api/stats', (_req, res) => {
+    const counts = stmts.taskCounts.get();
+    const avgRow = stmts.avgCompletionTime.get();
+    const perAgent = stmts.perAgentStats.all().map((r) => ({
+        agentId: r.agent_id,
+        agentName: r.agent_name,
+        role: r.agent_role,
+        completed: r.completed || 0,
+        failed: r.failed || 0,
+        avgTimeMs: r.avg_time_ms || 0,
+    }));
+    const total = counts.total || 0;
+    const completed = counts.completed || 0;
+    const failed = counts.failed || 0;
+    res.json({
+        total,
+        completed,
+        failed,
+        pending: counts.pending || 0,
+        inProgress: counts.in_progress || 0,
+        avgCompletionMs: avgRow.avg_ms || 0,
+        successRate: total > 0 ? (completed / total) * 100 : 0,
+        perAgent,
+    });
+});
+app.get('/api/failures', (_req, res) => {
+    const rows = stmts.failedTasks.all();
+    res.json(rows.map((r) => ({
+        taskId: r.task_id,
+        title: r.title,
+        description: r.description,
+        agentId: r.assignee_id,
+        agentName: r.agent_name,
+        agentRole: r.agent_role,
+        error: r.error || 'Unknown error',
+        failedAt: r.failed_at,
+    })));
 });
 // Health check
 app.get('/api/health', async (_req, res) => {
