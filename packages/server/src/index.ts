@@ -76,8 +76,13 @@ app.post('/api/agents', (req, res) => {
   }
 });
 
-app.get('/api/tasks', (_req, res) => {
-  res.json(listTasks());
+app.get('/api/tasks', (req, res) => {
+  const { assigneeId } = req.query;
+  const tasks = listTasks();
+  if (typeof assigneeId === 'string') {
+    return res.json(tasks.filter((t) => t.assigneeId === assigneeId));
+  }
+  res.json(tasks);
 });
 
 app.post('/api/tasks', (req, res) => {

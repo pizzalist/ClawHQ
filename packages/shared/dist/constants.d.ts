@@ -1,0 +1,11 @@
+import type { AgentRole, AgentState, AgentModel } from './types.js';
+export declare const AGENT_STATES: AgentState[];
+export declare const AGENT_ROLES: AgentRole[];
+export declare const AGENT_MODELS: AgentModel[];
+export declare const ROLE_LABELS: Record<AgentRole, string>;
+export declare const ROLE_EMOJI: Record<AgentRole, string>;
+export declare const STATE_COLORS: Record<AgentState, string>;
+export declare const STATE_TRANSITIONS: Record<AgentState, AgentState[]>;
+export declare const MAX_CONCURRENT_TASKS = 3;
+export declare const SERVER_PORT = 3001;
+export declare const WS_PATH = "/ws";
