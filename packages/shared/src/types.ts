@@ -187,6 +187,18 @@ export interface Meeting {
   updatedAt: string;
 }
 
+export interface ChiefChatMessage {
+  id: string;
+  role: 'user' | 'chief';
+  content: string;
+  createdAt: string;
+}
+
+export interface TeamPlanSuggestion {
+  role: AgentRole;
+  count: number;
+}
+
 // WebSocket message types
 export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update';
 

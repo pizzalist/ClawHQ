@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
-import type { WSMessage, InitialState } from '@ai-office/shared';
+import type { WSMessage, InitialState, TeamPlanSuggestion } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
@@ -13,6 +13,7 @@ import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgent
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages } from './chief-agent.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -85,6 +86,44 @@ app.post('/api/agents', (req, res) => {
   try {
     const agent = createAgent(name, role, model);
     res.status(201).json(agent);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/chief/chat', (req, res) => {
+  const { message, sessionId } = req.body || {};
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  const resolvedSessionId =
+    typeof sessionId === 'string' && sessionId.trim().length > 0
+      ? sessionId.trim()
+      : (req.header('x-chief-session-id') || req.ip || 'default');
+
+  const result = chatWithChief(resolvedSessionId, message.trim());
+  res.json(result);
+});
+
+app.post('/api/chief/plan/apply', (req, res) => {
+  const { suggestions, sessionId } = req.body || {};
+  if (!Array.isArray(suggestions)) {
+    return res.status(400).json({ error: 'suggestions array is required' });
+  }
+
+  try {
+    const applied = applyChiefPlan(suggestions as TeamPlanSuggestion[]);
+    const resolvedSessionId =
+      typeof sessionId === 'string' && sessionId.trim().length > 0
+        ? sessionId.trim()
+        : (req.header('x-chief-session-id') || req.ip || 'default');
+
+    res.json({
+      ok: true,
+      ...applied,
+      messages: getChiefMessages(resolvedSessionId),
+    });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

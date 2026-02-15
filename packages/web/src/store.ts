@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, TeamPlanSuggestion } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -9,6 +9,9 @@ interface Store {
   tasks: Task[];
   events: AppEvent[];
   meetings: Meeting[];
+  chiefMessages: ChiefChatMessage[];
+  chiefSuggestions: TeamPlanSuggestion[];
+  chiefMeetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null;
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -18,6 +21,7 @@ interface Store {
   setAgents: (agents: Agent[]) => void;
   setTasks: (tasks: Task[]) => void;
   setMeetings: (meetings: Meeting[]) => void;
+  setChiefState: (messages: ChiefChatMessage[], suggestions: TeamPlanSuggestion[], meetingDraft?: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null) => void;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -26,6 +30,8 @@ interface Store {
   init: (state: InitialState) => void;
   // API actions
   createTask: (title: string, description: string, assigneeId?: string | null, expectedDeliverables?: string[]) => Promise<void>;
+  chiefChat: (message: string, sessionId?: string) => Promise<void>;
+  applyChiefPlan: (suggestions: TeamPlanSuggestion[], sessionId?: string) => Promise<{ meetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null }>;
   createAgent: (name: string, role: string, model: string) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
   stopAgent: (id: string) => Promise<void>;
@@ -43,6 +49,9 @@ export const useStore = create<Store>((set, get) => ({
   tasks: [],
   events: [],
   meetings: [],
+  chiefMessages: [],
+  chiefSuggestions: [],
+  chiefMeetingDraft: null,
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -55,6 +64,7 @@ export const useStore = create<Store>((set, get) => ({
   })),
   setTasks: (tasks) => set({ tasks }),
   setMeetings: (meetings) => set({ meetings }),
+  setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({ chiefMessages, chiefSuggestions, chiefMeetingDraft }),
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
@@ -79,6 +89,48 @@ export const useStore = create<Store>((set, get) => ({
       toast(e instanceof Error ? e.message : 'Failed to create task', 'error');
     } finally {
       setLoading('createTask', false);
+    }
+  },
+
+  chiefChat: async (message, sessionId = 'chief-default') => {
+    const { setLoading, setChiefState } = get();
+    setLoading('chiefChat', true);
+    try {
+      const res = await fetch(`${API}/api/chief/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, sessionId }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json();
+      setChiefState(data.messages || [], data.suggestions || [], null);
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '총괄자 대화에 실패했어요', 'error');
+    } finally {
+      setLoading('chiefChat', false);
+    }
+  },
+
+  applyChiefPlan: async (suggestions, sessionId = 'chief-default') => {
+    const { setLoading, setChiefState } = get();
+    setLoading('chiefApply', true);
+    try {
+      const res = await fetch(`${API}/api/chief/plan/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suggestions, sessionId }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json();
+      const createdCount = Array.isArray(data.created) ? data.created.length : 0;
+      toast(`총괄자 제안 적용 완료: 에이전트 ${createdCount}명 생성`, 'success');
+      setChiefState(data.messages || get().chiefMessages, data.suggestions || suggestions, data.meetingDraft || null);
+      return { meetingDraft: data.meetingDraft || null };
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '팀 편성 적용에 실패했어요', 'error');
+      return { meetingDraft: null };
+    } finally {
+      setLoading('chiefApply', false);
     }
   },
 

@@ -15,8 +15,9 @@ import TaskListView from './components/TaskListView';
 import TaskResultModal from './components/TaskResultModal';
 import DecisionsView from './components/decisions/DecisionsView';
 import MeetingRoom from './components/MeetingRoom';
+import ChiefConsole from './components/ChiefConsole';
 
-type View = 'office' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
+type View = 'office' | 'chief' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
 
 export default function App() {
   const [view, setView] = useState<View>('office');
@@ -34,6 +35,7 @@ export default function App() {
 
   const tabs: [View, string][] = [
     ['office', '🏢 Office'],
+    ['chief', '🧠 Chief'],
     ['tasks', '📋 Tasks'],
     ['dashboard', '📊 Dashboard'],
     ['decisions', '📌 Decisions'],
@@ -102,6 +104,7 @@ export default function App() {
               <ActivityLog />
             </>
           )}
+          {view === 'chief' && <ChiefConsole />}
           {view === 'tasks' && <TaskListView />}
           {view === 'dashboard' && <Dashboard />}
           {view === 'decisions' && <DecisionsView />}
