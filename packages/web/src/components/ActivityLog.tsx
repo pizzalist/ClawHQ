@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { utcDate } from '../utils/time';
 
 const TYPE_CONFIG: Record<string, { icon: string; color: string }> = {
   agent_created: { icon: '🆕', color: 'text-purple-400' },
@@ -41,7 +42,7 @@ export default function ActivityLog() {
             >
               <span className="shrink-0 w-5 text-center">{cfg.icon}</span>
               <span className="text-gray-600 shrink-0 tabular-nums">
-                {new Date(e.createdAt).toLocaleTimeString()}
+                {utcDate(e.createdAt).toLocaleTimeString()}
               </span>
               <div className="min-w-0 flex-1">
                 <span className={`${cfg.color} ${clickable ? 'underline decoration-dotted underline-offset-2' : ''}`}>

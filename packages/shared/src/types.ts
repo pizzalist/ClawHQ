@@ -72,8 +72,96 @@ export const DELIVERABLE_LABELS: Record<DeliverableType, { icon: string; label: 
   document: { icon: '📄', label: 'Document' },
 };
 
+// Decision types
+export type DecisionStatus = 'pending' | 'approved' | 'revised' | 'rejected';
+
+export interface Proposal {
+  id: string;
+  decisionItemId: string;
+  agentId: string;
+  agentName: string;
+  agentRole: AgentRole;
+  agentModel: AgentModel;
+  content: string;
+  pros: string[];
+  cons: string[];
+  createdAt: string;
+}
+
+export interface ReviewScore {
+  id: string;
+  proposalId: string;
+  reviewerName: string;
+  reviewerRole: string;
+  score: number;
+  keyPoints: string[];
+  isDevilsAdvocate: boolean;
+  sentiment: 'positive' | 'caution' | 'critical';
+  createdAt: string;
+}
+
+export interface DecisionItem {
+  id: string;
+  taskId: string;
+  title: string;
+  description: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  status: DecisionStatus;
+  proposals: Proposal[];
+  reviews: ReviewScore[];
+  chosenProposalId: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+export interface DecisionHistoryEntry {
+  id: string;
+  decisionItemId: string;
+  title: string;
+  action: DecisionStatus;
+  chosenProposalAgentName: string | null;
+  avgScore: number;
+  decidedAt: string;
+}
+
+// Meeting types
+export type MeetingType = 'planning' | 'review' | 'debate';
+export type MeetingStatus = 'active' | 'reviewing' | 'completed';
+
+export interface MeetingProposal {
+  agentId: string;
+  agentName: string;
+  content: string;
+  taskId: string;
+  reviews?: MeetingReview[];
+}
+
+export interface MeetingReview {
+  reviewerAgentId: string;
+  reviewerName: string;
+  score: number;
+  pros: string[];
+  cons: string[];
+  risks: string[];
+  summary: string;
+  isDevilsAdvocate?: boolean;
+}
+
+export interface Meeting {
+  id: string;
+  title: string;
+  description: string;
+  type: MeetingType;
+  status: MeetingStatus;
+  participants: string[];  // agent IDs
+  proposals: MeetingProposal[];
+  decision: { winnerId: string; feedback: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // WebSocket message types
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update';
 
 export interface WSMessage {
   type: WSMessageType;
@@ -84,4 +172,5 @@ export interface InitialState {
   agents: Agent[];
   tasks: Task[];
   events: AppEvent[];
+  meetings: Meeting[];
 }

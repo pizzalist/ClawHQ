@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
+import { utcDate } from '../utils/time';
 import { ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
 import type { Task } from '@ai-office/shared';
 import TaskModal from './TaskModal';
@@ -197,7 +198,7 @@ export default function AgentDetailPanel() {
                           <div className="text-xs font-medium truncate">{t.title}</div>
                           <div className="text-[10px] text-gray-500 flex gap-2 mt-0.5">
                             <span>{t.status}</span>
-                            <span>{new Date(t.updatedAt).toLocaleString()}</span>
+                            <span>{utcDate(t.updatedAt).toLocaleString()}</span>
                           </div>
                           {t.result && (
                             <div className="mt-1 text-[10px] font-mono text-gray-400 truncate">{t.result}</div>
@@ -221,7 +222,7 @@ export default function AgentDetailPanel() {
                     {agentEvents.map((e) => (
                       <div key={e.id} className="py-0.5 text-gray-400 hover:text-gray-200 flex gap-2">
                         <span className="text-gray-600 shrink-0">
-                          {new Date(e.createdAt).toLocaleTimeString()}
+                          {utcDate(e.createdAt).toLocaleTimeString()}
                         </span>
                         <span className="truncate">{e.message}</span>
                       </div>

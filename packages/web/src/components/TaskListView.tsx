@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import type { TaskStatus, Deliverable } from '@ai-office/shared';
 import { DELIVERABLE_LABELS } from '@ai-office/shared';
+import { utcDate, formatDuration } from '../utils/time';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 
 const STATUS_BADGE: Record<string, { bg: string; icon: string }> = {
@@ -13,13 +14,6 @@ const STATUS_BADGE: Record<string, { bg: string; icon: string }> = {
 };
 
 type Filter = 'all' | TaskStatus;
-
-function formatDuration(start: string, end: string): string {
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
-}
 
 export default function TaskListView() {
   const tasks = useStore((s) => s.tasks);
@@ -47,7 +41,7 @@ export default function TaskListView() {
   const filtered = tasks
     .filter((t) => filter === 'all' || t.status === filter)
     .sort((a, b) => {
-      const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      const diff = utcDate(b.createdAt).getTime() - utcDate(a.createdAt).getTime();
       return sortAsc ? -diff : diff;
     });
 
@@ -149,7 +143,7 @@ export default function TaskListView() {
                       {agent?.name || '—'}
                     </td>
                     <td className="px-4 py-2.5 text-gray-500 tabular-nums hidden sm:table-cell">
-                      {new Date(t.createdAt).toLocaleString()}
+                      {utcDate(t.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-2.5 text-gray-500 tabular-nums hidden lg:table-cell">
                       {t.status === 'completed' || t.status === 'failed'

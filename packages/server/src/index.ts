@@ -11,6 +11,7 @@ import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
+import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -42,6 +43,10 @@ onEvent((event) => {
   broadcast({ type: 'agents_update', payload: listAgents() });
 });
 
+onMeetingChange(() => {
+  broadcast({ type: 'meetings_update', payload: listMeetings() });
+});
+
 onTaskEvent((event) => {
   broadcast({ type: 'event', payload: event });
   broadcast({ type: 'tasks_update', payload: listTasks() });
@@ -55,6 +60,7 @@ wss.on('connection', (ws) => {
     agents: listAgents(),
     tasks: listTasks(),
     events: listEvents(),
+    meetings: listMeetings(),
   };
   ws.send(JSON.stringify({ type: 'initial_state', payload: initial } satisfies WSMessage));
 
@@ -364,6 +370,199 @@ app.get('/api/export/csv', (_req, res) => {
   res.send(csv);
 });
 
+// ---- Decision API ----
+import { randomUUID } from 'crypto';
+import type { DecisionItem, Proposal, ReviewScore } from '@ai-office/shared';
+
+function hydrateDecisionItem(row: Record<string, unknown>): DecisionItem {
+  const id = row.id as string;
+  const proposalRows = stmts.listProposalsByDecision.all(id) as Record<string, unknown>[];
+  const reviewRows = stmts.listReviewsByDecision.all(id) as Record<string, unknown>[];
+  const proposals: Proposal[] = proposalRows.map((p) => ({
+    id: p.id as string,
+    decisionItemId: p.decision_item_id as string,
+    agentId: p.agent_id as string,
+    agentName: p.agent_name as string,
+    agentRole: p.agent_role as string as any,
+    agentModel: p.agent_model as string as any,
+    content: p.content as string,
+    pros: JSON.parse((p.pros as string) || '[]'),
+    cons: JSON.parse((p.cons as string) || '[]'),
+    createdAt: p.created_at as string,
+  }));
+  const reviews: ReviewScore[] = reviewRows.map((r) => ({
+    id: r.id as string,
+    proposalId: r.proposal_id as string,
+    reviewerName: r.reviewer_name as string,
+    reviewerRole: r.reviewer_role as string,
+    score: r.score as number,
+    keyPoints: JSON.parse((r.key_points as string) || '[]'),
+    isDevilsAdvocate: !!(r.is_devils_advocate as number),
+    sentiment: r.sentiment as any,
+    createdAt: r.created_at as string,
+  }));
+  return {
+    id,
+    taskId: row.task_id as string,
+    title: row.title as string,
+    description: (row.description as string) || '',
+    priority: (row.priority as any) || 'medium',
+    status: (row.status as any) || 'pending',
+    proposals,
+    reviews,
+    chosenProposalId: (row.chosen_proposal_id as string) || null,
+    decidedAt: (row.decided_at as string) || null,
+    createdAt: row.created_at as string,
+  };
+}
+
+app.get('/api/decisions', (_req, res) => {
+  const rows = stmts.listDecisionItems.all() as Record<string, unknown>[];
+  res.json(rows.map(hydrateDecisionItem));
+});
+
+app.get('/api/decisions/pending', (_req, res) => {
+  const rows = stmts.listPendingDecisions.all() as Record<string, unknown>[];
+  res.json(rows.map(hydrateDecisionItem));
+});
+
+app.get('/api/decisions/pending/count', (_req, res) => {
+  const row = stmts.countPendingDecisions.get() as { count: number };
+  res.json({ count: row.count });
+});
+
+app.get('/api/decisions/history', (_req, res) => {
+  const rows = stmts.listDecisionHistory.all() as Record<string, unknown>[];
+  res.json(rows.map(hydrateDecisionItem));
+});
+
+app.get('/api/decisions/:id', (req, res) => {
+  const row = stmts.getDecisionItem.get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Decision item not found' });
+  res.json(hydrateDecisionItem(row));
+});
+
+app.post('/api/decisions', (req, res) => {
+  const { taskId, title, description, priority } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  const id = randomUUID();
+  stmts.insertDecisionItem.run(id, taskId || '', title, description || '', priority || 'medium');
+  const row = stmts.getDecisionItem.get(id) as Record<string, unknown>;
+  res.status(201).json(hydrateDecisionItem(row));
+});
+
+app.post('/api/decisions/:id/proposals', (req, res) => {
+  const { agentId, agentName, agentRole, agentModel, content, pros, cons } = req.body;
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  const id = randomUUID();
+  stmts.insertProposal.run(
+    id, req.params.id, agentId || '', agentName || 'Unknown',
+    agentRole || 'pm', agentModel || 'claude-sonnet-4',
+    content, JSON.stringify(pros || []), JSON.stringify(cons || [])
+  );
+  res.status(201).json({ id });
+});
+
+app.post('/api/decisions/:id/reviews', (req, res) => {
+  const { proposalId, reviewerName, reviewerRole, score, keyPoints, isDevilsAdvocate, sentiment } = req.body;
+  if (!proposalId) return res.status(400).json({ error: 'proposalId is required' });
+  const id = randomUUID();
+  stmts.insertReviewScore.run(
+    id, proposalId, reviewerName || 'Reviewer', reviewerRole || 'reviewer',
+    score ?? 5, JSON.stringify(keyPoints || []),
+    isDevilsAdvocate ? 1 : 0, sentiment || 'caution'
+  );
+  res.status(201).json({ id });
+});
+
+app.post('/api/decisions/:id/decide', (req, res) => {
+  const { action, chosenProposalId } = req.body;
+  if (!action || !['approved', 'revised', 'rejected'].includes(action)) {
+    return res.status(400).json({ error: 'action must be approved, revised, or rejected' });
+  }
+  stmts.updateDecisionStatus.run(action, chosenProposalId || null, req.params.id);
+  broadcast({ type: 'tasks_update', payload: listTasks() });
+  const row = stmts.getDecisionItem.get(req.params.id) as Record<string, unknown>;
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(hydrateDecisionItem(row));
+});
+
+// Seed demo decisions from completed tasks
+app.post('/api/decisions/seed-from-tasks', (_req, res) => {
+  const tasks = listTasks().filter(t => t.status === 'completed' && t.result);
+  const agents = listAgents();
+  let created = 0;
+  for (const task of tasks) {
+    // Check if decision already exists for this task
+    const existing = (stmts.listDecisionItems.all() as Record<string, unknown>[])
+      .find(d => d.task_id === task.id);
+    if (existing) continue;
+
+    const id = randomUUID();
+    const priority = ['low', 'medium', 'high', 'critical'][Math.floor(Math.random() * 3)] as string;
+    stmts.insertDecisionItem.run(id, task.id, task.title, task.description || '', priority);
+
+    // Create proposals from agent results
+    const assignee = agents.find(a => a.id === task.assigneeId);
+    if (assignee) {
+      const p1Id = randomUUID();
+      stmts.insertProposal.run(
+        p1Id, id, assignee.id, assignee.name, assignee.role, assignee.model,
+        task.result || 'No content', JSON.stringify(['Completed on time', 'Follows requirements']),
+        JSON.stringify(['Needs testing'])
+      );
+      // Add reviews
+      const reviewers = agents.filter(a => a.role === 'reviewer');
+      for (const reviewer of reviewers) {
+        const score = 5 + Math.floor(Math.random() * 5);
+        const isDA = reviewer.name.includes('깐깐이') || reviewer.name.includes('Diana');
+        stmts.insertReviewScore.run(
+          randomUUID(), p1Id, reviewer.name, reviewer.role,
+          score, JSON.stringify(isDA ? ['Needs more error handling', 'Edge cases not covered'] : ['Good structure', 'Clean code']),
+          isDA ? 1 : 0, score >= 7 ? 'positive' : score >= 5 ? 'caution' : 'critical'
+        );
+      }
+    }
+    created++;
+  }
+  res.json({ created });
+});
+
+// Meetings API
+app.get('/api/meetings', (_req, res) => {
+  res.json(listMeetings());
+});
+
+app.get('/api/meetings/:id', (req, res) => {
+  const meeting = getMeeting(req.params.id);
+  if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+  res.json(meeting);
+});
+
+app.post('/api/meetings', (req, res) => {
+  const { title, description, type, participantIds } = req.body;
+  if (!title || !participantIds || !Array.isArray(participantIds) || participantIds.length < 2) {
+    return res.status(400).json({ error: 'title and at least 2 participantIds required' });
+  }
+  try {
+    const meeting = startPlanningMeeting(title, description || '', participantIds);
+    res.status(201).json(meeting);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/meetings/:id/decide', (req, res) => {
+  const { winnerId, feedback } = req.body;
+  if (!winnerId) return res.status(400).json({ error: 'winnerId required' });
+  try {
+    const meeting = decideMeeting(req.params.id, winnerId, feedback || '');
+    res.json(meeting);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // Health check
 app.get('/api/health', async (_req, res) => {
   const sessions = await listSessions();
@@ -389,10 +588,42 @@ if (existsSync(webDistPath)) {
   });
 }
 
+// Recover stuck tasks/agents on startup (e.g. after server restart killed running processes)
+function recoverStuckState() {
+  const agents = listAgents();
+  const tasks = listTasks();
+  let recovered = 0;
+
+  // Reset agents that are "working" but have no running process
+  for (const agent of agents) {
+    if (agent.state === 'working' || agent.state === 'reviewing') {
+      resetAgent(agent.id);
+      recovered++;
+      console.log(`[recovery] Reset stuck agent: ${agent.name} (was ${agent.state})`);
+    }
+  }
+
+  // Re-queue tasks stuck in "in-progress" so they can be retried
+  for (const task of tasks) {
+    if (task.status === 'in-progress') {
+      stmts.updateTask.run(task.assigneeId, 'pending', task.result, task.id);
+      recovered++;
+      console.log(`[recovery] Re-queued stuck task: ${task.title}`);
+    }
+  }
+
+  if (recovered > 0) {
+    console.log(`[recovery] Recovered ${recovered} stuck items`);
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    broadcast({ type: 'tasks_update', payload: listTasks() });
+  }
+}
+
 // Start
 async function main() {
   await checkOpenClaw();
   seedDemoAgents();
+  recoverStuckState();
 
   server.listen(SERVER_PORT, () => {
     console.log(`[server] AI Office server running on http://localhost:${SERVER_PORT}`);

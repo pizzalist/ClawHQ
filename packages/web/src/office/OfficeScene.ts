@@ -96,8 +96,27 @@ export class OfficeScene {
     }
   }
 
+  /** Ensure we have at least `count` desks, adding new ones dynamically */
+  private ensureDesks(count: number) {
+    while (this.desks.length < count) {
+      const i = this.desks.length;
+      // Extend the grid: continue the 2-row pattern (rows 2,5,8,11,...) with cols cycling 2,4,6,8
+      const row = 2 + Math.floor(i / 4) * 3;
+      const col = 2 + (i % 4) * 2;
+      const { x, y } = gridToIso(col, row);
+      const desk = new Desk(i);
+      desk.container.position.set(x, y);
+      desk.container.zIndex = y + 1;
+      this.container.addChild(desk.container);
+      this.desks.push(desk);
+    }
+  }
+
   updateAgents(agents: Agent[]) {
     const seen = new Set<string>();
+
+    // Ensure enough desks for all agents
+    this.ensureDesks(agents.length);
 
     for (const agent of agents) {
       seen.add(agent.id);
@@ -112,8 +131,9 @@ export class OfficeScene {
       }
       sprite.update(agent);
 
-      // Position at desk
-      const desk = this.desks[agent.deskIndex % this.desks.length];
+      // Position at desk — use deskIndex modulo available desks
+      const deskIdx = agent.deskIndex % this.desks.length;
+      const desk = this.desks[deskIdx];
       if (desk) {
         const sx = desk.container.x + desk.seatOffset.x;
         const sy = desk.container.y + desk.seatOffset.y;

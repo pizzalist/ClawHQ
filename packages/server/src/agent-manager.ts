@@ -85,8 +85,9 @@ export function transitionAgent(id: string, newState: AgentState, taskId?: strin
 export function deleteAgent(id: string): void {
   const agent = getAgent(id);
   if (!agent) throw new Error(`Agent ${id} not found`);
-  // Can't delete a working agent
   if (agent.state === 'working') throw new Error('Cannot delete a working agent — stop it first');
+  // Unlink tasks referencing this agent so FK constraint doesn't block delete
+  stmts.unlinkAgentTasks.run(id);
   stmts.deleteAgent.run(id);
   emitEvent('agent_created', id, null, `Agent "${agent.name}" removed`);
 }

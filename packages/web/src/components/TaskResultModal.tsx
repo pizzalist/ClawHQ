@@ -11,12 +11,8 @@ const STATUS_BADGE: Record<string, { bg: string; label: string }> = {
   cancelled: { bg: 'bg-gray-500/20 text-gray-500', label: '🚫 Cancelled' },
 };
 
-function formatDuration(start: string, end: string): string {
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
-}
+import { formatDuration, formatElapsed, utcDate } from '../utils/time';
+
 
 export default function TaskResultModal() {
   const selectedTaskId = useStore((s) => s.selectedTaskId);
@@ -70,7 +66,7 @@ export default function TaskResultModal() {
             <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${status.bg}`}>{status.label}</span>
               {agent && <span>👤 {agent.name}</span>}
-              <span>📅 {new Date(task.createdAt).toLocaleString()}</span>
+              <span>📅 {utcDate(task.createdAt).toLocaleString()}</span>
               {task.status === 'completed' && (
                 <span>⏱ {formatDuration(task.createdAt, task.updatedAt)}</span>
               )}
@@ -154,8 +150,5 @@ function WorkingTimer({ since }: { since: string }) {
     return () => clearInterval(id);
   }, []);
 
-  const elapsed = Math.floor((Date.now() - new Date(since).getTime()) / 1000);
-  const min = Math.floor(elapsed / 60);
-  const sec = elapsed % 60;
-  return <span className="tabular-nums">{min > 0 ? `${min}m ${sec}s` : `${sec}s`}</span>;
+  return <span className="tabular-nums">{formatElapsed(since)}</span>;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppEvent, Task } from '@ai-office/shared';
+import { utcDate } from '../utils/time';
 
 export default function HistoryReplay() {
   const [events, setEvents] = useState<AppEvent[]>([]);
@@ -48,11 +49,11 @@ export default function HistoryReplay() {
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   const fmtTime = (iso: string) => {
-    const d = new Date(iso);
+    const d = utcDate(iso);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
-  const fmtDate = (iso: string) => new Date(iso).toLocaleDateString();
+  const fmtDate = (iso: string) => utcDate(iso).toLocaleDateString();
 
   const typeColors: Record<string, string> = {
     task_completed: 'border-green-500/50 bg-green-500/5',

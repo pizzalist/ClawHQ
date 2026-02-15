@@ -159,8 +159,11 @@ export function connectWS() {
   ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
-    console.log('[ws] connected');
     useStore.getState().setConnected(true);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
   };
 
   ws.onmessage = (e) => {
@@ -198,10 +201,11 @@ export function connectWS() {
   };
 
   ws.onclose = () => {
-    console.log('[ws] disconnected');
     useStore.getState().setConnected(false);
     ws = null;
-    reconnectTimer = setTimeout(connectWS, 3000);
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(connectWS, 3000);
+    }
   };
 
   ws.onerror = () => ws?.close();

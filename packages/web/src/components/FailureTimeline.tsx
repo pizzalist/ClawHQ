@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { ROLE_EMOJI } from '@ai-office/shared';
+import { utcDate } from '../utils/time';
 
 interface Failure {
   taskId: string;
@@ -87,7 +88,7 @@ export default function FailureTimeline() {
 
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">
-                    {new Date(f.failedAt).toLocaleString()}
+                    {utcDate(f.failedAt).toLocaleString()}
                   </span>
                   {f.agentName && (
                     <span className="text-xs px-1.5 py-0.5 bg-red-500/10 text-red-400 rounded">
