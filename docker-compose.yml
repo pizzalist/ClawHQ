@@ -1,0 +1,16 @@
+services:
+  ai-office:
+    build: .
+    ports:
+      - "3001:3001"
+    volumes:
+      - ai-office-data:/app/data
+      # Optional: mount OpenClaw config for live integration
+      # - ~/.openclaw:/root/.openclaw:ro
+    environment:
+      - PORT=3001
+      # - OPENCLAW_PATH=/root/.openclaw
+    restart: unless-stopped
+
+volumes:
+  ai-office-data:
