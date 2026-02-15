@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
+import DeliverableList from './deliverables/DeliverableList';
 
 const STATUS_BADGE: Record<string, { bg: string; label: string }> = {
   pending: { bg: 'bg-gray-500/20 text-gray-400', label: '⏳ Pending' },
@@ -95,9 +96,13 @@ export default function TaskResultModal() {
             </div>
           )}
 
+          {task.status === 'completed' && (
+            <DeliverableList taskId={task.id} />
+          )}
+
           {task.result && (
             <div>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Result</h3>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Raw Output</h3>
               <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 whitespace-pre-wrap font-mono leading-relaxed max-h-[40vh] overflow-y-auto">
                 {task.result}
               </div>

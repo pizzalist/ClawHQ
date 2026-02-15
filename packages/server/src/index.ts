@@ -10,6 +10,7 @@ import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
+import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
 import { stmts } from './db.js';
 
 const app = express();
@@ -146,16 +147,53 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.post('/api/tasks', (req, res) => {
-  const { title, description, assigneeId } = req.body;
+  const { title, description, assigneeId, expectedDeliverables } = req.body;
   if (!title) {
     return res.status(400).json({ error: 'title is required' });
   }
   try {
-    const task = createTask(title, description || '', assigneeId || null);
+    const task = createTask(title, description || '', assigneeId || null, null, expectedDeliverables || undefined);
     res.status(201).json(task);
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+// Deliverables API
+app.get('/api/deliverables', (req, res) => {
+  const { taskId } = req.query;
+  if (typeof taskId !== 'string') {
+    return res.status(400).json({ error: 'taskId query param required' });
+  }
+  res.json(listDeliverablesByTask(taskId));
+});
+
+app.get('/api/deliverables/:id', (req, res) => {
+  const d = getDeliverable(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Deliverable not found' });
+  res.json(d);
+});
+
+app.get('/api/deliverables/:id/render', (req, res) => {
+  const d = getDeliverable(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Deliverable not found' });
+  const { contentType, body } = renderDeliverable(d);
+  res.setHeader('Content-Type', contentType);
+  res.send(body);
+});
+
+app.get('/api/deliverables/:id/download', (req, res) => {
+  const d = getDeliverable(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Deliverable not found' });
+  const extMap: Record<string, string> = {
+    web: 'html', report: 'md', code: d.language || 'txt',
+    data: d.format || 'json', document: 'txt', api: 'json', design: 'txt',
+  };
+  const ext = extMap[d.type] || 'txt';
+  const filename = `${d.title.replace(/[^a-zA-Z0-9]/g, '_')}.${ext}`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.send(d.content);
 });
 
 // Presets

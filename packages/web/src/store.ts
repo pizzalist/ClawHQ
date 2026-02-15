@@ -23,7 +23,7 @@ interface Store {
   setSidebarOpen: (v: boolean) => void;
   init: (state: InitialState) => void;
   // API actions
-  createTask: (title: string, description: string, assigneeId?: string | null) => Promise<void>;
+  createTask: (title: string, description: string, assigneeId?: string | null, expectedDeliverables?: string[]) => Promise<void>;
   createAgent: (name: string, role: string, model: string) => Promise<void>;
   deleteAgent: (id: string) => Promise<void>;
   stopAgent: (id: string) => Promise<void>;
@@ -55,14 +55,14 @@ export const useStore = create<Store>((set, get) => ({
   init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, selectedAgentId: null, initialized: true }),
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),
 
-  createTask: async (title, description, assigneeId) => {
+  createTask: async (title, description, assigneeId, expectedDeliverables) => {
     const { setLoading } = get();
     setLoading('createTask', true);
     try {
       const res = await fetch(`${API}/api/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description, assigneeId }),
+        body: JSON.stringify({ title, description, assigneeId, expectedDeliverables }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       await fetch(`${API}/api/tasks/process`, { method: 'POST' });

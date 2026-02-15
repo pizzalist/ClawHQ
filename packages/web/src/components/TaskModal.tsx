@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { ROLE_EMOJI } from '@ai-office/shared';
+import { ROLE_EMOJI, DELIVERABLE_LABELS } from '@ai-office/shared';
+import type { DeliverableType } from '@ai-office/shared';
 import Spinner from './Spinner';
+
+const DELIVERABLE_TYPES: DeliverableType[] = ['web', 'report', 'code', 'api', 'design', 'data', 'document'];
 
 export default function TaskModal({ onClose, preAssignId }: { onClose: () => void; preAssignId?: string | null }) {
   const agents = useStore((s) => s.agents);
@@ -10,10 +13,17 @@ export default function TaskModal({ onClose, preAssignId }: { onClose: () => voi
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [assigneeId, setAssigneeId] = useState(preAssignId || '');
+  const [expectedDeliverables, setExpectedDeliverables] = useState<DeliverableType[]>([]);
+
+  const toggleDeliverable = (type: DeliverableType) => {
+    setExpectedDeliverables(prev =>
+      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+    );
+  };
 
   const submit = async () => {
     if (!title.trim()) return;
-    await createTask(title.trim(), description.trim(), assigneeId || null);
+    await createTask(title.trim(), description.trim(), assigneeId || null, expectedDeliverables.length > 0 ? expectedDeliverables : undefined);
     onClose();
   };
 
@@ -59,6 +69,29 @@ export default function TaskModal({ onClose, preAssignId }: { onClose: () => voi
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1.5">Expected Output</label>
+            <div className="flex flex-wrap gap-1.5">
+              {DELIVERABLE_TYPES.map(type => {
+                const meta = DELIVERABLE_LABELS[type];
+                const selected = expectedDeliverables.includes(type);
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => toggleDeliverable(type)}
+                    className={`px-2.5 py-1 text-xs rounded-full border transition-all ${
+                      selected
+                        ? 'bg-accent/20 border-accent/50 text-accent font-medium'
+                        : 'border-gray-700/50 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                    }`}
+                  >
+                    {meta.icon} {meta.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
         <div className="px-5 py-3 border-t border-gray-700/30 flex justify-end gap-2">

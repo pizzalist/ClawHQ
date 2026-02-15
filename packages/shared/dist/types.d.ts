@@ -23,6 +23,7 @@ export interface Task {
     status: TaskStatus;
     result: string | null;
     parentTaskId: string | null;
+    expectedDeliverables?: DeliverableType[];
     createdAt: string;
     updatedAt: string;
 }
@@ -45,6 +46,22 @@ export interface AppEvent {
     metadata: Record<string, unknown>;
     createdAt: string;
 }
+export type DeliverableType = 'web' | 'report' | 'code' | 'api' | 'design' | 'data' | 'document';
+export interface Deliverable {
+    id: string;
+    taskId: string;
+    type: DeliverableType;
+    title: string;
+    content: string;
+    language?: string;
+    format?: string;
+    metadata?: Record<string, any>;
+    createdAt: string;
+}
+export declare const DELIVERABLE_LABELS: Record<DeliverableType, {
+    icon: string;
+    label: string;
+}>;
 export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state';
 export interface WSMessage {
     type: WSMessageType;

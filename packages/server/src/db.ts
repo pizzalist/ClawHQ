@@ -41,6 +41,19 @@ db.exec(`
     FOREIGN KEY (parent_task_id) REFERENCES tasks(id)
   );
 
+  CREATE TABLE IF NOT EXISTS deliverables (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    language TEXT,
+    format TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+  );
+
   CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -55,6 +68,11 @@ db.exec(`
 // Migration: add parent_task_id if missing
 try {
   db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id)`);
+} catch { /* column already exists */ }
+
+// Migration: add expected_deliverables if missing
+try {
+  db.exec(`ALTER TABLE tasks ADD COLUMN expected_deliverables TEXT`);
 } catch { /* column already exists */ }
 
 // Prepared statements
@@ -77,8 +95,8 @@ export const stmts = {
   listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
   getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),
   insertTask: db.prepare(`
-    INSERT INTO tasks (id, title, description, status, parent_task_id, created_at, updated_at)
-    VALUES (?, ?, ?, 'pending', ?, datetime('now'), datetime('now'))
+    INSERT INTO tasks (id, title, description, status, parent_task_id, expected_deliverables, created_at, updated_at)
+    VALUES (?, ?, ?, 'pending', ?, ?, datetime('now'), datetime('now'))
   `),
   updateTask: db.prepare(`
     UPDATE tasks SET assignee_id = ?, status = ?, result = ?, updated_at = datetime('now')
@@ -129,6 +147,15 @@ export const stmts = {
     ORDER BY t.updated_at DESC
     LIMIT 100
   `),
+
+  // Deliverables
+  insertDeliverable: db.prepare(`
+    INSERT INTO deliverables (id, task_id, type, title, content, language, format, metadata, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `),
+  listDeliverablesByTask: db.prepare('SELECT * FROM deliverables WHERE task_id = ? ORDER BY created_at'),
+  getDeliverable: db.prepare('SELECT * FROM deliverables WHERE id = ?'),
+  deleteDeliverablesByTask: db.prepare('DELETE FROM deliverables WHERE task_id = ?'),
 
   listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),
   insertEvent: db.prepare(`

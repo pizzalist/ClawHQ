@@ -25,6 +25,7 @@ export interface Task {
   status: TaskStatus;
   result: string | null;
   parentTaskId: string | null;
+  expectedDeliverables?: DeliverableType[];
   createdAt: string;
   updatedAt: string;
 }
@@ -45,6 +46,31 @@ export interface AppEvent {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+
+// Deliverable types
+export type DeliverableType = 'web' | 'report' | 'code' | 'api' | 'design' | 'data' | 'document';
+
+export interface Deliverable {
+  id: string;
+  taskId: string;
+  type: DeliverableType;
+  title: string;
+  content: string;
+  language?: string;
+  format?: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+}
+
+export const DELIVERABLE_LABELS: Record<DeliverableType, { icon: string; label: string }> = {
+  web: { icon: '🌐', label: 'Web App' },
+  report: { icon: '📊', label: 'Report' },
+  code: { icon: '💻', label: 'Code' },
+  api: { icon: '🔌', label: 'API' },
+  design: { icon: '🎨', label: 'Design' },
+  data: { icon: '📈', label: 'Data' },
+  document: { icon: '📄', label: 'Document' },
+};
 
 // WebSocket message types
 export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state';

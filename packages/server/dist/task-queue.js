@@ -3,6 +3,7 @@ import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS } from '@ai-of
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun } from './openclaw-adapter.js';
+import { createDeliverablesFromResult } from './deliverables.js';
 const listeners = [];
 export function onTaskEvent(fn) {
     listeners.push(fn);
@@ -30,6 +31,7 @@ function rowToTask(row) {
         status: row.status,
         result: row.result ?? null,
         parentTaskId: row.parent_task_id ?? null,
+        expectedDeliverables: row.expected_deliverables ? JSON.parse(row.expected_deliverables) : undefined,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -37,9 +39,9 @@ function rowToTask(row) {
 export function listTasks() {
     return stmts.listTasks.all().map(rowToTask);
 }
-export function createTask(title, description, assigneeId, parentTaskId) {
+export function createTask(title, description, assigneeId, parentTaskId, expectedDeliverables) {
     const id = uuid();
-    stmts.insertTask.run(id, title, description, parentTaskId || null);
+    stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
     // If specific assignee requested, set it on the task
     if (assigneeId) {
         stmts.updateTask.run(assigneeId, 'pending', null, id);
@@ -125,15 +127,28 @@ function assignTask(agentId, task) {
     });
 }
 function buildPrompt(name, role, task) {
-    return [
+    const parts = [
         `You are ${name}, a ${role} in the AI Office.`,
         `Complete this task concisely and report what you did.`,
         ``,
         `## Task: ${task.title}`,
         task.description ? `\n${task.description}` : '',
-        ``,
-        `Respond with a clear summary of what you accomplished.`,
-    ].join('\n');
+    ];
+    if (task.expectedDeliverables && task.expectedDeliverables.length > 0) {
+        const formatHints = {
+            web: 'a complete HTML page (use ```html code block)',
+            report: 'a structured markdown report with headers and sections',
+            code: 'code in appropriate language (use ```language code blocks)',
+            data: 'structured data (use ```json or ```csv code blocks)',
+            document: 'a well-formatted text document',
+            api: 'API specification or implementation',
+            design: 'design specifications or mockup descriptions',
+        };
+        const hints = task.expectedDeliverables.map(t => formatHints[t] || t).join('; ');
+        parts.push(``, `## Expected Output Format`, `Produce: ${hints}`);
+    }
+    parts.push(``, `Respond with a clear summary of what you accomplished.`);
+    return parts.join('\n');
 }
 function handleRunComplete(agentId, taskId, title, run) {
     try {
@@ -152,6 +167,13 @@ function handleRunComplete(agentId, taskId, title, run) {
                 try {
                     transitionAgent(agentId, 'done', taskId);
                     stmts.updateTask.run(agentId, 'completed', result, taskId);
+                    // Auto-create deliverables from result
+                    try {
+                        createDeliverablesFromResult(taskId, result);
+                    }
+                    catch (e) {
+                        console.error('[deliverables] parse error:', e);
+                    }
                     emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
                     // Auto-chain: spawn next step based on agent role
                     spawnChainFollowUp(agentId, taskId, title, result);

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import type { TaskStatus } from '@ai-office/shared';
+import type { TaskStatus, Deliverable } from '@ai-office/shared';
+import { DELIVERABLE_LABELS } from '@ai-office/shared';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 
 const STATUS_BADGE: Record<string, { bg: string; icon: string }> = {
@@ -27,6 +28,19 @@ export default function TaskListView() {
   const [filter, setFilter] = useState<Filter>('all');
   const [sortAsc, setSortAsc] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [taskDeliverables, setTaskDeliverables] = useState<Record<string, Deliverable[]>>({});
+
+  // Fetch deliverable types for completed tasks
+  useEffect(() => {
+    const completedIds = tasks.filter(t => t.status === 'completed').map(t => t.id);
+    const missing = completedIds.filter(id => !(id in taskDeliverables));
+    for (const id of missing.slice(0, 10)) {
+      fetch(`/api/deliverables?taskId=${id}`)
+        .then(r => r.json())
+        .then(d => setTaskDeliverables(prev => ({ ...prev, [id]: d })))
+        .catch(() => {});
+    }
+  }, [tasks]);
 
   const agentMap = new Map(agents.map((a) => [a.id, a]));
 
@@ -106,6 +120,11 @@ export default function TaskListView() {
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-gray-200 truncate max-w-[280px]">{t.title}</span>
+                        {taskDeliverables[t.id]?.map(d => (
+                          <span key={d.id} title={DELIVERABLE_LABELS[d.type]?.label || d.type} className="text-xs opacity-60">
+                            {DELIVERABLE_LABELS[d.type]?.icon}
+                          </span>
+                        ))}
                         {isPreviewable(t.result) && (
                           <button
                             onClick={(e) => {
