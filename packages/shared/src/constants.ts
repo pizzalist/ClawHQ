@@ -21,12 +21,12 @@ export const ROLE_LABELS: Record<AgentRole, string> = {
 };
 
 export const ROLE_EMOJI: Record<AgentRole, string> = {
-  pm: '📋',
-  developer: '💻',
-  reviewer: '🔍',
-  designer: '🎨',
-  devops: '🔧',
-  qa: '🧪',
+  pm: '🍥',       // Naruto
+  developer: '⚡', // Sasuke
+  reviewer: '👁️', // Kakashi / Sharingan
+  designer: '🌸',  // Sakura
+  devops: '🐍',    // Orochimaru vibe
+  qa: '🐸',        // Jiraiya / toad
 };
 
 export const STATE_COLORS: Record<AgentState, string> = {
