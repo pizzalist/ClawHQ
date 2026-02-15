@@ -20,6 +20,9 @@ const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, AgentModel> = {
 
 const sessionMessages = new Map<string, ChiefChatMessage[]>();
 
+// Pending proposals awaiting user approval, keyed by messageId
+const pendingProposals = new Map<string, ChiefAction[]>();
+
 // Callbacks for async chief responses (set by index.ts)
 type ChiefResponseCallback = (sessionId: string, response: ChiefResponse) => void;
 let responseCallback: ChiefResponseCallback | null = null;
@@ -84,8 +87,9 @@ function buildChiefSystemPrompt(): string {
 
 ${state}
 
-## 사용 가능한 액션
-응답 안에 다음 형식의 액션 블록을 포함하면 서버에서 자동 실행됩니다:
+## 제안 형식
+사용자의 요청을 분석하고, 실행할 액션을 **제안**하세요.
+제안은 아래 형식의 ACTION 블록으로 포함합니다. 이 액션은 자동 실행되지 않으며, 사용자가 승인해야 실행됩니다.
 
 [ACTION:create_task title="작업 제목" description="작업 설명" assignRole="developer"]
 [ACTION:create_agent name="에이전트 이름" role="pm" model="claude-opus-4-6"]
@@ -97,10 +101,11 @@ ${state}
 사용 가능한 character: brainstorm, planning, review, retrospective
 
 ## 지침
-- 사용자의 요청을 이해하고, 필요한 액션을 직접 실행하세요
-- 액션 실행 후 결과를 자연스럽게 설명하세요
-- 팀 구성, 작업 생성, 미팅 시작 등을 적극적으로 수행하세요
-- 불확실한 경우 사용자에게 확인하세요`;
+- 사용자의 요청을 분석하고, 적절한 팀 구성과 작업 계획을 **제안**하세요
+- 제안의 이유를 자연스럽게 설명하세요
+- ACTION 블록은 반드시 응답에 포함하세요 — 사용자가 확인 후 승인합니다
+- 불확실한 경우 사용자에게 질문하세요
+- 이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요`;
 }
 
 /** Parse [ACTION:type key="value" ...] blocks from LLM output */
@@ -125,69 +130,99 @@ function parseActions(text: string): { actions: ChiefAction[]; cleanText: string
   return { actions, cleanText };
 }
 
-/** Execute parsed actions and return results */
-function executeActions(actions: ChiefAction[]): ChiefAction[] {
-  return actions.map(action => {
-    try {
-      switch (action.type) {
-        case 'create_task': {
-          const { title, description, assignRole } = action.params;
-          // Find an idle agent with matching role if specified
-          let assigneeId: string | null = null;
-          if (assignRole) {
-            const agents = listAgents();
-            const candidate = agents.find(a => a.role === assignRole && a.state === 'idle');
-            if (candidate) assigneeId = candidate.id;
-          }
-          const task = createTask(title || 'Untitled', description || '', assigneeId);
-          return { ...action, result: { ok: true, message: `작업 "${task.title}" 생성됨`, id: task.id } };
-        }
-        case 'create_agent': {
-          const { name, role, model } = action.params;
-          const agentRole = (role || 'developer') as AgentRole;
-          const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
-          const agent = createAgent(name || `${agentRole.toUpperCase()}-${Date.now()}`, agentRole, agentModel);
-          return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
-        }
-        case 'start_meeting': {
-          const { title, participants, character } = action.params;
-          const roles = (participants || 'pm,developer').split(',').map(r => r.trim());
+/** Execute a single parsed action. Called only after user approval. */
+function executeAction(action: ChiefAction): ChiefAction {
+  try {
+    switch (action.type) {
+      case 'create_task': {
+        const { title, description, assignRole } = action.params;
+        let assigneeId: string | null = null;
+        if (assignRole) {
           const agents = listAgents();
-          const participantIds = roles
-            .map(role => agents.find(a => a.role === role && a.state === 'idle'))
-            .filter(Boolean)
-            .map(a => a!.id);
-          if (participantIds.length < 2) {
-            return { ...action, result: { ok: false, message: '미팅 참여자가 부족합니다 (최소 2명 필요)' } };
-          }
-          const meeting = startPlanningMeeting(
-            title || '총괄자 미팅',
-            `총괄자가 시작한 미팅`,
-            participantIds,
-            (character as any) || 'planning',
-          );
-          return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨`, id: meeting.id } };
+          const candidate = agents.find(a => a.role === assignRole && a.state === 'idle');
+          if (candidate) assigneeId = candidate.id;
         }
-        case 'assign_task': {
-          const { taskId, agentId } = action.params;
-          if (!taskId || !agentId) {
-            return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
-          }
-          // Simple assignment via DB update would need task-queue export; for now report
-          return { ...action, result: { ok: false, message: 'assign_task는 아직 구현 중입니다' } };
-        }
-        default:
-          return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
+        const task = createTask(title || 'Untitled', description || '', assigneeId);
+        return { ...action, result: { ok: true, message: `작업 "${task.title}" 생성됨`, id: task.id } };
       }
-    } catch (err: unknown) {
-      return { ...action, result: { ok: false, message: err instanceof Error ? err.message : String(err) } };
+      case 'create_agent': {
+        const { name, role, model } = action.params;
+        const agentRole = (role || 'developer') as AgentRole;
+        const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
+        const agent = createAgent(name || `${agentRole.toUpperCase()}-${Date.now()}`, agentRole, agentModel);
+        return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
+      }
+      case 'start_meeting': {
+        const { title, participants, character } = action.params;
+        const roles = (participants || 'pm,developer').split(',').map(r => r.trim());
+        const agents = listAgents();
+        const participantIds = roles
+          .map(role => agents.find(a => a.role === role && a.state === 'idle'))
+          .filter(Boolean)
+          .map(a => a!.id);
+        if (participantIds.length < 2) {
+          return { ...action, result: { ok: false, message: '미팅 참여자가 부족합니다 (최소 2명 필요)' } };
+        }
+        const meeting = startPlanningMeeting(
+          title || '총괄자 미팅',
+          `총괄자가 시작한 미팅`,
+          participantIds,
+          (character as any) || 'planning',
+        );
+        return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨`, id: meeting.id } };
+      }
+      case 'assign_task': {
+        const { taskId, agentId } = action.params;
+        if (!taskId || !agentId) {
+          return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
+        }
+        return { ...action, result: { ok: false, message: 'assign_task는 아직 구현 중입니다' } };
+      }
+      default:
+        return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
     }
-  });
+  } catch (err: unknown) {
+    return { ...action, result: { ok: false, message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+
+/**
+ * Approve and execute a pending proposal by messageId.
+ * `selectedIndices` allows partial approval (execute only some actions).
+ * If null/undefined, all actions are executed.
+ */
+export function approveProposal(messageId: string, selectedIndices?: number[]): { executedActions: ChiefAction[]; state: { agents: any[]; tasks: any[]; meetings: any[] } } {
+  const actions = pendingProposals.get(messageId);
+  if (!actions || actions.length === 0) {
+    throw new Error(`No pending proposal found for messageId: ${messageId}`);
+  }
+
+  const toExecute = selectedIndices
+    ? selectedIndices.filter(i => i >= 0 && i < actions.length).map(i => actions[i])
+    : actions;
+
+  const executedActions = toExecute.map(a => executeAction(a));
+
+  pendingProposals.delete(messageId);
+
+  return {
+    executedActions,
+    state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+  };
+}
+
+/** Reject / discard a pending proposal */
+export function rejectProposal(messageId: string): void {
+  pendingProposals.delete(messageId);
+}
+
+/** Get pending proposal actions for a messageId */
+export function getPendingProposal(messageId: string): ChiefAction[] | undefined {
+  return pendingProposals.get(messageId);
 }
 
 // ---- Legacy keyword-based fallback (for demo mode) ----
 
-/** Role aliases for Korean/English parsing */
 const ROLE_ALIASES: Record<string, AgentRole> = {
   pm: 'pm', 'project manager': 'pm', '피엠': 'pm', '기획': 'pm', '기획자': 'pm', '매니저': 'pm',
   dev: 'developer', developer: 'developer', '개발': 'developer', '개발자': 'developer', '프론트': 'developer', '백엔드': 'developer',
@@ -281,14 +316,12 @@ export function getChiefMessages(sessionId: string): ChiefChatMessage[] {
  */
 export function chatWithChief(sessionId: string, userMessage: string): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
   const now = new Date().toISOString();
-  const userMsgId = `user-${Date.now()}`;
-  pushMessage(sessionId, { id: userMsgId, role: 'user', content: userMessage, createdAt: now });
+  pushMessage(sessionId, { id: `user-${Date.now()}`, role: 'user', content: userMessage, createdAt: now });
 
   const messageId = `chief-${Date.now()}-${uuid().slice(0, 8)}`;
 
   // LLM mode
   if (!isDemoMode()) {
-    // Start async LLM processing
     const systemPrompt = buildChiefSystemPrompt();
     const recentMessages = getSessionMessages(sessionId).slice(-10);
     const conversationContext = recentMessages
@@ -305,16 +338,20 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         const rawOutput = parseAgentOutput(run.stdout);
-        const { actions: parsedActions, cleanText } = parseActions(rawOutput);
-        const executedActions = executeActions(parsedActions);
+        const { actions: proposedActions, cleanText } = parseActions(rawOutput);
 
         const reply = cleanText || '처리가 완료되었습니다.';
         pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
+        // Store proposed actions for approval — do NOT execute yet
+        if (proposedActions.length > 0) {
+          pendingProposals.set(messageId, proposedActions);
+        }
+
         const response: ChiefResponse = {
           messageId,
           reply,
-          actions: executedActions,
+          actions: proposedActions,  // proposed, not executed
           state: {
             agents: listAgents(),
             tasks: listTasks(),
@@ -344,7 +381,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
   };
 }
 
-// Keep applyChiefPlan for backward compat
+// Keep applyChiefPlan for backward compat (keyword mode)
 export function applyChiefPlan(inputSuggestions: TeamPlanSuggestion[]) {
   const suggestions = clampSuggestions(inputSuggestions || []);
   const existing = listAgents();

@@ -13,7 +13,9 @@ interface Store {
   chiefSuggestions: TeamPlanSuggestion[];
   chiefMeetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null;
   chiefThinking: boolean;
-  chiefActions: ChiefAction[];
+  chiefProposedActions: ChiefAction[];   // proposed, awaiting approval
+  chiefExecutedActions: ChiefAction[];   // approved & executed results
+  chiefPendingMessageId: string | null;  // messageId of proposal awaiting approval
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -25,8 +27,9 @@ interface Store {
   setMeetings: (meetings: Meeting[]) => void;
   setChiefState: (messages: ChiefChatMessage[], suggestions: TeamPlanSuggestion[], meetingDraft?: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null) => void;
   setChiefThinking: (v: boolean) => void;
-  setChiefActions: (actions: ChiefAction[]) => void;
   handleChiefResponse: (response: ChiefResponse) => void;
+  approveProposal: (messageId: string, selectedIndices?: number[]) => Promise<void>;
+  rejectProposal: (messageId: string) => Promise<void>;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -58,7 +61,9 @@ export const useStore = create<Store>((set, get) => ({
   chiefSuggestions: [],
   chiefMeetingDraft: null,
   chiefThinking: false,
-  chiefActions: [],
+  chiefProposedActions: [],
+  chiefExecutedActions: [],
+  chiefPendingMessageId: null,
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -73,7 +78,6 @@ export const useStore = create<Store>((set, get) => ({
   setMeetings: (meetings) => set({ meetings }),
   setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({ chiefMessages, chiefSuggestions, chiefMeetingDraft }),
   setChiefThinking: (chiefThinking) => set({ chiefThinking }),
-  setChiefActions: (chiefActions) => set({ chiefActions }),
   handleChiefResponse: (response) => {
     const chiefMsg: ChiefChatMessage = {
       id: response.messageId,
@@ -83,12 +87,51 @@ export const useStore = create<Store>((set, get) => ({
     };
     set((s) => ({
       chiefMessages: [...s.chiefMessages, chiefMsg],
-      chiefActions: response.actions,
+      chiefProposedActions: response.actions,
+      chiefExecutedActions: [],
+      chiefPendingMessageId: response.actions.length > 0 ? response.messageId : null,
       chiefThinking: false,
-      agents: response.state.agents,
-      tasks: response.state.tasks,
-      meetings: response.state.meetings,
     }));
+  },
+  approveProposal: async (messageId, selectedIndices) => {
+    const { setLoading } = get();
+    setLoading('chiefApprove', true);
+    try {
+      const res = await fetch(`${API}/api/chief/proposal/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId, selectedIndices }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json();
+      const executedCount = data.executedActions?.filter((a: ChiefAction) => a.result?.ok).length ?? 0;
+      toast(`총괄자 제안 승인: ${executedCount}건 실행 완료`, 'success');
+      set({
+        chiefExecutedActions: data.executedActions || [],
+        chiefProposedActions: [],
+        chiefPendingMessageId: null,
+        agents: data.state?.agents || get().agents,
+        tasks: data.state?.tasks || get().tasks,
+        meetings: data.state?.meetings || get().meetings,
+      });
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '제안 승인에 실패했어요', 'error');
+    } finally {
+      setLoading('chiefApprove', false);
+    }
+  },
+  rejectProposal: async (messageId) => {
+    try {
+      await fetch(`${API}/api/chief/proposal/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId }),
+      });
+      set({ chiefProposedActions: [], chiefPendingMessageId: null });
+      toast('제안을 거절했습니다', 'info');
+    } catch {
+      // silent
+    }
   },
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
@@ -127,7 +170,7 @@ export const useStore = create<Store>((set, get) => ({
       content: message,
       createdAt: new Date().toISOString(),
     };
-    set((s) => ({ chiefMessages: [...s.chiefMessages, userMsg], chiefActions: [] }));
+    set((s) => ({ chiefMessages: [...s.chiefMessages, userMsg], chiefProposedActions: [], chiefExecutedActions: [], chiefPendingMessageId: null }));
     try {
       const res = await fetch(`${API}/api/chief/chat`, {
         method: 'POST',

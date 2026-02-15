@@ -12,7 +12,7 @@ import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgent
 import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
-import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse } from './chief-agent.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal } from './chief-agent.js';
 import { stmts } from './db.js';
 const app = express();
 app.use(cors());
@@ -102,6 +102,35 @@ app.post('/api/chief/chat', (req, res) => {
     else {
         // Demo/keyword mode: return synchronous result
         res.json(result);
+    }
+});
+app.post('/api/chief/proposal/approve', (req, res) => {
+    const { messageId, selectedIndices } = req.body || {};
+    if (!messageId || typeof messageId !== 'string') {
+        return res.status(400).json({ error: 'messageId is required' });
+    }
+    try {
+        const result = approveProposal(messageId, selectedIndices);
+        broadcast({ type: 'agents_update', payload: listAgents() });
+        broadcast({ type: 'tasks_update', payload: listTasks() });
+        broadcast({ type: 'meetings_update', payload: listMeetings() });
+        res.json({ ok: true, ...result });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/chief/proposal/reject', (req, res) => {
+    const { messageId } = req.body || {};
+    if (!messageId || typeof messageId !== 'string') {
+        return res.status(400).json({ error: 'messageId is required' });
+    }
+    try {
+        rejectProposal(messageId);
+        res.json({ ok: true });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
 });
 app.post('/api/chief/plan/apply', (req, res) => {
