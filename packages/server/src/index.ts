@@ -195,6 +195,79 @@ app.get('/api/failures', (_req, res) => {
   })));
 });
 
+// Export endpoints
+app.get('/api/export/json', (_req, res) => {
+  const agents = listAgents();
+  const tasks = listTasks();
+  const events = listEvents();
+  const counts = stmts.taskCounts.get() as Record<string, number>;
+  const avgRow = stmts.avgCompletionTime.get() as { avg_ms: number | null };
+  const perAgent = stmts.perAgentStats.all();
+  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-export.json"');
+  res.json({ exportedAt: new Date().toISOString(), agents, tasks, events, stats: { ...counts, avgCompletionMs: avgRow.avg_ms || 0, perAgent } });
+});
+
+app.get('/api/export/markdown', (_req, res) => {
+  const agents = listAgents();
+  const tasks = listTasks();
+  const counts = stmts.taskCounts.get() as Record<string, number>;
+  const avgRow = stmts.avgCompletionTime.get() as { avg_ms: number | null };
+  const perAgent = (stmts.perAgentStats.all() as Record<string, unknown>[]);
+  const total = (counts.total as number) || 0;
+  const completed = (counts.completed as number) || 0;
+  const failed = (counts.failed as number) || 0;
+  const pending = (counts.pending as number) || 0;
+
+  let md = `# AI Office Report\n\n`;
+  md += `**Generated:** ${new Date().toISOString()}\n\n`;
+  md += `## Summary\n\n`;
+  md += `| Metric | Value |\n|--------|-------|\n`;
+  md += `| Total Tasks | ${total} |\n`;
+  md += `| Completed | ${completed} |\n`;
+  md += `| Failed | ${failed} |\n`;
+  md += `| Pending | ${pending} |\n`;
+  md += `| Success Rate | ${total > 0 ? ((completed / total) * 100).toFixed(1) : 0}% |\n`;
+  md += `| Avg Completion | ${((avgRow.avg_ms || 0) / 1000).toFixed(1)}s |\n\n`;
+
+  md += `## Agents (${agents.length})\n\n`;
+  for (const a of agents) {
+    md += `- **${a.name}** — ${a.role} (${a.state})\n`;
+  }
+
+  md += `\n## Agent Performance\n\n`;
+  md += `| Agent | Role | Completed | Failed | Avg Time |\n|-------|------|-----------|--------|----------|\n`;
+  for (const r of perAgent) {
+    const avg = ((r as any).avg_time_ms || 0) / 1000;
+    md += `| ${(r as any).agent_name} | ${(r as any).agent_role} | ${(r as any).completed || 0} | ${(r as any).failed || 0} | ${avg.toFixed(1)}s |\n`;
+  }
+
+  md += `\n## Tasks\n\n`;
+  for (const t of tasks) {
+    md += `### ${t.title}\n- Status: ${t.status}\n`;
+    if (t.result) md += `- Result: ${(t.result as string).slice(0, 200)}\n`;
+    md += `\n`;
+  }
+
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-report.md"');
+  res.send(md);
+});
+
+app.get('/api/export/csv', (_req, res) => {
+  const tasks = listTasks();
+  const agents = listAgents();
+  const agentMap = new Map(agents.map(a => [a.id, a]));
+  const escape = (s: string) => `"${(s || '').replace(/"/g, '""')}"`;
+  let csv = 'id,title,status,assignee,created_at,updated_at,result_preview\n';
+  for (const t of tasks) {
+    const agent = t.assigneeId ? agentMap.get(t.assigneeId) : null;
+    csv += `${t.id},${escape(t.title)},${t.status},${escape(agent?.name || '')},${t.createdAt},${t.updatedAt},${escape(((t.result as string) || '').slice(0, 100))}\n`;
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-tasks.csv"');
+  res.send(csv);
+});
+
 // Health check
 app.get('/api/health', async (_req, res) => {
   const sessions = await listSessions();

@@ -6,11 +6,12 @@ import OfficeView from './components/OfficeView';
 import ActivityLog from './components/ActivityLog';
 import Dashboard from './components/Dashboard';
 import FailureTimeline from './components/FailureTimeline';
+import HistoryReplay from './components/HistoryReplay';
 import AgentDetailPanel from './components/AgentDetailPanel';
 import CommandInput from './components/CommandInput';
 import ToastContainer from './components/Toast';
 
-type View = 'office' | 'dashboard' | 'failures';
+type View = 'office' | 'dashboard' | 'failures' | 'history';
 
 export default function App() {
   const [view, setView] = useState<View>('office');
@@ -22,6 +23,7 @@ export default function App() {
     ['office', '🏢 Office'],
     ['dashboard', '📊 Dashboard'],
     ['failures', '⚠️ Failures'],
+    ['history', '🕐 History'],
   ];
 
   return (
@@ -80,6 +82,7 @@ export default function App() {
           )}
           {view === 'dashboard' && <Dashboard />}
           {view === 'failures' && <FailureTimeline />}
+          {view === 'history' && <HistoryReplay />}
           <CommandInput />
         </main>
       </div>
