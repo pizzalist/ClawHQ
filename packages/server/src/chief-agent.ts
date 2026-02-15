@@ -53,13 +53,21 @@ function formatActionList(actions: ChiefAction[]): string {
 function parseApprovalSelection(userMessage: string, total: number): number[] | null {
   if (total <= 0) return null;
   const msg = userMessage.trim().toLowerCase();
-  const numMatch = msg.match(/(\d+)\s*번?/);
+  // Only match "N번" or standalone number — exclude "N명" (count expressions)
+  const numMatch = msg.match(/(\d+)\s*번/);
   if (numMatch) {
     const idx = parseInt(numMatch[1], 10) - 1;
     if (idx >= 0 && idx < total) return [idx];
     return null;
   }
-  if (/^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)/i.test(msg)) return [0];
+  // Standalone number only (entire message is just a number)
+  if (/^\d+$/.test(msg)) {
+    const idx = parseInt(msg, 10) - 1;
+    if (idx >= 0 && idx < total) return [idx];
+    return null;
+  }
+  // Short approval words — only if message is very short (< 10 chars) to avoid false matches
+  if (msg.length < 10 && /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(msg)) return [0];
   return null;
 }
 
@@ -771,6 +779,10 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
       pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
       return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+    } else {
+      // User sent a new unrelated message — discard the pending proposal
+      pendingProposals.delete(pendingMessageId);
+      pendingProposalBySession.delete(sessionId);
     }
   }
 
