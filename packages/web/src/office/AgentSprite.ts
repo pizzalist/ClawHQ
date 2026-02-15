@@ -14,6 +14,7 @@ const ROLE_BODY_COLORS: Record<AgentRole, number> = {
 type PixelMap = string[];
 type Palette = Record<string, number>;
 type Facing = 'left' | 'right' | 'up' | 'down';
+type PmPose = 'front' | 'side' | 'back' | 'action';
 
 const PIXEL_SIZE = 2;
 const SPRITE_ORIGIN_X = -16;
@@ -170,6 +171,128 @@ const LOWER_WALK: Record<Facing, PixelMap[]> = {
   left: [LOWER_IDLE.left, LOWER_IDLE.left, LOWER_IDLE.left, LOWER_IDLE.left],
   right: [LOWER_IDLE.right, LOWER_IDLE.right, LOWER_IDLE.right, LOWER_IDLE.right],
 };
+
+const mirrorPixelMap = (map: PixelMap): PixelMap => map.map((row) => row.split('').reverse().join(''));
+
+const PM_UPPER_FRONT: PixelMap = [
+  '....hhhhhhhh....',
+  '...hhhhhhhhhh...',
+  '..hhhhhpphhhhh..',
+  '..hhhpmmppphhh..',
+  '..hhpffffffphh..',
+  '..hhffffffffhh..',
+  '..hhfnffffnfhh..',
+  '...hnnffffnnh...',
+  '....nnnnnnnn....',
+  '...tttttttttt...',
+  '..tttaatttaatt..',
+  '..tttaatttaatt..',
+  '..tttttttttttt..',
+  '..tttttttttttt..',
+  '...tttttttttt...',
+  '....tttttttt....',
+];
+
+const PM_UPPER_BACK: PixelMap = [
+  '....hhhhhhhh....',
+  '...hhhhhhhhhh...',
+  '..hhhhhpphhhhh..',
+  '..hhhppmmpphhh..',
+  '..hhpppppppphh..',
+  '..hhpphhhhpphh..',
+  '..hhphhhhhhphh..',
+  '...hphhhhhhph...',
+  '....nnnnnnnn....',
+  '...tttttttttt...',
+  '..tttaatttaatt..',
+  '..tttaatttaatt..',
+  '..tttttttttttt..',
+  '..tttttttttttt..',
+  '...tttttttttt...',
+  '....tttttttt....',
+];
+
+const PM_UPPER_SIDE_RIGHT: PixelMap = [
+  '....hhhhhhh.....',
+  '...hhhhhhhhh....',
+  '..hhhhppphhhh...',
+  '..hhhppmmphhh...',
+  '..hhpffffphhh...',
+  '..hhffffffphh...',
+  '..hhfnffffphh...',
+  '...hhnnnnnph....',
+  '....nnnnnnn.....',
+  '...ttttttttt....',
+  '..ttaattttttt...',
+  '..ttaattttttt...',
+  '..ttttttttttt...',
+  '..ttttttttttt...',
+  '...ttttttttt....',
+  '....ttttttt.....',
+];
+
+const PM_UPPER_ACTION: PixelMap = [
+  '....hhhhhhhh....',
+  '...hhhhhhhhhh...',
+  '..hhhpppppphhh..',
+  '..hhpmmppmmphh..',
+  '..hhpffffffphh..',
+  '..hhfffnnfffhh..',
+  '..hhffnnnnffhh..',
+  '...hnnffffnnh...',
+  '....nnttttnn....',
+  '...tttaaaattt...',
+  '..tttaatttaatt..',
+  '..tttttttttttt..',
+  '..ttttaatttttt..',
+  '..tttaaaattttt..',
+  '...tttttttttt...',
+  '....tttttttt....',
+];
+
+const PM_LOWER_FRONT: PixelMap = [
+  '....aaatttaa....',
+  '....aaatttaa....',
+  '....aaatttaa....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '...bbb....bbb...',
+];
+
+const PM_LOWER_BACK: PixelMap = [
+  '....tttaaatt....',
+  '....tttaaatt....',
+  '....tttaaatt....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '....ll....ll....',
+  '...bbb....bbb...',
+];
+
+const PM_LOWER_SIDE_RIGHT: PixelMap = [
+  '...aaatttttt....',
+  '...aaatttttt....',
+  '...aaatttttt....',
+  '...lll...lll....',
+  '...lll...lll....',
+  '...lll...lll....',
+  '...lll...lll....',
+  '..bbbb...bbb....',
+];
+
+const PM_LOWER_ACTION: PixelMap = [
+  '...aaattttt.....',
+  '...aatttttt.....',
+  '..aaattttttt....',
+  '..lll..llltt....',
+  '..lll...lltt....',
+  '..lll....ltt....',
+  '..lll....ltt....',
+  '.bbbb...bbbtt...',
+];
 
 const ROLE_PALETTES: Record<AgentRole, Palette> = {
   pm: {
@@ -336,7 +459,7 @@ export class AgentSprite {
     this.tickerFn = () => this.animate();
     PIXI.Ticker.shared.add(this.tickerFn);
 
-    this.redrawBody(false);
+    this.redrawBody(false, Date.now() / 1000);
     this.drawAccessory('idle');
     this.update(agent);
   }
@@ -361,8 +484,41 @@ export class AgentSprite {
     }
   }
 
-  private redrawBody(isMoving: boolean) {
-    const key = `${this.facing}:${this.walkFrame}:${isMoving ? 1 : 0}`;
+  private getPmPose(isMoving: boolean, t: number): PmPose {
+    if (this.state === 'working') {
+      return Math.sin(t * 7) > 0 ? 'action' : 'front';
+    }
+
+    if (isMoving) {
+      if (this.facing === 'up') return 'back';
+      if (this.facing === 'left' || this.facing === 'right') return 'side';
+    }
+
+    return 'front';
+  }
+
+  private getPmMaps(pose: PmPose): { upper: PixelMap; lower: PixelMap } {
+    if (pose === 'back') {
+      return { upper: PM_UPPER_BACK, lower: PM_LOWER_BACK };
+    }
+
+    if (pose === 'side') {
+      if (this.facing === 'left') {
+        return { upper: mirrorPixelMap(PM_UPPER_SIDE_RIGHT), lower: mirrorPixelMap(PM_LOWER_SIDE_RIGHT) };
+      }
+      return { upper: PM_UPPER_SIDE_RIGHT, lower: PM_LOWER_SIDE_RIGHT };
+    }
+
+    if (pose === 'action') {
+      return { upper: PM_UPPER_ACTION, lower: PM_LOWER_ACTION };
+    }
+
+    return { upper: PM_UPPER_FRONT, lower: PM_LOWER_FRONT };
+  }
+
+  private redrawBody(isMoving: boolean, t: number) {
+    const pmPose = this.role === 'pm' ? this.getPmPose(isMoving, t) : null;
+    const key = `${this.facing}:${this.walkFrame}:${isMoving ? 1 : 0}:${pmPose ?? 'default'}`;
     if (key === this.lastBodyKey) return;
     this.lastBodyKey = key;
 
@@ -375,6 +531,14 @@ export class AgentSprite {
     g.endFill();
 
     const palette = ROLE_PALETTES[this.role];
+
+    if (this.role === 'pm') {
+      const pmMaps = this.getPmMaps(pmPose ?? 'front');
+      this.drawPixelMap(g, pmMaps.upper, palette);
+      this.drawPixelMap(g, pmMaps.lower, palette, 16);
+      return;
+    }
+
     this.drawPixelMap(g, SPRITE_UPPER_MAP, palette);
 
     const lower = isMoving ? LOWER_WALK[this.facing][this.walkFrame % 4] : LOWER_IDLE[this.facing];
@@ -522,7 +686,7 @@ export class AgentSprite {
       }
     }
 
-    this.redrawBody(isMoving);
+    this.redrawBody(isMoving, t);
 
     if (isMoving) {
       this.body.position.y = Math.sin(t * 10) * 1.7;
