@@ -841,7 +841,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       sessionId: `chief-llm-${messageId}`,
       agentName: 'Chief',
       role: 'chief',
-      model: 'claude-sonnet-4',
+      model: 'openai-codex/gpt-5.3-codex',
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         try {
