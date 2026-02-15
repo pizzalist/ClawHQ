@@ -282,10 +282,15 @@ export function connectWS() {
         store.addEvent(evt);
         if (evt.type === 'task_completed') {
           const taskId = evt.taskId;
-          toast(evt.message, 'success', taskId ? {
-            label: '👁 View Result',
-            onClick: () => useStore.getState().setSelectedTask(taskId),
-          } : undefined);
+          // Only show toast for root tasks (not chain sub-tasks)
+          const task = taskId ? store.tasks.find(t => t.id === taskId) : null;
+          const isSubTask = task?.parentTaskId != null;
+          if (!isSubTask) {
+            toast(evt.message, 'success', taskId ? {
+              label: '👁 View Result',
+              onClick: () => useStore.getState().setSelectedTask(taskId),
+            } : undefined);
+          }
         } else if (evt.type === 'task_failed') {
           const taskId = evt.taskId;
           toast(evt.message, 'error', taskId ? {

@@ -9,7 +9,7 @@ import type { WSMessage, InitialState } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
@@ -159,6 +159,11 @@ app.get('/api/tasks/:id', (req, res) => {
     updatedAt: row.updated_at as string,
   };
   res.json(task);
+});
+
+app.get('/api/tasks/:id/chain', (req, res) => {
+  const children = getChainChildren(req.params.id);
+  res.json(children);
 });
 
 app.get('/api/tasks', (req, res) => {

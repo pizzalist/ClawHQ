@@ -205,6 +205,71 @@ function buildPrompt(name: string, role: string, task: Task): string {
   return parts.join('\n');
 }
 
+/** Walk up parentTaskId chain to find the root task */
+function findRootTask(taskId: string): Task {
+  let current = rowToTask(stmts.getTask.get(taskId) as Record<string, unknown>);
+  while (current.parentTaskId) {
+    const parent = stmts.getTask.get(current.parentTaskId) as Record<string, unknown> | undefined;
+    if (!parent) break;
+    current = rowToTask(parent);
+  }
+  return current;
+}
+
+/** Get all chain children of a task (direct + nested) in order */
+function getChainChildren(rootTaskId: string): Task[] {
+  const all = (stmts.listTasks.all() as Record<string, unknown>[]).map(rowToTask);
+  const children: Task[] = [];
+  const findChildren = (parentId: string) => {
+    const kids = all.filter(t => t.parentTaskId === parentId);
+    for (const kid of kids) {
+      children.push(kid);
+      findChildren(kid.id);
+    }
+  };
+  findChildren(rootTaskId);
+  return children;
+}
+
+/** When a chain step completes, update root task with progress or final result */
+function updateRootTaskFromChain(taskId: string, result: string) {
+  const currentTask = rowToTask(stmts.getTask.get(taskId) as Record<string, unknown>);
+  const rootTask = findRootTask(taskId);
+  if (rootTask.id === taskId) return; // This IS the root task
+
+  const agent = currentTask.assigneeId ? getAgent(currentTask.assigneeId) : null;
+  const nextRole = agent ? CHAIN_NEXT_ROLE[agent.role] : undefined;
+
+  if (!nextRole) {
+    // TERMINAL step (reviewer). Aggregate and complete root task.
+    const children = getChainChildren(rootTask.id);
+    const allSteps = [rootTask, ...children];
+
+    // Find dev step's result as the main deliverable
+    const devStep = allSteps.find(t => {
+      const a = t.assigneeId ? getAgent(t.assigneeId) : null;
+      return a?.role === 'developer';
+    });
+
+    const finalResult = devStep?.result || result;
+
+    // Update root task with final result and completed status
+    stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult, rootTask.id);
+
+    // Copy dev's deliverables to root task
+    try { createDeliverablesFromResult(rootTask.id, finalResult, 'developer'); } catch (e) { console.error('[deliverables] root copy error:', e); }
+
+    emitTaskEvent('task_completed', rootTask.assigneeId, rootTask.id, `Task "${rootTask.title}" completed (pipeline finished)`);
+  } else {
+    // Intermediate step — update root with progress
+    const children = getChainChildren(rootTask.id);
+    const completedSteps = 1 + children.filter(c => c.status === 'completed').length;
+    const totalSteps = 1 + Object.keys(CHAIN_NEXT_ROLE).length; // PM + Dev + Reviewer = 3
+    const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
+    stmts.updateTask.run(rootTask.assigneeId, 'in-progress', `⏳ Step ${completedSteps}/${totalSteps}: ${stepLabel} starting...`, rootTask.id);
+  }
+}
+
 function handleRunComplete(agentId: string, taskId: string, title: string, run: AgentRun) {
   try {
     const success = run.exitCode === 0;
@@ -228,6 +293,9 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
 
           // Auto-chain: spawn next step based on agent role
           spawnChainFollowUp(agentId, taskId, title, result);
+
+          // Update root task with chain progress/completion
+          updateRootTaskFromChain(taskId, result);
 
           // Return to idle after brief pause
           setTimeout(() => {
@@ -305,6 +373,8 @@ function spawnChainFollowUp(agentId: string, taskId: string, title: string, resu
     console.error('[task-queue] Chain follow-up error:', err);
   }
 }
+
+export { getChainChildren, findRootTask };
 
 export function listEvents(): AppEvent[] {
   return (stmts.listEvents.all() as Record<string, unknown>[]).map(row => ({

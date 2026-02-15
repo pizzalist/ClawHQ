@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
+import type { Task } from '@ai-office/shared';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 import DeliverableList from './deliverables/DeliverableList';
 
@@ -13,6 +14,26 @@ const STATUS_BADGE: Record<string, { bg: string; label: string }> = {
 
 import { formatDuration, formatElapsed, utcDate } from '../utils/time';
 
+/** Pipeline step config by role keyword in title */
+const STEP_CONFIG: Array<{ match: string; icon: string; label: string; role: string }> = [
+  { match: 'pm', role: 'pm', icon: '📋', label: 'PM Plan' },
+  { match: 'developer', role: 'developer', icon: '💻', label: 'Implementation' },
+  { match: 'reviewer', role: 'reviewer', icon: '🔍', label: 'Review' },
+];
+
+function getStepConfig(task: Task, agents: Array<{ id: string; name: string; role: string }>) {
+  const agent = task.assigneeId ? agents.find(a => a.id === task.assigneeId) : null;
+  if (agent) {
+    const config = STEP_CONFIG.find(s => s.role === agent.role);
+    if (config) return { ...config, agentName: agent.name };
+  }
+  // Fallback: check title
+  const titleLower = task.title.toLowerCase();
+  if (titleLower.includes('[plan]')) return { icon: '📋', label: 'PM Plan', role: 'pm', agentName: agent?.name || '?' };
+  if (titleLower.includes('[implement]')) return { icon: '💻', label: 'Implementation', role: 'developer', agentName: agent?.name || '?' };
+  if (titleLower.includes('[review]')) return { icon: '🔍', label: 'Review', role: 'reviewer', agentName: agent?.name || '?' };
+  return { icon: '📄', label: 'Step', role: 'unknown', agentName: agent?.name || '?' };
+}
 
 export default function TaskResultModal() {
   const selectedTaskId = useStore((s) => s.selectedTaskId);
@@ -22,6 +43,7 @@ export default function TaskResultModal() {
   const createTask = useStore((s) => s.createTask);
   const [copied, setCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
 
   if (!selectedTaskId) return null;
 
@@ -32,9 +54,44 @@ export default function TaskResultModal() {
   const status = STATUS_BADGE[task.status] || STATUS_BADGE.pending;
   const isWorking = task.status === 'in-progress';
 
+  // Find chain children for this task (if it's a root task)
+  const isRootTask = !task.parentTaskId;
+  const chainChildren = isRootTask
+    ? tasks.filter(t => {
+        // Walk up to find if this task's root is our task
+        let current = t;
+        while (current.parentTaskId) {
+          if (current.parentTaskId === task.id) return true;
+          const parent = tasks.find(p => p.id === current.parentTaskId);
+          if (!parent) break;
+          current = parent;
+        }
+        return false;
+      })
+    : [];
+  const hasChain = chainChildren.length > 0;
+
+  // Build pipeline steps: root task + children
+  const pipelineSteps = hasChain
+    ? [task, ...chainChildren].map((t, i) => ({
+        task: t,
+        stepNum: i + 1,
+        ...getStepConfig(t, agents),
+      }))
+    : [];
+
+  // Find dev step for preview
+  const devStep = pipelineSteps.find(s => s.role === 'developer')?.task;
+  const previewSource = devStep?.result || task.result;
+  const previewCode = previewSource ? extractPreviewableCode(previewSource) : null;
+
+  // Parse chain progress
+  const chainProgress = task.result?.match(/^⏳ Step (\d+)\/(\d+): (.+)$/);
+
   const handleCopy = () => {
-    if (task.result) {
-      navigator.clipboard.writeText(task.result);
+    const textToCopy = devStep?.result || task.result;
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -42,10 +99,18 @@ export default function TaskResultModal() {
 
   const handleRunAgain = async () => {
     setSelectedTask(null);
+    // For root tasks, re-create with the original assignee (PM)
     await createTask(task.title, task.description, task.assigneeId);
   };
 
-  const previewCode = task.result ? extractPreviewableCode(task.result) : null;
+  const toggleStep = (id: string) => {
+    setExpandedSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const close = () => setSelectedTask(null);
 
@@ -56,7 +121,7 @@ export default function TaskResultModal() {
   return (
     <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center" onClick={close}>
       <div
-        className="bg-[#1a1a2e] rounded-xl border border-gray-700/50 w-[640px] max-w-[92vw] max-h-[85vh] flex flex-col shadow-2xl"
+        className="bg-[#1a1a2e] rounded-xl border border-gray-700/50 w-[700px] max-w-[92vw] max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -66,6 +131,7 @@ export default function TaskResultModal() {
             <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${status.bg}`}>{status.label}</span>
               {agent && <span>👤 {agent.name}</span>}
+              {hasChain && <span className="text-purple-400">🔗 Pipeline ({pipelineSteps.length} steps)</span>}
               <span>📅 {utcDate(task.createdAt).toLocaleString()}</span>
               {task.status === 'completed' && (
                 <span>⏱ {formatDuration(task.createdAt, task.updatedAt)}</span>
@@ -84,7 +150,40 @@ export default function TaskResultModal() {
             </div>
           )}
 
-          {isWorking && (
+          {/* Chain progress indicator */}
+          {isWorking && hasChain && chainProgress && (
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-blue-400 text-sm mb-2">
+                <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                <span>Pipeline in progress — {chainProgress[3]}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                    style={{ width: `${(parseInt(chainProgress[1]) / parseInt(chainProgress[2])) * 100}%` }}
+                  />
+                </div>
+                <span className="text-xs text-blue-400 tabular-nums">{chainProgress[1]}/{chainProgress[2]}</span>
+              </div>
+              {/* Step indicators */}
+              <div className="flex gap-2 mt-2">
+                {pipelineSteps.map((step, i) => {
+                  const isDone = step.task.status === 'completed';
+                  const isActive = step.task.status === 'in-progress';
+                  return (
+                    <div key={step.task.id} className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${isDone ? 'bg-green-500/20 text-green-400' : isActive ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-700/30 text-gray-500'}`}>
+                      {step.icon} {step.label}
+                      {isDone && ' ✓'}
+                      {isActive && <span className="inline-block w-2 h-2 border border-blue-400 border-t-transparent rounded-full animate-spin" />}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {isWorking && !hasChain && (
             <div className="flex items-center gap-2 text-blue-400 text-sm py-4">
               <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               <span>Working...</span>
@@ -92,13 +191,53 @@ export default function TaskResultModal() {
             </div>
           )}
 
+          {/* Pipeline section for completed chain tasks */}
+          {hasChain && task.status === 'completed' && (
+            <div>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Pipeline Steps</h3>
+              <div className="space-y-1">
+                {pipelineSteps.map((step) => {
+                  const isExpanded = expandedSteps.has(step.task.id);
+                  const isDev = step.role === 'developer';
+                  return (
+                    <div key={step.task.id} className="border border-gray-700/30 rounded-lg overflow-hidden">
+                      <button
+                        onClick={() => toggleStep(step.task.id)}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-700/20 transition-colors"
+                      >
+                        <span className="text-gray-500 text-xs w-4">{isExpanded ? '▼' : '▶'}</span>
+                        <span>{step.icon}</span>
+                        <span className="font-medium text-gray-200">Step {step.stepNum}: {step.label}</span>
+                        <span className="text-gray-500 text-xs">({step.agentName})</span>
+                        {isDev && <span className="ml-auto text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">Main Output</span>}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${step.task.status === 'completed' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                          {step.task.status === 'completed' ? '✅' : step.task.status}
+                        </span>
+                      </button>
+                      {isExpanded && step.task.result && (
+                        <div className="px-4 pb-3 border-t border-gray-700/20">
+                          <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-3 mt-2 text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed max-h-[30vh] overflow-y-auto">
+                            {step.task.result}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {task.status === 'completed' && (
             <DeliverableList taskId={task.id} />
           )}
 
-          {task.result && (
+          {/* Show raw output: for chain tasks show dev result, for single tasks show task result */}
+          {task.result && !task.result.startsWith('⏳') && (
             <div>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Raw Output</h3>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                {hasChain ? 'Final Deliverable' : 'Raw Output'}
+              </h3>
               <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 whitespace-pre-wrap font-mono leading-relaxed max-h-[40vh] overflow-y-auto">
                 {task.result}
               </div>
@@ -120,7 +259,7 @@ export default function TaskResultModal() {
               ▶️ Run Preview
             </button>
           )}
-          {task.result && (
+          {task.result && !task.result.startsWith('⏳') && (
             <button
               onClick={handleCopy}
               className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg hover:bg-gray-700/30 transition-colors"
