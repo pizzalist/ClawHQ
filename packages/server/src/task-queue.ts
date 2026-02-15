@@ -105,38 +105,47 @@ export function stopAgentTask(agentId: string): void {
   resetAgent(agentId);
 }
 
+let isProcessingQueue = false;
+
 /**
  * Process the task queue: assign pending tasks to idle agents.
  * For real mode, spawns OpenClaw agent sessions.
  * For demo mode, uses simulated timers.
  */
 export function processQueue() {
-  const activeCount = (stmts.activeTasks.get() as { count: number }).count;
-  if (activeCount >= MAX_CONCURRENT_TASKS) return;
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
 
-  const pending = (stmts.pendingTasks.all() as Record<string, unknown>[]).map(rowToTask);
-  if (pending.length === 0) return;
+  try {
+    const activeCount = (stmts.activeTasks.get() as { count: number }).count;
+    if (activeCount >= MAX_CONCURRENT_TASKS) return;
 
-  const idleAgents = listAgents().filter(a => a.state === 'idle');
-  if (idleAgents.length === 0) return;
+    const pending = (stmts.pendingTasks.all() as Record<string, unknown>[]).map(rowToTask);
+    if (pending.length === 0) return;
 
-  let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
-  const usedAgents = new Set<string>();
+    const idleAgents = listAgents().filter(a => a.state === 'idle');
+    if (idleAgents.length === 0) return;
 
-  for (const task of pending) {
-    if (slotsLeft <= 0) break;
-    // If task has a preferred assignee, try them first
-    let agent;
-    if (task.assigneeId) {
-      agent = idleAgents.find(a => a.id === task.assigneeId && !usedAgents.has(a.id));
-      if (!agent) continue; // preferred agent not idle, skip for now
-    } else {
-      agent = idleAgents.find(a => !usedAgents.has(a.id));
-      if (!agent) break;
+    let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
+    const usedAgents = new Set<string>();
+
+    for (const task of pending) {
+      if (slotsLeft <= 0) break;
+      // If task has a preferred assignee, try them first
+      let agent;
+      if (task.assigneeId) {
+        agent = idleAgents.find(a => a.id === task.assigneeId && !usedAgents.has(a.id));
+        if (!agent) continue; // preferred agent not idle, skip for now
+      } else {
+        agent = idleAgents.find(a => !usedAgents.has(a.id));
+        if (!agent) break;
+      }
+      usedAgents.add(agent.id);
+      assignTask(agent.id, task);
+      slotsLeft--;
     }
-    usedAgents.add(agent.id);
-    assignTask(agent.id, task);
-    slotsLeft--;
+  } finally {
+    isProcessingQueue = false;
   }
 }
 
@@ -249,19 +258,31 @@ function updateRootTaskFromChain(taskId: string, result: string) {
     const children = getChainChildren(rootTask.id);
     const allSteps = [rootTask, ...children];
 
-    // Find dev step's result as the main deliverable
+    // Find the main deliverable: developer's result if exists, otherwise PM's (root) result.
+    // The reviewer's result is an assessment, NOT the deliverable itself.
     const devStep = allSteps.find(t => {
       const a = t.assigneeId ? getAgent(t.assigneeId) : null;
       return a?.role === 'developer';
     });
+    const pmStep = allSteps.find(t => {
+      const a = t.assigneeId ? getAgent(t.assigneeId) : null;
+      return a?.role === 'pm';
+    });
 
-    const finalResult = devStep?.result || result;
+    // Priority: developer result > PM/root result > reviewer result (last resort)
+    const finalResult = devStep?.result || pmStep?.result || rootTask.result || result;
+    const mainRole = devStep ? 'developer' : (pmStep ? 'pm' : 'reviewer');
+
+    // Append reviewer assessment as metadata
+    const reviewerNote = result !== finalResult
+      ? `\n\n---\n## 리뷰어 평가\n${result.slice(0, 1000)}`
+      : '';
 
     // Update root task with final result and completed status
-    stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult, rootTask.id);
+    stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult + reviewerNote, rootTask.id);
 
-    // Copy dev's deliverables to root task
-    try { createDeliverablesFromResult(rootTask.id, finalResult, 'developer'); } catch (e) { console.error('[deliverables] root copy error:', e); }
+    // Copy main deliverables to root task
+    try { createDeliverablesFromResult(rootTask.id, finalResult, mainRole); } catch (e) { console.error('[deliverables] root copy error:', e); }
 
     emitTaskEvent('task_completed', rootTask.assigneeId, rootTask.id, `Task "${rootTask.title}" completed (pipeline finished)`);
   } else {

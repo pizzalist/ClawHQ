@@ -92,7 +92,7 @@ const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
  */
 export function startPlanningMeeting(title: string, description: string, participantIds: string[], character?: MeetingCharacter): Meeting {
   const meeting = createMeeting(title, description, 'planning', participantIds, character);
-  pendingContributions.set(meeting.id, { total: participantIds.length, done: 0 });
+  let startedContributions = 0;
 
   for (const agentId of participantIds) {
     const agent = getAgent(agentId);
@@ -130,6 +130,13 @@ ${roleInfo.label} 관점에서 전문적인 분석과 의견을 공유해주세�
       prompt,
       onComplete: (run) => handleContributionComplete(meeting.id, agentId, agent.name, agent.role, run),
     });
+    startedContributions++;
+  }
+
+  pendingContributions.set(meeting.id, { total: startedContributions, done: 0 });
+  if (startedContributions === 0) {
+    pendingContributions.delete(meeting.id);
+    finalizeMeeting(meeting.id);
   }
 
   return meeting;

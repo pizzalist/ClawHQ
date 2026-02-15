@@ -4,7 +4,7 @@ import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
 import { stmts } from './db.js';
-import { spawnAgentSession, isDemoMode, parseAgentOutput, type AgentRun } from './openclaw-adapter.js';
+import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
 const MAX_HISTORY = 50;
 const MAX_COUNT_PER_ROLE = 5;
@@ -107,7 +107,7 @@ export function notifyChief(notification: ChiefNotification) {
  */
 export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>): { reply: string } {
   const action = actionId;
-  let reply = '처리되었습니다.';
+  let reply: string;
 
   if (action === 'approve' || actionId.startsWith('approve')) {
     reply = '✅ 확정되었습니다. 다음 단계로 진행합니다.';
@@ -118,6 +118,8 @@ export function handleChiefAction(notificationId: string, actionId: string, para
   } else if (action === 'select_proposal') {
     const proposalAgent = params?.agentName || '선택된 안';
     reply = `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`;
+  } else {
+    throw new Error(`Unsupported actionId: ${actionId}`);
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -803,32 +805,36 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       model: 'claude-sonnet-4',
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
-        const rawOutput = parseAgentOutput(run.stdout);
-        const { actions: proposedActions, cleanText } = parseActions(rawOutput);
+        try {
+          const rawOutput = parseAgentOutput(run.stdout);
+          const { actions: proposedActions, cleanText } = parseActions(rawOutput);
 
-        const baseReply = cleanText || '처리가 완료되었습니다.';
-        const reply = `${baseReply}${formatActionList(proposedActions)}`;
-        pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+          const baseReply = cleanText || '처리가 완료되었습니다.';
+          const reply = `${baseReply}${formatActionList(proposedActions)}`;
+          pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
-        // Store proposed actions for approval — do NOT execute yet
-        if (proposedActions.length > 0) {
-          pendingProposals.set(messageId, proposedActions);
-          pendingProposalBySession.set(sessionId, messageId);
-        }
+          // Store proposed actions for approval — do NOT execute yet
+          if (proposedActions.length > 0) {
+            pendingProposals.set(messageId, proposedActions);
+            pendingProposalBySession.set(sessionId, messageId);
+          }
 
-        const response: ChiefResponse = {
-          messageId,
-          reply,
-          actions: proposedActions,  // proposed, not executed
-          state: {
-            agents: listAgents(),
-            tasks: listTasks(),
-            meetings: listMeetings(),
-          },
-        };
+          const response: ChiefResponse = {
+            messageId,
+            reply,
+            actions: proposedActions,  // proposed, not executed
+            state: {
+              agents: listAgents(),
+              tasks: listTasks(),
+              meetings: listMeetings(),
+            },
+          };
 
-        if (responseCallback) {
-          responseCallback(sessionId, response);
+          if (responseCallback) {
+            responseCallback(sessionId, response);
+          }
+        } finally {
+          cleanupRun(run.sessionId);
         }
       },
     });
