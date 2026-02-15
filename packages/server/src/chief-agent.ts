@@ -749,7 +749,7 @@ function keywordChat(sessionId: string, userMessage: string) {
   }
 
   // 2) Cancel pending tasks quickly
-  if (/(전체\s*취소|모두\s*취소|대기\s*작업\s*취소|cancel all|cancel pending)/i.test(lower)) {
+  if (/(전체\s*취소|전부\s*취소|모두\s*취소|대기\s*작업.*취소|취소.*대기|cancel all|cancel pending)/i.test(lower)) {
     const result = stmts.cancelAllPending.run();
     const count = result.changes;
     return {
@@ -759,7 +759,7 @@ function keywordChat(sessionId: string, userMessage: string) {
   }
 
   // 3) Reset busy agents quickly
-  if (/(에이전트\s*리셋|agent\s*reset|전체\s*리셋|reset all)/i.test(lower)) {
+  if (/(에이전트.*리셋|agent\s*reset|전체\s*리셋|전부\s*리셋|reset all)/i.test(lower)) {
     const resettable = agents.filter(a => a.state !== 'idle');
     for (const a of resettable) {
       stmts.updateAgentState.run('idle', null, null, a.id);

@@ -98,7 +98,7 @@ app.post('/api/agents', (req, res) => {
 });
 app.post('/api/chief/chat', (req, res) => {
     const { message, sessionId } = req.body || {};
-    if (!message || typeof message !== 'string') {
+    if (typeof message !== 'string' || message.trim().length === 0) {
         return res.status(400).json({ error: 'message is required' });
     }
     const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0

@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { MAX_CONCURRENT_TASKS, CHAIN_NEXT_ROLE, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
 import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
@@ -96,41 +96,50 @@ export function stopAgentTask(agentId) {
     // Reset agent to idle
     resetAgent(agentId);
 }
+let isProcessingQueue = false;
 /**
  * Process the task queue: assign pending tasks to idle agents.
  * For real mode, spawns OpenClaw agent sessions.
  * For demo mode, uses simulated timers.
  */
 export function processQueue() {
-    const activeCount = stmts.activeTasks.get().count;
-    if (activeCount >= MAX_CONCURRENT_TASKS)
+    if (isProcessingQueue)
         return;
-    const pending = stmts.pendingTasks.all().map(rowToTask);
-    if (pending.length === 0)
-        return;
-    const idleAgents = listAgents().filter(a => a.state === 'idle');
-    if (idleAgents.length === 0)
-        return;
-    let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
-    const usedAgents = new Set();
-    for (const task of pending) {
-        if (slotsLeft <= 0)
-            break;
-        // If task has a preferred assignee, try them first
-        let agent;
-        if (task.assigneeId) {
-            agent = idleAgents.find(a => a.id === task.assigneeId && !usedAgents.has(a.id));
-            if (!agent)
-                continue; // preferred agent not idle, skip for now
-        }
-        else {
-            agent = idleAgents.find(a => !usedAgents.has(a.id));
-            if (!agent)
+    isProcessingQueue = true;
+    try {
+        const activeCount = stmts.activeTasks.get().count;
+        if (activeCount >= MAX_CONCURRENT_TASKS)
+            return;
+        const pending = stmts.pendingTasks.all().map(rowToTask);
+        if (pending.length === 0)
+            return;
+        const idleAgents = listAgents().filter(a => a.state === 'idle');
+        if (idleAgents.length === 0)
+            return;
+        let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
+        const usedAgents = new Set();
+        for (const task of pending) {
+            if (slotsLeft <= 0)
                 break;
+            // If task has a preferred assignee, try them first
+            let agent;
+            if (task.assigneeId) {
+                agent = idleAgents.find(a => a.id === task.assigneeId && !usedAgents.has(a.id));
+                if (!agent)
+                    continue; // preferred agent not idle, skip for now
+            }
+            else {
+                agent = idleAgents.find(a => !usedAgents.has(a.id));
+                if (!agent)
+                    break;
+            }
+            usedAgents.add(agent.id);
+            assignTask(agent.id, task);
+            slotsLeft--;
         }
-        usedAgents.add(agent.id);
-        assignTask(agent.id, task);
-        slotsLeft--;
+    }
+    finally {
+        isProcessingQueue = false;
     }
 }
 function assignTask(agentId, task) {
@@ -205,6 +214,55 @@ function findRootTask(taskId) {
     }
     return current;
 }
+function isReportOnlyDeliverable(types) {
+    return !!types && types.length > 0 && types.every(t => REPORT_ONLY_TYPES.includes(t));
+}
+function needsReviewByIntent(task) {
+    const text = `${task.title}\n${task.description}`.toLowerCase();
+    return /(리뷰|검토|review|qa|test|테스트|품질|검증)/i.test(text);
+}
+function isAdministrativeTask(task) {
+    const text = `${task.title}\n${task.description}`.toLowerCase();
+    const managementIntent = /(취소|cancel|상태\s*조회|status\s*check|진행\s*상태|대기열|queue\s*status|reset|중지|stop\s+task|재시작|restart)/i.test(text);
+    const reportOnly = isReportOnlyDeliverable(task.expectedDeliverables);
+    return managementIntent && reportOnly;
+}
+export function decideNextRoleByIntent(task, currentRole) {
+    if (isAdministrativeTask(task))
+        return undefined;
+    const reportOnly = isReportOnlyDeliverable(task.expectedDeliverables);
+    const reviewRequested = needsReviewByIntent(task);
+    if (currentRole === 'pm') {
+        // report/document: PM -> Reviewer only when explicitly asked
+        if (reportOnly)
+            return reviewRequested ? 'reviewer' : undefined;
+        // implementation/web/code/api/design/data: PM -> Developer
+        return 'developer';
+    }
+    if (currentRole === 'developer') {
+        // Developer -> Reviewer only when explicitly requested by intent
+        return reviewRequested ? 'reviewer' : undefined;
+    }
+    return undefined;
+}
+function resolveNextRoleForTask(taskId, currentRole) {
+    const rootTask = findRootTask(taskId);
+    return decideNextRoleByIntent(rootTask, currentRole);
+}
+function getPlannedStepCount(rootTask) {
+    const rootAgent = rootTask.assigneeId ? getAgent(rootTask.assigneeId) : null;
+    const startRole = rootAgent?.role;
+    if (!startRole)
+        return 1;
+    let count = 1;
+    const next1 = resolveNextRoleForTask(rootTask.id, startRole);
+    if (next1)
+        count += 1;
+    const next2 = next1 ? resolveNextRoleForTask(rootTask.id, next1) : undefined;
+    if (next2)
+        count += 1;
+    return count;
+}
 /** Get all chain children of a task (direct + nested) in order */
 function getChainChildren(rootTaskId) {
     const all = stmts.listTasks.all().map(rowToTask);
@@ -226,22 +284,30 @@ function updateRootTaskFromChain(taskId, result) {
     if (rootTask.id === taskId)
         return; // This IS the root task
     const agent = currentTask.assigneeId ? getAgent(currentTask.assigneeId) : null;
-    const nextRole = agent ? CHAIN_NEXT_ROLE[agent.role] : undefined;
+    const nextRole = agent ? resolveNextRoleForTask(taskId, agent.role) : undefined;
     if (!nextRole) {
-        // TERMINAL step (reviewer). Aggregate and complete root task.
+        // TERMINAL step. Aggregate and complete root task.
         const children = getChainChildren(rootTask.id);
         const allSteps = [rootTask, ...children];
-        // Find dev step's result as the main deliverable
+        // Prefer concrete implementation output when present.
         const devStep = allSteps.find(t => {
             const a = t.assigneeId ? getAgent(t.assigneeId) : null;
             return a?.role === 'developer';
         });
-        const finalResult = devStep?.result || result;
-        // Update root task with final result and completed status
-        stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult, rootTask.id);
-        // Copy dev's deliverables to root task
+        const pmStep = allSteps.find(t => {
+            const a = t.assigneeId ? getAgent(t.assigneeId) : null;
+            return a?.role === 'pm';
+        });
+        // Priority: developer result > PM/root result > current result
+        const finalResult = devStep?.result || pmStep?.result || rootTask.result || result;
+        const mainRole = devStep ? 'developer' : (pmStep ? 'pm' : 'reviewer');
+        // If terminal step was reviewer and reviewer text differs, append as assessment note.
+        const reviewerNote = (agent?.role === 'reviewer' && result !== finalResult)
+            ? `\n\n---\n## 리뷰어 평가\n${result.slice(0, 1000)}`
+            : '';
+        stmts.updateTask.run(rootTask.assigneeId, 'completed', finalResult + reviewerNote, rootTask.id);
         try {
-            createDeliverablesFromResult(rootTask.id, finalResult, 'developer');
+            createDeliverablesFromResult(rootTask.id, finalResult, mainRole);
         }
         catch (e) {
             console.error('[deliverables] root copy error:', e);
@@ -252,7 +318,7 @@ function updateRootTaskFromChain(taskId, result) {
         // Intermediate step — update root with progress
         const children = getChainChildren(rootTask.id);
         const completedSteps = 1 + children.filter(c => c.status === 'completed').length;
-        const totalSteps = 1 + Object.keys(CHAIN_NEXT_ROLE).length; // PM + Dev + Reviewer = 3
+        const totalSteps = getPlannedStepCount(rootTask);
         const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
         stmts.updateTask.run(rootTask.assigneeId, 'in-progress', `⏳ Step ${completedSteps}/${totalSteps}: ${stepLabel} starting...`, rootTask.id);
     }
@@ -282,11 +348,22 @@ function handleRunComplete(agentId, taskId, title, run) {
                     catch (e) {
                         console.error('[deliverables] parse error:', e);
                     }
-                    emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
-                    // Auto-chain: spawn next step based on agent role
-                    spawnChainFollowUp(agentId, taskId, title, result);
+                    // Auto-chain: spawn conditional next step (intent/type-based)
+                    const chain = spawnChainFollowUp(agentId, taskId, title, result);
+                    const currentTask = rowToTask(stmts.getTask.get(taskId));
+                    const isRootTask = !currentTask.parentTaskId;
+                    // Only emit task_completed for root when no follow-up chain was spawned.
+                    if (!(isRootTask && chain.spawned)) {
+                        emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
+                    }
                     // Update root task with chain progress/completion
                     updateRootTaskFromChain(taskId, result);
+                    if (isRootTask && chain.spawned && chain.nextRole) {
+                        const rootTask = rowToTask(stmts.getTask.get(taskId));
+                        const totalSteps = getPlannedStepCount(rootTask);
+                        const stepLabel = CHAIN_STEP_LABELS[chain.nextRole] || chain.nextRole;
+                        stmts.updateTask.run(agentId, 'in-progress', `⏳ Step 1/${totalSteps}: ${stepLabel} starting...`, taskId);
+                    }
                     // Return to idle after brief pause
                     setTimeout(() => {
                         try {
@@ -323,43 +400,23 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
     try {
         const agent = getAgent(agentId);
         if (!agent)
-            return;
-        let nextRole = CHAIN_NEXT_ROLE[agent.role];
+            return { spawned: false };
+        const nextRole = resolveNextRoleForTask(taskId, agent.role);
         if (!nextRole)
-            return; // No next step (e.g. reviewer is terminal)
-        // Skip Developer for report-only tasks (PM → Reviewer directly)
-        if (nextRole === 'developer' && agent.role === 'pm') {
-            const rootTask = findRootTask(taskId);
-            const expected = rootTask.expectedDeliverables || [];
-            const isReportOnly = expected.length > 0 && expected.every(t => REPORT_ONLY_TYPES.includes(t));
-            if (isReportOnly) {
-                // Skip developer, go straight to reviewer
-                nextRole = 'reviewer';
-            }
-        }
+            return { spawned: false }; // Conditional chain says stop here
         // Find an agent with the next role
         const nextAgentRow = stmts.findAgentByRole.get(nextRole);
         if (!nextAgentRow)
-            return; // No agent with that role exists
+            return { spawned: false }; // No agent with that role exists
         const nextAgentId = nextAgentRow.id;
         const nextAgentName = nextAgentRow.name;
         const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
         const prevStepLabel = CHAIN_STEP_LABELS[agent.role] || agent.role;
         const chainTitle = `[${stepLabel}] ${title}`;
         const chainDesc = `Auto-chained from ${agent.name}'s ${prevStepLabel} step.\n\nPrevious result:\n${result.slice(0, 1000)}`;
-        // Carry the original expected deliverable from the parent task to the chained task.
-        // E.g. user asked for 'web' → PM produces 'report' → Developer should inherit 'web'.
-        // Walk up to the root task to find the original expected deliverable.
-        const currentTask = rowToTask(stmts.getTask.get(taskId));
-        let rootTask = currentTask;
-        while (rootTask.parentTaskId) {
-            const parent = stmts.getTask.get(rootTask.parentTaskId);
-            if (!parent)
-                break;
-            rootTask = rowToTask(parent);
-        }
+        // Carry original expected deliverable from root task and clamp to next role.
+        const rootTask = findRootTask(taskId);
         const originalExpected = rootTask.expectedDeliverables;
-        // Use original type if the next agent's role allows it; otherwise role-aware detect
         let chainedDeliverables;
         if (originalExpected && originalExpected.length > 0) {
             const nextAgent = getAgent(nextAgentId);
@@ -369,9 +426,11 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         }
         const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables);
         emitTaskEvent('chain_spawned', nextAgentId, newTask.id, `🔗 Chain: ${agent.name} (${prevStepLabel}) → ${nextAgentName} (${stepLabel})`);
+        return { spawned: true, nextRole };
     }
     catch (err) {
         console.error('[task-queue] Chain follow-up error:', err);
+        return { spawned: false };
     }
 }
 export { getChainChildren, findRootTask };

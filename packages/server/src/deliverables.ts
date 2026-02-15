@@ -117,7 +117,7 @@ export function parseResultToArtifacts(result: string): ParsedArtifact[] {
   }
   textOutsideBlocks = textOutsideBlocks.trim();
 
-  if (textOutsideBlocks.length > 100) {
+  if (textOutsideBlocks.length > 30) {
     // Markdown with headers → report
     const hasHeaders = /^#{1,3}\s+/m.test(textOutsideBlocks);
     const hasSections = (textOutsideBlocks.match(/^#{1,3}\s+/gm) || []).length >= 2;
