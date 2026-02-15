@@ -7,11 +7,12 @@ import ActivityLog from './components/ActivityLog';
 import Dashboard from './components/Dashboard';
 import FailureTimeline from './components/FailureTimeline';
 import HistoryReplay from './components/HistoryReplay';
+import WorkflowDAG from './components/WorkflowDAG';
 import AgentDetailPanel from './components/AgentDetailPanel';
 import CommandInput from './components/CommandInput';
 import ToastContainer from './components/Toast';
 
-type View = 'office' | 'dashboard' | 'failures' | 'history';
+type View = 'office' | 'dashboard' | 'workflow' | 'failures' | 'history';
 
 export default function App() {
   const [view, setView] = useState<View>('office');
@@ -22,6 +23,7 @@ export default function App() {
   const tabs: [View, string][] = [
     ['office', '🏢 Office'],
     ['dashboard', '📊 Dashboard'],
+    ['workflow', '🔗 Workflow'],
     ['failures', '⚠️ Failures'],
     ['history', '🕐 History'],
   ];
@@ -81,6 +83,7 @@ export default function App() {
             </>
           )}
           {view === 'dashboard' && <Dashboard />}
+          {view === 'workflow' && <WorkflowDAG />}
           {view === 'failures' && <FailureTimeline />}
           {view === 'history' && <HistoryReplay />}
           <CommandInput />

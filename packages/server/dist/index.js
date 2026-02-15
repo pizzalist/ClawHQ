@@ -6,7 +6,8 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { listAgents, createAgent, deleteAgent, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
+import { TEAM_PRESETS } from '@ai-office/shared';
+import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask } from './task-queue.js';
 import { stmts } from './db.js';
 const app = express();
@@ -87,6 +88,26 @@ app.post('/api/tasks', (req, res) => {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
 });
+// Presets
+app.get('/api/presets', (_req, res) => {
+    res.json(TEAM_PRESETS);
+});
+app.post('/api/presets/apply', (req, res) => {
+    const { presetId } = req.body;
+    const preset = TEAM_PRESETS.find(p => p.id === presetId);
+    if (!preset) {
+        return res.status(400).json({ error: `Unknown preset: ${presetId}` });
+    }
+    try {
+        deleteAllAgents();
+        const created = preset.agents.map(a => createAgent(a.name, a.role, a.model));
+        broadcast({ type: 'agents_update', payload: listAgents() });
+        res.json({ ok: true, agents: created });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
 // Agent control endpoints
 app.post('/api/agents/:id/stop', (req, res) => {
     try {
@@ -157,6 +178,72 @@ app.get('/api/failures', (_req, res) => {
         error: r.error || 'Unknown error',
         failedAt: r.failed_at,
     })));
+});
+// Export endpoints
+app.get('/api/export/json', (_req, res) => {
+    const agents = listAgents();
+    const tasks = listTasks();
+    const events = listEvents();
+    const counts = stmts.taskCounts.get();
+    const avgRow = stmts.avgCompletionTime.get();
+    const perAgent = stmts.perAgentStats.all();
+    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-export.json"');
+    res.json({ exportedAt: new Date().toISOString(), agents, tasks, events, stats: { ...counts, avgCompletionMs: avgRow.avg_ms || 0, perAgent } });
+});
+app.get('/api/export/markdown', (_req, res) => {
+    const agents = listAgents();
+    const tasks = listTasks();
+    const counts = stmts.taskCounts.get();
+    const avgRow = stmts.avgCompletionTime.get();
+    const perAgent = stmts.perAgentStats.all();
+    const total = counts.total || 0;
+    const completed = counts.completed || 0;
+    const failed = counts.failed || 0;
+    const pending = counts.pending || 0;
+    let md = `# AI Office Report\n\n`;
+    md += `**Generated:** ${new Date().toISOString()}\n\n`;
+    md += `## Summary\n\n`;
+    md += `| Metric | Value |\n|--------|-------|\n`;
+    md += `| Total Tasks | ${total} |\n`;
+    md += `| Completed | ${completed} |\n`;
+    md += `| Failed | ${failed} |\n`;
+    md += `| Pending | ${pending} |\n`;
+    md += `| Success Rate | ${total > 0 ? ((completed / total) * 100).toFixed(1) : 0}% |\n`;
+    md += `| Avg Completion | ${((avgRow.avg_ms || 0) / 1000).toFixed(1)}s |\n\n`;
+    md += `## Agents (${agents.length})\n\n`;
+    for (const a of agents) {
+        md += `- **${a.name}** — ${a.role} (${a.state})\n`;
+    }
+    md += `\n## Agent Performance\n\n`;
+    md += `| Agent | Role | Completed | Failed | Avg Time |\n|-------|------|-----------|--------|----------|\n`;
+    for (const r of perAgent) {
+        const avg = (r.avg_time_ms || 0) / 1000;
+        md += `| ${r.agent_name} | ${r.agent_role} | ${r.completed || 0} | ${r.failed || 0} | ${avg.toFixed(1)}s |\n`;
+    }
+    md += `\n## Tasks\n\n`;
+    for (const t of tasks) {
+        md += `### ${t.title}\n- Status: ${t.status}\n`;
+        if (t.result)
+            md += `- Result: ${t.result.slice(0, 200)}\n`;
+        md += `\n`;
+    }
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-report.md"');
+    res.send(md);
+});
+app.get('/api/export/csv', (_req, res) => {
+    const tasks = listTasks();
+    const agents = listAgents();
+    const agentMap = new Map(agents.map(a => [a.id, a]));
+    const escape = (s) => `"${(s || '').replace(/"/g, '""')}"`;
+    let csv = 'id,title,status,assignee,created_at,updated_at,result_preview\n';
+    for (const t of tasks) {
+        const agent = t.assigneeId ? agentMap.get(t.assigneeId) : null;
+        csv += `${t.id},${escape(t.title)},${t.status},${escape(agent?.name || '')},${t.createdAt},${t.updatedAt},${escape((t.result || '').slice(0, 100))}\n`;
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-tasks.csv"');
+    res.send(csv);
 });
 // Health check
 app.get('/api/health', async (_req, res) => {
