@@ -82,6 +82,23 @@ export function transitionAgent(id: string, newState: AgentState, taskId?: strin
   return getAgent(id)!;
 }
 
+export function deleteAgent(id: string): void {
+  const agent = getAgent(id);
+  if (!agent) throw new Error(`Agent ${id} not found`);
+  // Can't delete a working agent
+  if (agent.state === 'working') throw new Error('Cannot delete a working agent — stop it first');
+  stmts.deleteAgent.run(id);
+  emitEvent('agent_created', id, null, `Agent "${agent.name}" removed`);
+}
+
+export function resetAgent(id: string): Agent {
+  const agent = getAgent(id);
+  if (!agent) throw new Error(`Agent ${id} not found`);
+  stmts.updateAgentState.run('idle', null, null, id);
+  emitEvent('agent_state_changed', id, null, `${agent.name}: force reset → idle`);
+  return getAgent(id)!;
+}
+
 // Seed demo agents if DB is empty
 export function seedDemoAgents() {
   const count = (stmts.countAgents.get() as { count: number }).count;

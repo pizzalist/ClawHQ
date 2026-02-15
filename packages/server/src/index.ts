@@ -9,6 +9,7 @@ import type { WSMessage, InitialState } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { listAgents, createAgent, seedDemoAgents, onEvent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue } from './task-queue.js';
+import { stmts } from './db.js';
 
 const app = express();
 app.use(cors());
@@ -100,6 +101,47 @@ app.post('/api/tasks', (req, res) => {
 
 app.get('/api/events', (_req, res) => {
   res.json(listEvents());
+});
+
+// Stats & Failures
+app.get('/api/stats', (_req, res) => {
+  const counts = stmts.taskCounts.get() as Record<string, number>;
+  const avgRow = stmts.avgCompletionTime.get() as { avg_ms: number | null };
+  const perAgent = (stmts.perAgentStats.all() as Record<string, unknown>[]).map((r) => ({
+    agentId: r.agent_id as string,
+    agentName: r.agent_name as string,
+    role: r.agent_role as string,
+    completed: (r.completed as number) || 0,
+    failed: (r.failed as number) || 0,
+    avgTimeMs: (r.avg_time_ms as number) || 0,
+  }));
+  const total = counts.total || 0;
+  const completed = counts.completed || 0;
+  const failed = counts.failed || 0;
+  res.json({
+    total,
+    completed,
+    failed,
+    pending: counts.pending || 0,
+    inProgress: counts.in_progress || 0,
+    avgCompletionMs: avgRow.avg_ms || 0,
+    successRate: total > 0 ? (completed / total) * 100 : 0,
+    perAgent,
+  });
+});
+
+app.get('/api/failures', (_req, res) => {
+  const rows = stmts.failedTasks.all() as Record<string, unknown>[];
+  res.json(rows.map((r) => ({
+    taskId: r.task_id as string,
+    title: r.title as string,
+    description: r.description as string,
+    agentId: r.assignee_id as string | null,
+    agentName: r.agent_name as string | null,
+    agentRole: r.agent_role as string | null,
+    error: (r.error as string) || 'Unknown error',
+    failedAt: r.failed_at as string,
+  })));
 });
 
 // Health check

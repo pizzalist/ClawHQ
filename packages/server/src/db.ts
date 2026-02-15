@@ -77,6 +77,49 @@ export const stmts = {
   pendingTasks: db.prepare("SELECT * FROM tasks WHERE status = 'pending' ORDER BY created_at LIMIT 10"),
   activeTasks: db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'in-progress'"),
 
+  // Stats queries
+  taskCounts: db.prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+      SUM(CASE WHEN status = 'in-progress' THEN 1 ELSE 0 END) as in_progress
+    FROM tasks
+  `),
+  avgCompletionTime: db.prepare(`
+    SELECT AVG(
+      (julianday(updated_at) - julianday(created_at)) * 86400000
+    ) as avg_ms
+    FROM tasks WHERE status = 'completed'
+  `),
+  perAgentStats: db.prepare(`
+    SELECT
+      t.assignee_id as agent_id,
+      a.name as agent_name,
+      a.role as agent_role,
+      SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) as completed,
+      SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) as failed,
+      AVG(CASE WHEN t.status = 'completed'
+        THEN (julianday(t.updated_at) - julianday(t.created_at)) * 86400000
+        ELSE NULL END) as avg_time_ms
+    FROM tasks t
+    JOIN agents a ON a.id = t.assignee_id
+    WHERE t.assignee_id IS NOT NULL
+    GROUP BY t.assignee_id
+    ORDER BY completed DESC
+  `),
+  failedTasks: db.prepare(`
+    SELECT t.id as task_id, t.title, t.description, t.assignee_id,
+           a.name as agent_name, a.role as agent_role,
+           t.result as error, t.updated_at as failed_at
+    FROM tasks t
+    LEFT JOIN agents a ON a.id = t.assignee_id
+    WHERE t.status = 'failed'
+    ORDER BY t.updated_at DESC
+    LIMIT 100
+  `),
+
   listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),
   insertEvent: db.prepare(`
     INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
