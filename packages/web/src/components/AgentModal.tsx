@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import { AGENT_ROLES, AGENT_MODELS, ROLE_LABELS } from '@ai-office/shared';
+import Spinner from './Spinner';
 
 export default function AgentModal({ onClose }: { onClose: () => void }) {
   const createAgent = useStore((s) => s.createAgent);
@@ -66,9 +67,9 @@ export default function AgentModal({ onClose }: { onClose: () => void }) {
           <button
             onClick={submit}
             disabled={!name.trim() || loading}
-            className="px-4 py-2 text-sm bg-accent hover:bg-accent/80 text-white rounded-lg font-medium disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-accent hover:bg-accent/80 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-1.5 transition-all"
           >
-            {loading ? 'Adding...' : 'Add Agent'}
+            {loading ? <><Spinner size={14} /> Adding...</> : 'Add Agent'}
           </button>
         </div>
       </div>

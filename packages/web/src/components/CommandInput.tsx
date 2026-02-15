@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
+import Spinner from './Spinner';
 
 export default function CommandInput() {
   const [text, setText] = useState('');
@@ -23,7 +24,7 @@ export default function CommandInput() {
         {selectedAgent ? `→ ${selectedAgent.name}` : '→ auto'}
       </span>
       <input
-        className="flex-1 bg-[#0f0f1a] border border-gray-700/50 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent placeholder-gray-600"
+        className="flex-1 bg-[#0f0f1a] border border-gray-700/50 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 placeholder-gray-600 transition-all"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && submit()}
@@ -33,9 +34,10 @@ export default function CommandInput() {
       <button
         onClick={submit}
         disabled={!text.trim() || loading}
-        className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg font-medium disabled:opacity-50 shrink-0"
+        className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg font-medium disabled:opacity-50 shrink-0 transition-all hover:scale-105 active:scale-95 flex items-center gap-1.5"
       >
-        Send
+        {loading ? <Spinner size={14} /> : null}
+        {loading ? 'Sending...' : 'Send'}
       </button>
     </div>
   );

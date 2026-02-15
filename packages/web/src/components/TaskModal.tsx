@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import { ROLE_EMOJI } from '@ai-office/shared';
+import Spinner from './Spinner';
 
 export default function TaskModal({ onClose, preAssignId }: { onClose: () => void; preAssignId?: string | null }) {
   const agents = useStore((s) => s.agents);
@@ -67,9 +68,9 @@ export default function TaskModal({ onClose, preAssignId }: { onClose: () => voi
           <button
             onClick={submit}
             disabled={!title.trim() || loading}
-            className="px-4 py-2 text-sm bg-accent hover:bg-accent/80 text-white rounded-lg font-medium disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-accent hover:bg-accent/80 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-1.5 transition-all"
           >
-            {loading ? 'Creating...' : 'Create Task'}
+            {loading ? <><Spinner size={14} /> Creating...</> : 'Create Task'}
           </button>
         </div>
       </div>

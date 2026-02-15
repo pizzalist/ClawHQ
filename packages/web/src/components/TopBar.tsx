@@ -15,15 +15,16 @@ export default function TopBar() {
           <span className="text-accent">AI</span> Office
         </h1>
         <div className="flex gap-4 text-sm text-gray-400 ml-auto items-center">
-          <span>👥 {agents.length} agents</span>
-          <span>⚡ {working} working</span>
-          <span>📋 {pending} pending</span>
-          <span className={connected ? 'text-green-400' : 'text-red-400'}>
-            {connected ? '● Connected' : '○ Disconnected'}
+          <span className="hidden sm:inline">👥 {agents.length} agents</span>
+          <span className="hidden sm:inline">⚡ {working} working</span>
+          <span className="hidden sm:inline">📋 {pending} pending</span>
+          <span className={`flex items-center gap-1.5 transition-colors ${connected ? 'text-green-400' : 'text-red-400'}`}>
+            <span className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400 animate-pulse'}`} />
+            <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
           </span>
           <button
             onClick={() => setShowTaskModal(true)}
-            className="ml-2 px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg font-semibold transition-colors"
+            className="ml-2 px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg font-semibold transition-all hover:scale-105 active:scale-95 hover:shadow-lg hover:shadow-accent/20"
           >
             + New Task
           </button>

@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import { ROLE_EMOJI, ROLE_LABELS, STATE_COLORS } from '@ai-office/shared';
+import { ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
 import type { Task } from '@ai-office/shared';
 import TaskModal from './TaskModal';
+import Spinner from './Spinner';
+
+const STATE_BADGE: Record<string, { bg: string; text: string }> = {
+  idle: { bg: 'bg-gray-500/15', text: 'text-gray-400' },
+  working: { bg: 'bg-blue-500/15', text: 'text-blue-400' },
+  reviewing: { bg: 'bg-yellow-500/15', text: 'text-yellow-400' },
+  done: { bg: 'bg-green-500/15', text: 'text-green-400' },
+  error: { bg: 'bg-red-500/15', text: 'text-red-400' },
+};
 
 const STATUS_ICONS: Record<string, string> = {
   pending: '⏳',
@@ -77,8 +86,7 @@ export default function AgentDetailPanel() {
               <div>
                 <span className="text-gray-500 text-xs block">State</span>
                 <span
-                  className="inline-block mt-0.5 text-xs px-2 py-0.5 rounded font-mono font-medium"
-                  style={{ backgroundColor: STATE_COLORS[agent.state] + '22', color: STATE_COLORS[agent.state] }}
+                  className={`inline-block mt-0.5 text-xs px-2 py-0.5 rounded font-mono font-medium ${(STATE_BADGE[agent.state] || STATE_BADGE.idle).bg} ${(STATE_BADGE[agent.state] || STATE_BADGE.idle).text}`}
                 >
                   {agent.state}
                 </span>
