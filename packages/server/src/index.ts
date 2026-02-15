@@ -11,7 +11,7 @@ import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren } from './task-queue.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult } from './deliverables.js';
-import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange } from './meetings.js';
+import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
 import { stmts } from './db.js';
@@ -681,8 +681,32 @@ app.post('/api/decisions/seed-from-tasks', (_req, res) => {
 });
 
 // Meetings API
-app.get('/api/meetings', (_req, res) => {
-  res.json(listMeetings());
+app.get('/api/meetings', (req, res) => {
+  const includeLegacy = req.query.includeLegacy === '1' || req.query.includeLegacy === 'true';
+  res.json(listMeetings(includeLegacy));
+});
+
+app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {
+  const result = cleanupLegacyMeetings();
+  broadcast({ type: 'meetings_update', payload: listMeetings() });
+  res.json({ ok: true, ...result });
+});
+
+app.post('/api/admin/reset', (_req, res) => {
+  // Order matters due to foreign-key references
+  stmts.deleteAllReviewScores.run();
+  stmts.deleteAllProposals.run();
+  stmts.deleteAllDecisionItems.run();
+  stmts.deleteAllDeliverables.run();
+  stmts.deleteAllTasks.run();
+  stmts.deleteAllMeetings.run();
+  stmts.deleteAllEvents.run();
+
+  broadcast({ type: 'tasks_update', payload: listTasks() });
+  broadcast({ type: 'meetings_update', payload: listMeetings() });
+  broadcast({ type: 'agents_update', payload: listAgents() });
+
+  res.json({ ok: true, reset: ['tasks', 'meetings', 'events', 'deliverables', 'decisions'] });
 });
 
 app.get('/api/meetings/:id', (req, res) => {

@@ -26,8 +26,14 @@ function rowToMeeting(row: Record<string, unknown>): Meeting {
   };
 }
 
-export function listMeetings(): Meeting[] {
-  return (stmts.listMeetings.all() as Record<string, unknown>[]).map(rowToMeeting);
+function isLegacyProposalMeeting(meeting: Meeting): boolean {
+  const haystack = `${meeting.title}\n${meeting.description}\n${meeting.report || ''}\n${JSON.stringify(meeting.proposals || [])}`.toLowerCase();
+  return haystack.includes('proposal') || haystack.includes('제안서') || haystack.includes('a안') || haystack.includes('b안') || haystack.includes('c안');
+}
+
+export function listMeetings(includeLegacy = false): Meeting[] {
+  const meetings = (stmts.listMeetings.all() as Record<string, unknown>[]).map(rowToMeeting);
+  return includeLegacy ? meetings : meetings.filter((m) => !isLegacyProposalMeeting(m));
 }
 
 export function getMeeting(id: string): Meeting | null {
@@ -246,4 +252,16 @@ export function decideMeeting(meetingId: string, winnerId: string, feedback: str
   }
   saveMeeting(meeting);
   return meeting;
+}
+
+export function cleanupLegacyMeetings(): { deleted: number; ids: string[] } {
+  const rows = stmts.listLegacyMeetings.all() as Record<string, unknown>[];
+  const ids: string[] = [];
+  for (const row of rows) {
+    const id = row.id as string;
+    stmts.deleteMeetingById.run(id);
+    ids.push(id);
+  }
+  if (ids.length > 0) emitChange();
+  return { deleted: ids.length, ids };
 }

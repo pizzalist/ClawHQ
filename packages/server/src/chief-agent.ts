@@ -22,6 +22,45 @@ const sessionMessages = new Map<string, ChiefChatMessage[]>();
 
 // Pending proposals awaiting user approval, keyed by messageId
 const pendingProposals = new Map<string, ChiefAction[]>();
+const pendingProposalBySession = new Map<string, string>();
+
+function compactText(input: string, limit = 500): string {
+  const normalized = (input || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit)}...\n\n(더 보기는 '결과 보기'를 눌러주세요)`;
+}
+
+function summarizeTaskResult(result: string | null | undefined): string {
+  if (!result) return '(결과 없음)';
+  const cleaned = result
+    .replace(/```[\s\S]*?```/g, '[코드 블록 생략]')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return compactText(cleaned, 500);
+}
+
+function formatActionList(actions: ChiefAction[]): string {
+  if (actions.length === 0) return '';
+  const lines = actions.map((a, i) => {
+    const kv = Object.entries(a.params).map(([k, v]) => `${k}: ${v}`).join(', ');
+    return `${i + 1}. ${a.type}${kv ? ` (${kv})` : ''}`;
+  });
+  return `\n\n실행 후보 액션:\n${lines.join('\n')}\n\n원하는 번호(예: 1번)를 말해 주세요. '응/승인'이면 1번부터 순서대로 진행합니다.`;
+}
+
+function parseApprovalSelection(userMessage: string, total: number): number[] | null {
+  if (total <= 0) return null;
+  const msg = userMessage.trim().toLowerCase();
+  const numMatch = msg.match(/(\d+)\s*번?/);
+  if (numMatch) {
+    const idx = parseInt(numMatch[1], 10) - 1;
+    if (idx >= 0 && idx < total) return [idx];
+    return null;
+  }
+  if (/^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)/i.test(msg)) return [0];
+  return null;
+}
 
 // Callbacks for async chief responses (set by index.ts)
 type ChiefResponseCallback = (sessionId: string, response: ChiefResponse) => void;
@@ -115,7 +154,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     if (task.parentTaskId) return;
 
     const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
-    const resultPreview = task.result ? task.result.slice(0, 300) : '(결과 없음)';
+    const resultPreview = summarizeTaskResult(task.result);
     const elapsedMs = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime();
     const elapsedSec = Math.round(elapsedMs / 1000);
 
@@ -240,8 +279,8 @@ export function chiefHandleMeetingChange() {
         .join('\n');
 
       const reportPreview = meeting.report
-        ? meeting.report.slice(0, 400).replace(/\n{3,}/g, '\n\n') + (meeting.report.length > 400 ? '...' : '')
-        : participantSummary;
+        ? compactText(meeting.report, 500)
+        : compactText(participantSummary, 500);
 
       notifyChief({
         id: `notif-meeting-${meeting.id}-${Date.now()}`,
@@ -522,6 +561,9 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
   const executedActions = toExecute.map(a => executeAction(a));
 
   pendingProposals.delete(messageId);
+  for (const [sid, mid] of pendingProposalBySession.entries()) {
+    if (mid === messageId) pendingProposalBySession.delete(sid);
+  }
 
   return {
     executedActions,
@@ -532,6 +574,9 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
 /** Reject / discard a pending proposal */
 export function rejectProposal(messageId: string): void {
   pendingProposals.delete(messageId);
+  for (const [sid, mid] of pendingProposalBySession.entries()) {
+    if (mid === messageId) pendingProposalBySession.delete(sid);
+  }
 }
 
 /** Get pending proposal actions for a messageId */
@@ -638,6 +683,32 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
   const messageId = `chief-${Date.now()}-${uuid().slice(0, 8)}`;
 
+  // If there is a pending proposal for this session, treat short approval text as execution intent.
+  const pendingMessageId = pendingProposalBySession.get(sessionId);
+  if (pendingMessageId) {
+    const pending = pendingProposals.get(pendingMessageId) || [];
+    const selected = parseApprovalSelection(userMessage, pending.length);
+    if (selected && selected.length > 0) {
+      const selectedAction = pending[selected[0]];
+      const executed = executeAction(selectedAction);
+      pending.splice(selected[0], 1);
+      if (pending.length === 0) {
+        pendingProposals.delete(pendingMessageId);
+        pendingProposalBySession.delete(sessionId);
+      } else {
+        pendingProposals.set(pendingMessageId, pending);
+      }
+
+      const summary = executed.result?.message || '실행 완료';
+      const reply = pending.length > 0
+        ? `선택한 액션을 실행했습니다.\n- 결과: ${summary}\n\n남은 액션 ${pending.length}건:\n${pending.map((a, i) => `${i + 1}. ${a.type}`).join('\n')}\n\n다음으로 어떤 액션을 실행할까요?`
+        : `선택한 액션을 실행했습니다.\n- 결과: ${summary}\n\n추가로 진행할 작업이 있나요?`;
+
+      pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+      return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+    }
+  }
+
   // LLM mode
   if (!isDemoMode()) {
     const systemPrompt = buildChiefSystemPrompt();
@@ -658,12 +729,14 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
         const rawOutput = parseAgentOutput(run.stdout);
         const { actions: proposedActions, cleanText } = parseActions(rawOutput);
 
-        const reply = cleanText || '처리가 완료되었습니다.';
+        const baseReply = cleanText || '처리가 완료되었습니다.';
+        const reply = `${baseReply}${formatActionList(proposedActions)}`;
         pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
         // Store proposed actions for approval — do NOT execute yet
         if (proposedActions.length > 0) {
           pendingProposals.set(messageId, proposedActions);
+          pendingProposalBySession.set(sessionId, messageId);
         }
 
         const response: ChiefResponse = {

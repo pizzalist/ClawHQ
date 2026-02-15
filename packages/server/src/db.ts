@@ -265,6 +265,26 @@ export const stmts = {
     WHERE id = ?
   `),
 
+  // Admin / cleanup
+  deleteAllDeliverables: db.prepare('DELETE FROM deliverables'),
+  deleteAllReviewScores: db.prepare('DELETE FROM review_scores'),
+  deleteAllProposals: db.prepare('DELETE FROM proposals'),
+  deleteAllDecisionItems: db.prepare('DELETE FROM decision_items'),
+  deleteAllTasks: db.prepare('DELETE FROM tasks'),
+  deleteAllMeetings: db.prepare('DELETE FROM meetings'),
+  deleteAllEvents: db.prepare('DELETE FROM events'),
+  listLegacyMeetings: db.prepare(`
+    SELECT * FROM meetings
+    WHERE lower(proposals) LIKE '%proposal%'
+       OR lower(proposals) LIKE '%제안서%'
+       OR lower(report) LIKE '%proposal%'
+       OR lower(report) LIKE '%제안서%'
+       OR lower(title) LIKE '%proposal%'
+       OR lower(title) LIKE '%제안서%'
+    ORDER BY created_at DESC
+  `),
+  deleteMeetingById: db.prepare('DELETE FROM meetings WHERE id = ?'),
+
   listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),
   insertEvent: db.prepare(`
     INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)

@@ -66,11 +66,19 @@ export function createTask(title: string, description: string, assigneeId?: stri
   }
   const id = uuid();
   stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
-  // If specific assignee requested, set it on the task
-  if (assigneeId) {
-    stmts.updateTask.run(assigneeId, 'pending', null, id);
+
+  // Default owner policy: root tasks go to PM first (unless explicitly assigned)
+  let resolvedAssigneeId = assigneeId || null;
+  if (!resolvedAssigneeId && !parentTaskId) {
+    const pm = listAgents().find((a) => a.role === 'pm' && a.state === 'idle')
+      || listAgents().find((a) => a.role === 'pm');
+    if (pm) resolvedAssigneeId = pm.id;
   }
-  emitTaskEvent('task_created', assigneeId || null, id, `Task created: ${title}`);
+
+  if (resolvedAssigneeId) {
+    stmts.updateTask.run(resolvedAssigneeId, 'pending', null, id);
+  }
+  emitTaskEvent('task_created', resolvedAssigneeId, id, `Task created: ${title}`);
   // Schedule queue processing async so the response returns immediately
   setTimeout(() => processQueue(), 100);
   return rowToTask(stmts.getTask.get(id) as Record<string, unknown>);
