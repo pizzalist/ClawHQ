@@ -1,6 +1,6 @@
 import * as PIXI from 'pixi.js';
 import type { Agent, AgentRole, AgentState } from '@ai-office/shared';
-import { STATE_COLORS, ROLE_EMOJI } from '@ai-office/shared';
+import { STATE_COLORS, OFFICE_CHARACTER_EMOJI } from '@ai-office/shared';
 
 const ROLE_BODY_COLORS: Record<AgentRole, number> = {
   pm: 0x6366f1,
@@ -50,7 +50,7 @@ export class AgentSprite {
     this.container.addChild(this.statusDot);
 
     // Role emoji
-    this.emojiLabel = new PIXI.Text(ROLE_EMOJI[agent.role], { fontSize: 16 });
+    this.emojiLabel = new PIXI.Text(OFFICE_CHARACTER_EMOJI[agent.role], { fontSize: 16 });
     this.emojiLabel.anchor.set(0.5);
     this.emojiLabel.position.set(0, -44);
     this.container.addChild(this.emojiLabel);

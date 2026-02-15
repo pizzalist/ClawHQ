@@ -21,6 +21,16 @@ export const ROLE_LABELS: Record<AgentRole, string> = {
 };
 
 export const ROLE_EMOJI: Record<AgentRole, string> = {
+  pm: '📋',
+  developer: '💻',
+  reviewer: '🔍',
+  designer: '🎨',
+  devops: '🔧',
+  qa: '🧪',
+};
+
+// Office character badges (Naruto-themed) used for in-office avatars only
+export const OFFICE_CHARACTER_EMOJI: Record<AgentRole, string> = {
   pm: '🍥',       // Naruto
   developer: '⚡', // Sasuke
   reviewer: '👁️', // Kakashi / Sharingan
