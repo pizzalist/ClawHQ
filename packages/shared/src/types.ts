@@ -35,7 +35,7 @@ export interface Task {
 }
 
 // Chief Action types
-export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task';
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent';
 
 export interface ChiefAction {
   type: ChiefActionType;

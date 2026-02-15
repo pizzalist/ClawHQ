@@ -3,6 +3,7 @@ import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefRespons
 import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
+import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, type AgentRun } from './openclaw-adapter.js';
 
 const MAX_HISTORY = 50;
@@ -405,64 +406,99 @@ export function summarizeOfficeState(): string {
   const tasks = listTasks();
   const meetings = listMeetings();
 
-  const idle = agents.filter((a) => a.state === 'idle').length;
-  const working = agents.filter((a) => a.state === 'working' || a.state === 'reviewing').length;
-  const pendingTasks = tasks.filter((t) => t.status === 'pending').length;
-  const activeTasks = tasks.filter((t) => t.status === 'in-progress').length;
-  const activeMeetings = meetings.filter((m: Meeting) => m.status !== 'completed').length;
+  const pendingTasks = tasks.filter((t) => t.status === 'pending');
+  const activeTasks = tasks.filter((t) => t.status === 'in-progress');
+  const completedTasks = tasks.filter((t) => t.status === 'completed');
+  const activeMeetings = meetings.filter((m: Meeting) => m.status !== 'completed');
+  const completedMeetings = meetings.filter((m: Meeting) => m.status === 'completed');
 
-  const agentDetails = agents.map(a => `  - ${a.name} (${a.role}, ${a.model}, 상태: ${a.state})`).join('\n');
-  const recentTasks = tasks.slice(-5).map(t => `  - [${t.status}] ${t.title}`).join('\n');
-  const meetingList = meetings.slice(-3).map(m => `  - [${m.status}] ${m.title}`).join('\n');
+  const agentLines = agents.length > 0
+    ? agents.map(a => `- ${a.name} (${a.role}, ${a.state}) id=${a.id}`).join('\n')
+    : '없음';
+
+  const pendingLines = pendingTasks.length > 0
+    ? pendingTasks.map(t => `- "${t.title}" (pending) id=${t.id}`).join('\n')
+    : '없음';
+
+  const activeLines = activeTasks.length > 0
+    ? activeTasks.map(t => {
+        const assignee = t.assigneeId ? agents.find(a => a.id === t.assigneeId) : null;
+        return `- "${t.title}" (in-progress, 담당: ${assignee?.name || '미배정'}) id=${t.id}`;
+      }).join('\n')
+    : '없음';
+
+  const recentCompleted = completedTasks.slice(0, 5);
+  const completedLines = recentCompleted.length > 0
+    ? recentCompleted.map(t => {
+        const ago = Math.round((Date.now() - new Date(t.updatedAt).getTime()) / 60000);
+        return `- "${t.title}" (completed, ${ago}분 전) id=${t.id}`;
+      }).join('\n')
+    : '없음';
+
+  const activeMeetingLines = activeMeetings.length > 0
+    ? activeMeetings.map(m => `- "${m.title}" (${m.status}) id=${m.id}`).join('\n')
+    : '없음';
 
   return [
-    `## 현재 오피스 현황`,
-    `인력 ${agents.length}명 (가용 ${idle}, 작업중 ${working})`,
-    `작업 ${tasks.length}건 (대기 ${pendingTasks}, 진행 ${activeTasks})`,
-    `미팅 ${meetings.length}건 (활성 ${activeMeetings})`,
+    `## 현재 에이전트 (${agents.length}명)`,
+    agentLines,
     ``,
-    `### 에이전트 목록`,
-    agentDetails || '  (없음)',
+    `## 대기 중 작업 (${pendingTasks.length}건)`,
+    pendingLines,
     ``,
-    `### 최근 작업`,
-    recentTasks || '  (없음)',
+    `## 진행 중 작업 (${activeTasks.length}건)`,
+    activeLines,
     ``,
-    `### 최근 미팅`,
-    meetingList || '  (없음)',
+    `## 최근 완료 (${recentCompleted.length}건)`,
+    completedLines,
+    ``,
+    `## 활성 미팅 (${activeMeetings.length}건)`,
+    activeMeetingLines,
   ].join('\n');
 }
 
 function buildChiefSystemPrompt(): string {
   const state = summarizeOfficeState();
-  return `당신은 AI 오피스의 총괄자(Chief)입니다. 반드시 한국어로 응답하세요.
+  return `당신은 AI Office의 총괄자(Chief)입니다.
 
+규칙:
+1. 간결하게 답하세요. 간단한 요청에는 1-3문장이면 충분합니다.
+2. 상태 조회, 삭제, 취소 같은 단순 작업은 바로 실행 제안하세요. 미팅을 제안하지 마세요.
+3. 복잡한 작업(새 프로젝트 시작, 팀 구성 등)에만 옵션을 제시하세요.
+4. 옵션을 제시할 때는 최대 2개까지만.
+5. 한국어로 대화하세요.
+6. 실행 전에 반드시 사용자 승인을 받으세요.
+7. 아래 오피스 상태를 참고해 taskId, agentId 등을 직접 사용하세요.
+
+응답 길이:
+- 상태 조회 → 5줄 이내
+- 단순 액션(삭제/취소) → 실행 제안 1줄 + 확인 요청
+- 복잡한 기획 → 최대 10줄 + 옵션 2개
+
+미팅은 다음 경우에만 제안하세요:
+- 사용자가 명시적으로 회의를 요청한 경우
+- 3명 이상의 에이전트가 협업해야 하는 복잡한 작업인 경우
+단순 작업(삭제, 상태 확인, 1인 작업)에는 절대 미팅을 제안하지 마세요.
+
+## 현재 오피스 상태
 ${state}
 
-## 제안 형식
-사용자의 요청을 분석하고, 실행할 액션을 **제안**하세요.
-제안은 아래 형식의 ACTION 블록으로 포함합니다. 이 액션은 자동 실행되지 않으며, 사용자가 승인해야 실행됩니다.
+## 액션 형식
+실행할 액션을 아래 형식으로 포함하세요 (자동 실행 안 됨, 사용자 승인 필요):
 
-[ACTION:create_task title="작업 제목" description="작업 설명" assignRole="developer"]
-[ACTION:create_agent name="에이전트 이름" role="pm" model="claude-opus-4-6"]
+[ACTION:create_task title="작업 제목" description="설명" assignRole="developer"]
+[ACTION:create_agent name="이름" role="pm" model="claude-opus-4-6"]
 [ACTION:start_meeting title="미팅 제목" participants="pm,developer,reviewer" character="planning"]
 [ACTION:assign_task taskId="태스크ID" agentId="에이전트ID"]
+[ACTION:cancel_task taskId="태스크ID"]
+[ACTION:cancel_all_pending]
+[ACTION:reset_agent agentId="에이전트ID"]
 
 사용 가능한 role: pm, developer, reviewer, designer, devops, qa
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
 사용 가능한 character: brainstorm, planning, review, retrospective
 
-## 핵심 지침
-- **항상 실행 전에 사용자 확인을 받으세요** — 절대 자동 실행하지 마세요
-- 옵션을 번호나 리스트로 명확하게 제시하세요
-- 결과를 간결하게 요약하세요
-- **적극적으로 다음 단계를 제안**하세요 ("이어서 ~할까요?")
-- 이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요
-- 불확실한 경우 사용자에게 질문하세요
-- ACTION 블록은 반드시 응답에 포함하세요 — 사용자가 확인 후 승인합니다
-- 친근하고 자연스러운 대화체를 사용하세요
-
-## 승인 표현 인식
-사용자가 "ㅇ", "응", "확인", "승인", "ㅇㅇ", "네", "좋아", "진행해" 등으로 응답하면 이전 제안을 승인한 것으로 해석하세요.`;
+이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요.`;
 }
 
 /** Parse [ACTION:type key="value" ...] blocks from LLM output */
@@ -534,6 +570,35 @@ function executeAction(action: ChiefAction): ChiefAction {
           return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
         }
         return { ...action, result: { ok: false, message: 'assign_task는 아직 구현 중입니다' } };
+      }
+      case 'cancel_task': {
+        const { taskId } = action.params;
+        if (!taskId) {
+          return { ...action, result: { ok: false, message: 'taskId가 필요합니다' } };
+        }
+        const task = stmts.getTask.get(taskId) as any;
+        if (!task) {
+          return { ...action, result: { ok: false, message: `작업을 찾을 수 없습니다: ${taskId}` } };
+        }
+        stmts.cancelTask.run(taskId);
+        return { ...action, result: { ok: true, message: `작업 "${task.title}" 취소됨` } };
+      }
+      case 'cancel_all_pending': {
+        const result = stmts.cancelAllPending.run();
+        const count = result.changes;
+        return { ...action, result: { ok: true, message: `대기 중 작업 ${count}건 취소됨` } };
+      }
+      case 'reset_agent': {
+        const { agentId } = action.params;
+        if (!agentId) {
+          return { ...action, result: { ok: false, message: 'agentId가 필요합니다' } };
+        }
+        const agent = stmts.getAgent.get(agentId) as any;
+        if (!agent) {
+          return { ...action, result: { ok: false, message: `에이전트를 찾을 수 없습니다: ${agentId}` } };
+        }
+        stmts.updateAgentState.run('idle', null, null, agentId);
+        return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 상태 초기화됨` } };
       }
       default:
         return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };

@@ -166,6 +166,8 @@ export const stmts = {
     UPDATE tasks SET assignee_id = ?, status = ?, result = ?, updated_at = datetime('now')
     WHERE id = ?
   `),
+  cancelTask: db.prepare("UPDATE tasks SET status = 'cancelled', result = 'Cancelled by Chief', updated_at = datetime('now') WHERE id = ?"),
+  cancelAllPending: db.prepare("UPDATE tasks SET status = 'cancelled', result = 'Cancelled by Chief', updated_at = datetime('now') WHERE status = 'pending'"),
   pendingTasks: db.prepare("SELECT * FROM tasks WHERE status = 'pending' ORDER BY created_at LIMIT 10"),
   activeTasks: db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'in-progress'"),
 
