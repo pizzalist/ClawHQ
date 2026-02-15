@@ -104,6 +104,46 @@ export function createWhiteboard(): PIXI.Container {
   return c;
 }
 
+/** Meeting table (large round table) */
+export function createMeetingTable(): PIXI.Container {
+  const c = new PIXI.Container();
+  const g = new PIXI.Graphics();
+
+  // Table shadow
+  g.beginFill(0x000000, 0.2);
+  g.drawEllipse(0, 6, 40, 20);
+  g.endFill();
+
+  // Table top (large oval)
+  g.beginFill(0x5a4080);
+  g.drawEllipse(0, -4, 38, 18);
+  g.endFill();
+
+  // Table surface highlight
+  g.beginFill(0x6a50a0, 0.5);
+  g.drawEllipse(0, -6, 32, 14);
+  g.endFill();
+
+  // Front face
+  g.beginFill(0x3a2d55);
+  g.moveTo(-38, -4);
+  g.lineTo(-38, 6);
+  g.lineTo(0, 18);
+  g.lineTo(38, 6);
+  g.lineTo(38, -4);
+  g.lineTo(0, 14);
+  g.closePath();
+  g.endFill();
+
+  // Label
+  const label = new PIXI.Text('🏛️', { fontSize: 14 });
+  label.anchor.set(0.5);
+  label.position.set(0, -20);
+
+  c.addChild(g, label);
+  return c;
+}
+
 /** Water cooler */
 export function createWaterCooler(): PIXI.Container {
   const c = new PIXI.Container();

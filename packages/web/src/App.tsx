@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { connectWS, useStore } from './store';
 import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
@@ -13,19 +13,31 @@ import CommandInput from './components/CommandInput';
 import ToastContainer from './components/Toast';
 import TaskListView from './components/TaskListView';
 import TaskResultModal from './components/TaskResultModal';
+import DecisionsView from './components/decisions/DecisionsView';
+import MeetingRoom from './components/MeetingRoom';
 
-type View = 'office' | 'dashboard' | 'workflow' | 'failures' | 'history' | 'tasks';
+type View = 'office' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
 
 export default function App() {
   const [view, setView] = useState<View>('office');
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
+  const [decisionCount, setDecisionCount] = useState(0);
   useEffect(() => { connectWS(); }, []);
+  useEffect(() => {
+    const load = () => fetch('/api/decisions/pending/count')
+      .then(r => r.json()).then(d => setDecisionCount(d.count)).catch(() => {});
+    load();
+    const iv = setInterval(load, 5000);
+    return () => clearInterval(iv);
+  }, []);
 
   const tabs: [View, string][] = [
     ['office', '🏢 Office'],
     ['tasks', '📋 Tasks'],
     ['dashboard', '📊 Dashboard'],
+    ['decisions', '📌 Decisions'],
+    ['meetings', '🏛️ Meetings'],
     ['workflow', '🔗 Workflow'],
     ['failures', '⚠️ Failures'],
     ['history', '🕐 History'],
@@ -59,6 +71,11 @@ export default function App() {
             }`}
           >
             {label}
+            {v === 'decisions' && decisionCount > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-accent text-white rounded-full font-bold leading-none">
+                {decisionCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -87,6 +104,8 @@ export default function App() {
           )}
           {view === 'tasks' && <TaskListView />}
           {view === 'dashboard' && <Dashboard />}
+          {view === 'decisions' && <DecisionsView />}
+          {view === 'meetings' && <MeetingRoom />}
           {view === 'workflow' && <WorkflowDAG />}
           {view === 'failures' && <FailureTimeline />}
           {view === 'history' && <HistoryReplay />}

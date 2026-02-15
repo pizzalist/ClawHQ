@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -8,6 +8,7 @@ interface Store {
   agents: Agent[];
   tasks: Task[];
   events: AppEvent[];
+  meetings: Meeting[];
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -16,6 +17,7 @@ interface Store {
   loading: Record<string, boolean>;
   setAgents: (agents: Agent[]) => void;
   setTasks: (tasks: Task[]) => void;
+  setMeetings: (meetings: Meeting[]) => void;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -29,6 +31,8 @@ interface Store {
   stopAgent: (id: string) => Promise<void>;
   resetAgent: (id: string) => Promise<void>;
   applyPreset: (presetId: string) => Promise<void>;
+  createMeeting: (title: string, description: string, participantIds: string[]) => Promise<void>;
+  decideMeeting: (meetingId: string, winnerId: string, feedback: string) => Promise<void>;
   setLoading: (key: string, v: boolean) => void;
 }
 
@@ -36,6 +40,7 @@ export const useStore = create<Store>((set, get) => ({
   agents: [],
   tasks: [],
   events: [],
+  meetings: [],
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -47,12 +52,13 @@ export const useStore = create<Store>((set, get) => ({
     selectedAgentId: s.selectedAgentId && agents.some((a) => a.id === s.selectedAgentId) ? s.selectedAgentId : s.selectedAgentId,
   })),
   setTasks: (tasks) => set({ tasks }),
+  setMeetings: (meetings) => set({ meetings }),
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
   setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
-  init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, selectedAgentId: null, initialized: true }),
+  init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, meetings: state.meetings || [], selectedAgentId: null, initialized: true }),
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),
 
   createTask: async (title, description, assigneeId, expectedDeliverables) => {
@@ -134,6 +140,42 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
+  createMeeting: async (title, description, participantIds) => {
+    const { setLoading } = get();
+    setLoading('createMeeting', true);
+    try {
+      const res = await fetch(`${API}/api/meetings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description, participantIds }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Meeting started! PMs are generating proposals...', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to create meeting', 'error');
+    } finally {
+      setLoading('createMeeting', false);
+    }
+  },
+
+  decideMeeting: async (meetingId, winnerId, feedback) => {
+    const { setLoading } = get();
+    setLoading('decideMeeting', true);
+    try {
+      const res = await fetch(`${API}/api/meetings/${meetingId}/decide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ winnerId, feedback }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      toast('Decision recorded!', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Failed to decide', 'error');
+    } finally {
+      setLoading('decideMeeting', false);
+    }
+  },
+
   resetAgent: async (id) => {
     const { setLoading } = get();
     setLoading(`reset-${id}`, true);
@@ -179,6 +221,24 @@ export function connectWS() {
       case 'tasks_update':
         store.setTasks(msg.payload as Task[]);
         break;
+      case 'meetings_update': {
+        const newMeetings = msg.payload as Meeting[];
+        const prevMeetings = (store as any).meetings || [];
+        if ((store as any).setMeetings) (store as any).setMeetings(newMeetings);
+        // Check for newly completed meetings
+        for (const m of newMeetings) {
+          if ((m as any).status === 'completed' && !(m as any).decision) {
+            const prev = prevMeetings.find((pm: any) => pm.id === (m as any).id);
+            if (!prev || (prev as any).status !== 'completed') {
+              toast(`Meeting complete! ${(m as any).proposals?.length || 0} proposals ready for your review`, 'info', {
+                label: '🗳️ Review',
+                onClick: () => { /* handled by UI */ },
+              });
+            }
+          }
+        }
+        break;
+      }
       case 'event': {
         const evt = msg.payload as AppEvent;
         store.addEvent(evt);

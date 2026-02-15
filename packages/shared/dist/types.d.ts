@@ -108,7 +108,28 @@ export interface DecisionHistoryEntry {
     avgScore: number;
     decidedAt: string;
 }
-export type MeetingType = 'planning' | 'review' | 'debate';
+export type MeetingType = 'planning' | 'review' | 'debate' | 'tech-spec';
+export type TechSpecRole = 'cto' | 'frontend-lead' | 'backend-lead' | 'qa-devils-advocate';
+export interface TechSpecParticipant {
+    agentId: string;
+    agentName: string;
+    role: TechSpecRole;
+    spec: string | null;
+    status: 'pending' | 'working' | 'done' | 'error';
+}
+export interface TechSpecConflict {
+    topic: string;
+    positions: Array<{
+        role: TechSpecRole;
+        stance: string;
+    }>;
+}
+export interface TechSpecMeetingData {
+    participants: TechSpecParticipant[];
+    conflicts: TechSpecConflict[];
+    synthesis: string | null;
+    synthesisStatus: 'pending' | 'working' | 'done';
+}
 export type MeetingStatus = 'active' | 'reviewing' | 'completed';
 export interface MeetingProposal {
     agentId: string;
@@ -139,6 +160,7 @@ export interface Meeting {
         winnerId: string;
         feedback: string;
     } | null;
+    techSpec?: TechSpecMeetingData;
     createdAt: string;
     updatedAt: string;
 }

@@ -3,12 +3,22 @@ import type { Agent } from '@ai-office/shared';
 import { Floor, gridToIso } from './Floor';
 import { Desk } from './Desk';
 import { AgentSprite } from './AgentSprite';
-import { createPlant, createCoffeeMachine, createWhiteboard, createWaterCooler } from './Decorations';
+import { createPlant, createCoffeeMachine, createWhiteboard, createWaterCooler, createMeetingTable } from './Decorations';
 
 /** Desk grid positions (col, row) on the isometric grid */
 const DESK_POSITIONS: [number, number][] = [
   [2, 2], [4, 2], [6, 2], [8, 2],
   [2, 5], [4, 5], [6, 5], [8, 5],
+];
+
+/** Grid position for the meeting area */
+const MEETING_POS: [number, number] = [5, 7];
+
+/** Seat offsets around the meeting table (relative to table center) */
+const MEETING_SEATS: { x: number; y: number }[] = [
+  { x: -30, y: -10 }, { x: 30, y: -10 },
+  { x: -30, y: 15 }, { x: 30, y: 15 },
+  { x: 0, y: -18 }, { x: 0, y: 22 },
 ];
 
 export class OfficeScene {
@@ -18,6 +28,8 @@ export class OfficeScene {
   private agentSprites: Map<string, AgentSprite> = new Map();
   private container: PIXI.Container;
   private onSelectAgent?: (id: string) => void;
+  private meetingParticipants: Set<string> = new Set();
+  private meetingTablePos: { x: number; y: number };
 
   constructor(element: HTMLElement, onSelectAgent?: (id: string) => void) {
     this.onSelectAgent = onSelectAgent;

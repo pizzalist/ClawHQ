@@ -9,6 +9,14 @@ export declare const STATE_TRANSITIONS: Record<AgentState, AgentState[]>;
 export declare const TEAM_PRESETS: import('./types.js').TeamPreset[];
 export declare const CHAIN_NEXT_ROLE: Partial<Record<import('./types.js').AgentRole, import('./types.js').AgentRole>>;
 export declare const CHAIN_STEP_LABELS: Partial<Record<import('./types.js').AgentRole, string>>;
+export declare const TECH_SPEC_ROLES: Record<import('./types.js').TechSpecRole, {
+    label: string;
+    emoji: string;
+    color: string;
+    suggestedAgentRole: import('./types.js').AgentRole;
+    prompt: (task: string) => string;
+}>;
+export declare const TECH_SPEC_SYNTHESIS_PROMPT: (specs: string) => string;
 export declare const MAX_CONCURRENT_TASKS = 3;
 export declare const SERVER_PORT = 3001;
 export declare const WS_PATH = "/ws";

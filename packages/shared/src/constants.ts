@@ -96,6 +96,47 @@ export const CHAIN_STEP_LABELS: Partial<Record<import('./types.js').AgentRole, s
   reviewer: 'Review',
 };
 
+// Tech Spec role config
+export const TECH_SPEC_ROLES: Record<import('./types.js').TechSpecRole, {
+  label: string;
+  emoji: string;
+  color: string;
+  suggestedAgentRole: import('./types.js').AgentRole;
+  prompt: (task: string) => string;
+}> = {
+  'cto': {
+    label: 'CTO',
+    emoji: '👔',
+    color: '#8b5cf6', // purple
+    suggestedAgentRole: 'pm',
+    prompt: (task) => `As CTO, define the architecture, tech stack, module breakdown, and sprint plan for: ${task}`,
+  },
+  'frontend-lead': {
+    label: 'Frontend Lead',
+    emoji: '🎨',
+    color: '#3b82f6', // blue
+    suggestedAgentRole: 'developer',
+    prompt: (task) => `As Frontend Lead, spec the UI/UX, components, state management, and user flows for: ${task}`,
+  },
+  'backend-lead': {
+    label: 'Backend Lead',
+    emoji: '⚙️',
+    color: '#10b981', // green
+    suggestedAgentRole: 'developer',
+    prompt: (task) => `As Backend Lead, spec the API design, DB schema, WebSocket events, and deployment plan for: ${task}`,
+  },
+  'qa-devils-advocate': {
+    label: "QA / Devil's Advocate (깐깐이)",
+    emoji: '🔥',
+    color: '#f97316', // orange
+    suggestedAgentRole: 'reviewer',
+    prompt: (task) => `As QA/Devil's Advocate (깐깐이), find every technical pitfall, scope risk, timeline issue, and missing requirement in: ${task}. Be extremely critical. Score viability 1-10.`,
+  },
+};
+
+export const TECH_SPEC_SYNTHESIS_PROMPT = (specs: string) =>
+  `Synthesize these 4 specs into one unified development specification. Resolve conflicts. Create a final sprint plan.\n\n${specs}`;
+
 export const MAX_CONCURRENT_TASKS = 3;
 export const SERVER_PORT = 3001;
 export const WS_PATH = '/ws';
