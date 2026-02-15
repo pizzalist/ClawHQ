@@ -160,12 +160,23 @@ function wrapJS(js: string): string {
 
 /**
  * Create deliverables from a completed task result.
+ * @param agentRole - optional role to enforce type constraints (e.g. PM always gets 'report')
  */
-export function createDeliverablesFromResult(taskId: string, result: string): Deliverable[] {
+export function createDeliverablesFromResult(taskId: string, result: string, agentRole?: string): Deliverable[] {
   // Delete existing deliverables for this task (in case of re-run)
   stmts.deleteDeliverablesByTask.run(taskId);
 
-  const artifacts = parseResultToArtifacts(result);
+  let artifacts = parseResultToArtifacts(result);
+
+  // PM role enforcement: force all artifacts to report/document type
+  if (agentRole === 'pm') {
+    artifacts = artifacts.map(a => ({
+      ...a,
+      type: a.type === 'document' ? 'document' : 'report',
+      language: undefined,
+    }));
+  }
+
   const deliverables: Deliverable[] = [];
 
   for (const artifact of artifacts) {

@@ -11,7 +11,20 @@ const PRESETS = [
   { label: '🖥 Desktop', w: '100%' as const, h: '100%' as const },
 ];
 
+function unescapeJsonString(s: string): string {
+  return s
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
 export function extractPreviewableCode(result: string): string | null {
+  // If result has escaped newlines (literal \n in text), unescape first
+  if (result.includes('\\n')) {
+    result = unescapeJsonString(result);
+  }
+
   // Try markdown code blocks first: ```html ... ``` or ```javascript ... ```
   const htmlBlock = result.match(/```html\s*\n([\s\S]*?)```/i);
   if (htmlBlock) return htmlBlock[1].trim();

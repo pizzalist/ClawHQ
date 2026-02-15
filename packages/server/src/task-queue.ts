@@ -156,7 +156,20 @@ function assignTask(agentId: string, task: Task) {
 }
 
 const ROLE_INSTRUCTIONS: Record<string, string> = {
-  pm: 'You are a Project Manager. Create a detailed plan/specification, NOT the actual implementation. Break down the task into actionable steps for developers. Produce a structured report or document.',
+  pm: `You are a Project Manager. Your job is to create PROJECT PLANS and SPECIFICATIONS only.
+
+IMPORTANT RULES:
+- DO NOT write any code (no HTML, no JavaScript, no CSS, no programming code of any kind)
+- DO NOT produce code blocks with programming languages
+- Instead, create a detailed project plan in markdown with:
+  1. Project Overview & Goals
+  2. Requirements (functional and non-functional)
+  3. User Stories
+  4. Technical Approach (describe, don't implement)
+  5. Task Breakdown for developers
+  6. Timeline / Priority
+- Your output should ALWAYS be a structured markdown document/report
+- If asked to "make" or "build" something, plan HOW it should be built, not build it yourself`,
   developer: 'You are a Developer. Implement the task by writing working code. Produce complete, runnable code.',
   designer: 'You are a Designer. Create design specifications, mockups, or UI implementations.',
   reviewer: 'You are a Code Reviewer. Review the work and produce a structured report with findings and recommendations.',
@@ -208,8 +221,9 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
         try {
           transitionAgent(agentId, 'done', taskId);
           stmts.updateTask.run(agentId, 'completed', result, taskId);
-          // Auto-create deliverables from result
-          try { createDeliverablesFromResult(taskId, result); } catch (e) { console.error('[deliverables] parse error:', e); }
+          // Auto-create deliverables from result (pass agent role for type enforcement)
+          const agentRole = getAgent(agentId)?.role;
+          try { createDeliverablesFromResult(taskId, result, agentRole); } catch (e) { console.error('[deliverables] parse error:', e); }
           emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
 
           // Auto-chain: spawn next step based on agent role

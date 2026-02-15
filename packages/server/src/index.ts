@@ -104,7 +104,20 @@ app.get('/api/tasks/:id/preview', (req, res) => {
   res.send(html);
 });
 
+function unescapeJsonString(s: string): string {
+  return s
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
 function extractHtmlFromResult(result: string): string | null {
+  // If result looks like it has escaped newlines (literal \n in text), unescape first
+  if (result.includes('\\n')) {
+    result = unescapeJsonString(result);
+  }
+
   // Markdown code blocks
   const htmlBlock = result.match(/```html\s*\n([\s\S]*?)```/i);
   if (htmlBlock) return htmlBlock[1].trim();

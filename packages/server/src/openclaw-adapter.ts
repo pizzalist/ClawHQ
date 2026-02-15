@@ -128,13 +128,49 @@ export function cleanupRun(sessionId: string) {
   activeRuns.delete(sessionId);
 }
 
+/** Unescape JSON-encoded string literals (\\n → newline, \\t → tab, \\" → quote) */
+function unescapeJsonString(s: string): string {
+  return s
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
 /** Parse the agent JSON output to extract the reply */
 export function parseAgentOutput(stdout: string): string {
   // Try JSON parse first
   try {
     const data = JSON.parse(stdout.trim());
-    return data.reply || data.content || data.message || data.result || JSON.stringify(data, null, 2);
+
+    // Handle OpenClaw payloads format: {"payloads":[{"text":"..."}]}
+    if (data.payloads && Array.isArray(data.payloads)) {
+      const texts = data.payloads
+        .filter((p: any) => typeof p.text === 'string')
+        .map((p: any) => p.text);
+      if (texts.length > 0) {
+        return texts.join('\n');
+      }
+    }
+
+    const raw = data.reply || data.content || data.message || data.result;
+    if (typeof raw === 'string') return raw;
+
+    return JSON.stringify(data, null, 2);
   } catch {
+    // stdout might contain multiple JSON lines; try to find a payloads line
+    const lines = stdout.trim().split('\n');
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line);
+        if (data.payloads && Array.isArray(data.payloads)) {
+          const texts = data.payloads
+            .filter((p: any) => typeof p.text === 'string')
+            .map((p: any) => p.text);
+          if (texts.length > 0) return texts.join('\n');
+        }
+      } catch { /* skip non-JSON lines */ }
+    }
     // Fall back to raw text, trim to reasonable length
     return stdout.trim().slice(0, 4000) || 'No output';
   }
