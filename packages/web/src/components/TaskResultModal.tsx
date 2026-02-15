@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
+import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 
 const STATUS_BADGE: Record<string, { bg: string; label: string }> = {
   pending: { bg: 'bg-gray-500/20 text-gray-400', label: '⏳ Pending' },
@@ -23,6 +24,7 @@ export default function TaskResultModal() {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const createTask = useStore((s) => s.createTask);
   const [copied, setCopied] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   if (!selectedTaskId) return null;
 
@@ -46,7 +48,13 @@ export default function TaskResultModal() {
     await createTask(task.title, task.description, task.assigneeId);
   };
 
+  const previewCode = task.result ? extractPreviewableCode(task.result) : null;
+
   const close = () => setSelectedTask(null);
+
+  if (showPreview && previewCode) {
+    return <LivePreview html={previewCode} onClose={() => setShowPreview(false)} />;
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center" onClick={close}>
@@ -103,6 +111,14 @@ export default function TaskResultModal() {
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-gray-700/30 flex justify-end gap-2">
+          {previewCode && (
+            <button
+              onClick={() => setShowPreview(true)}
+              className="px-3 py-1.5 text-sm bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-lg font-medium transition-colors"
+            >
+              ▶️ Run Preview
+            </button>
+          )}
           {task.result && (
             <button
               onClick={handleCopy}

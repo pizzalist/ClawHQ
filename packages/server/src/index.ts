@@ -78,6 +78,47 @@ app.post('/api/agents', (req, res) => {
   }
 });
 
+// Live preview endpoint — extract HTML from task result
+app.get('/api/tasks/:id/preview', (req, res) => {
+  const row = stmts.getTask.get(req.params.id) as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: 'Task not found' });
+  const result = row.result as string | null;
+  if (!result) return res.status(404).json({ error: 'No result' });
+
+  const html = extractHtmlFromResult(result);
+  if (!html) return res.status(404).json({ error: 'No previewable code found' });
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+function extractHtmlFromResult(result: string): string | null {
+  // Markdown code blocks
+  const htmlBlock = result.match(/```html\s*\n([\s\S]*?)```/i);
+  if (htmlBlock) return htmlBlock[1].trim();
+
+  const jsBlock = result.match(/```(?:javascript|js)\s*\n([\s\S]*?)```/i);
+  if (jsBlock) {
+    const js = jsBlock[1].trim();
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}canvas{display:block;max-width:100%}</style></head><body><canvas id="canvas" width="800" height="600"></canvas><script>${js}</script></body></html>`;
+  }
+
+  // Raw HTML
+  if (/<html[\s>]/i.test(result) || /<!DOCTYPE\s+html/i.test(result)) {
+    const start = result.indexOf('<');
+    const end = result.lastIndexOf('>');
+    if (start !== -1 && end > start) return result.slice(start, end + 1);
+  }
+
+  if (/<(?:script|canvas|style|body|head)[\s>]/i.test(result) && /<\/(?:script|body|html)>/i.test(result)) {
+    const start = result.indexOf('<');
+    const end = result.lastIndexOf('>');
+    if (start !== -1 && end > start) return result.slice(start, end + 1);
+  }
+
+  return null;
+}
+
 app.get('/api/tasks/:id', (req, res) => {
   const row = stmts.getTask.get(req.params.id) as Record<string, unknown> | undefined;
   if (!row) return res.status(404).json({ error: 'Task not found' });

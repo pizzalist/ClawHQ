@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import type { TaskStatus } from '@ai-office/shared';
+import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 
 const STATUS_BADGE: Record<string, { bg: string; icon: string }> = {
   pending: { bg: 'bg-gray-500/20 text-gray-400', icon: '⏳' },
@@ -25,6 +26,7 @@ export default function TaskListView() {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const [filter, setFilter] = useState<Filter>('all');
   const [sortAsc, setSortAsc] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
 
   const agentMap = new Map(agents.map((a) => [a.id, a]));
 
@@ -45,6 +47,7 @@ export default function TaskListView() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 p-4">
+      {previewHtml && <LivePreview html={previewHtml} onClose={() => setPreviewHtml(null)} />}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {filters.map(([f, label]) => (
           <button
@@ -101,7 +104,22 @@ export default function TaskListView() {
                       </span>
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="font-medium text-gray-200 truncate max-w-[300px]">{t.title}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-gray-200 truncate max-w-[280px]">{t.title}</span>
+                        {isPreviewable(t.result) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const code = extractPreviewableCode(t.result!);
+                              if (code) setPreviewHtml(code);
+                            }}
+                            className="shrink-0 text-emerald-400 hover:text-emerald-300 text-xs"
+                            title="Run Preview"
+                          >
+                            ▶️
+                          </button>
+                        )}
+                      </div>
                       {t.result && (
                         <div className="text-[10px] text-gray-500 truncate max-w-[300px] mt-0.5">
                           {t.result.slice(0, 80)}...
