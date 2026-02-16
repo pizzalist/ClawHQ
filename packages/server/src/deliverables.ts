@@ -291,6 +291,31 @@ export function validateWebDeliverable(html: string): { valid: boolean; issues: 
     issues.push('Canvas element found but no rendering library/context initialization detected');
   }
 
+  // Check for missing DOM content in non-canvas apps
+  if (!/<canvas/i.test(html) && /<body[^>]*>\s*<\/body>/i.test(html)) {
+    issues.push('Empty <body> tag — page will show blank screen');
+  }
+
+  // Check for external resource dependencies that may fail
+  const externalScripts = (html.match(/<script[^>]+src=["']https?:\/\//gi) || []).length;
+  const externalStyles = (html.match(/<link[^>]+href=["']https?:\/\//gi) || []).length;
+  if (externalScripts + externalStyles > 3) {
+    issues.push(`${externalScripts + externalStyles} external resources — may fail to load in sandboxed environment`);
+  }
+
+  // Check for common syntax errors
+  if (/<script/i.test(html)) {
+    const scriptContent = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
+    if (scriptContent) {
+      for (const block of scriptContent) {
+        const inner = block.replace(/<\/?script[^>]*>/gi, '');
+        if (/\bconst\s+\w+\s*=\s*$/.test(inner.trim()) || /\bfunction\s+\w+\s*\(\s*$/.test(inner.trim())) {
+          issues.push('Script appears truncated — may cause runtime error');
+        }
+      }
+    }
+  }
+
   return { valid: issues.length === 0, issues };
 }
 

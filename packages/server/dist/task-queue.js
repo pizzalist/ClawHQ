@@ -5,6 +5,7 @@ import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun } from './openclaw-adapter.js';
 import { createDeliverablesFromResult } from './deliverables.js';
+import { shouldAutoChain, advanceChainPlan, hasPendingChainPlan, getChainPlanForTask } from './chain-plan.js';
 const listeners = [];
 export function onTaskEvent(fn) {
     listeners.push(fn);
@@ -227,6 +228,23 @@ function needsDevFollowupAfterReview(task) {
     const devFixIntent = /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(text);
     return reviewIntent && devFixIntent;
 }
+function estimateTaskComplexity(task) {
+    const text = `${task.title}\n${task.description}`.toLowerCase();
+    let score = 0;
+    if ((task.expectedDeliverables || []).some(t => t === 'web' || t === 'code' || t === 'api'))
+        score += 2;
+    if (/복잡|대규모|멀티|통합|아키텍처|배포|인프라|migration|refactor/i.test(text))
+        score += 2;
+    if (text.length > 180)
+        score += 1;
+    if (/(긴급|hotfix|quick|빠르게|간단)/i.test(text))
+        score -= 1;
+    if (score >= 3)
+        return 'high';
+    if (score >= 1)
+        return 'medium';
+    return 'low';
+}
 function isAdministrativeTask(task) {
     const text = `${task.title}\n${task.description}`.toLowerCase();
     const managementIntent = /(취소|cancel|상태\s*조회|status\s*check|진행\s*상태|대기열|queue\s*status|reset|중지|stop\s+task|재시작|restart)/i.test(text);
@@ -239,9 +257,16 @@ export function decideNextRoleByIntent(task, currentRole) {
     const reportOnly = isReportOnlyDeliverable(task.expectedDeliverables);
     const reviewRequested = needsReviewByIntent(task);
     const qaToDevRequested = needsDevFollowupAfterReview(task);
+    const complexity = estimateTaskComplexity(task);
     if (currentRole === 'pm') {
-        if (qaToDevRequested)
+        // Dynamic recommendation: QA->Dev is one option, not globally forced.
+        if (qaToDevRequested) {
+            // Complex/high-risk tasks: PM leads implementation first, then QA/Reviewer later.
+            if (complexity === 'high')
+                return 'developer';
+            // Medium/low or bugfix validation: QA first then Dev correction.
             return 'qa';
+        }
         // report/document: PM -> Reviewer only when explicitly asked
         if (reportOnly)
             return reviewRequested ? 'reviewer' : undefined;
@@ -252,9 +277,9 @@ export function decideNextRoleByIntent(task, currentRole) {
         return qaToDevRequested ? 'developer' : undefined;
     }
     if (currentRole === 'developer') {
-        // QA->Developer corrective chain defaults to stop after developer fix.
+        // QA->Developer correction flow usually ends after Dev fix unless explicit extra review intent.
         if (qaToDevRequested)
-            return undefined;
+            return reviewRequested && complexity === 'high' ? 'reviewer' : undefined;
         // Developer -> Reviewer only when explicitly requested by intent
         return reviewRequested ? 'reviewer' : undefined;
     }
@@ -363,21 +388,47 @@ function handleRunComplete(agentId, taskId, title, run) {
                     catch (e) {
                         console.error('[deliverables] parse error:', e);
                     }
-                    // Auto-chain: spawn conditional next step (intent/type-based)
-                    const chain = spawnChainFollowUp(agentId, taskId, title, result);
+                    // Chain plan aware: check if auto-chain should proceed
                     const currentTask = rowToTask(stmts.getTask.get(taskId));
                     const isRootTask = !currentTask.parentTaskId;
+                    const rootTaskId = isRootTask ? taskId : findRootTask(taskId).id;
+                    const autoChain = shouldAutoChain(rootTaskId);
+                    let chainSpawned = false;
+                    if (autoChain) {
+                        // Auto-execute is ON and there's a next step — proceed
+                        const { nextStep, plan } = advanceChainPlan(autoChain.planId);
+                        if (nextStep) {
+                            const chain = spawnChainFollowUp(agentId, taskId, title, result);
+                            chainSpawned = chain.spawned;
+                        }
+                    }
+                    else if (hasPendingChainPlan(rootTaskId)) {
+                        // Plan exists but auto-execute is OFF — notify user to confirm next step
+                        const plan = getChainPlanForTask(rootTaskId);
+                        if (plan) {
+                            const nextIdx = plan.currentStep + 1;
+                            const nextStep = plan.steps[nextIdx];
+                            emitTaskEvent('message', agentId, taskId, `⏸️ 다음 단계 대기 중: ${nextStep.label} (${nextStep.reason}). 계속하려면 승인해주세요.`);
+                        }
+                    }
+                    else if (!getChainPlanForTask(rootTaskId)) {
+                        // No chain plan exists — legacy behavior: try auto-chain for backward compat
+                        const chain = spawnChainFollowUp(agentId, taskId, title, result);
+                        chainSpawned = chain.spawned;
+                    }
                     // Only emit task_completed for root when no follow-up chain was spawned.
-                    if (!(isRootTask && chain.spawned)) {
+                    if (!(isRootTask && chainSpawned)) {
                         emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
                     }
                     // Update root task with chain progress/completion
                     updateRootTaskFromChain(taskId, result);
-                    if (isRootTask && chain.spawned && chain.nextRole) {
+                    if (isRootTask && chainSpawned) {
                         const rootTask = rowToTask(stmts.getTask.get(taskId));
-                        const totalSteps = getPlannedStepCount(rootTask);
-                        const stepLabel = CHAIN_STEP_LABELS[chain.nextRole] || chain.nextRole;
-                        stmts.updateTask.run(agentId, 'in-progress', `⏳ Step 1/${totalSteps}: ${stepLabel} starting...`, taskId);
+                        const plan = getChainPlanForTask(taskId);
+                        const totalSteps = plan ? plan.steps.length : getPlannedStepCount(rootTask);
+                        const currentStep = plan ? plan.currentStep : 0;
+                        const stepLabel = plan ? plan.steps[currentStep]?.label : 'next';
+                        stmts.updateTask.run(agentId, 'in-progress', `⏳ Step ${currentStep + 1}/${totalSteps}: ${stepLabel} starting...`, taskId);
                     }
                     // Return to idle after brief pause
                     setTimeout(() => {
@@ -448,7 +499,7 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         return { spawned: false };
     }
 }
-export { getChainChildren, findRootTask };
+export { getChainChildren, findRootTask, spawnChainFollowUp };
 export function listEvents() {
     return stmts.listEvents.all().map(row => ({
         id: row.id,

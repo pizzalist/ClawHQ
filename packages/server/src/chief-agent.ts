@@ -159,7 +159,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     emitCheckIn({
       id: `checkin-chain-${event.taskId}-${Date.now()}`,
       stage: 'progress',
-      message: `🔗 승인된 체인을 계속 진행합니다.\n현재 단계가 완료되어 다음 단계를 자동 시작했습니다.\n\n${event.message}`,
+      message: `🔗 **추천:** 다음 단계로 진행하는 것을 권장합니다.\n현재 단계 결과를 바탕으로 자동 시작했습니다. 원치 않으면 멈출 수 있습니다.\n\n${event.message}`,
       options: [
         { id: 'ok', label: '👍 계속 진행', description: '자동 체인 진행을 유지합니다' },
         { id: 'pause', label: '⏸️ 멈춤', description: '현재 체인을 일시중지합니다' },
@@ -191,9 +191,10 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     const webDeliverables = deliverables.filter(d => d.type === 'web');
     let validationWarning = '';
     for (const wd of webDeliverables) {
-      const validation = wd.metadata?.validation || validateWebDeliverable(wd.content);
+      // Always re-validate to catch edge cases
+      const validation = validateWebDeliverable(wd.content);
       if (!validation.valid) {
-        validationWarning = `\n\n⚠️ **실행 검증 경고**: ${validation.issues.join('; ')}\n브라우저에서 빈 화면이 될 수 있습니다. 수정 요청을 권장합니다.`;
+        validationWarning = `\n\n⚠️ **빈 화면 위험 경고**:\n${validation.issues.map(i => `• ${i}`).join('\n')}\n\n🔍 체크리스트: DOM mount 확인 / console error 확인 / network 404·500 확인 / 렌더 루프 여부\n수정 요청을 권장합니다.`;
         break;
       }
     }
@@ -517,6 +518,11 @@ function buildChiefSystemPrompt(): string {
 - 단순/정의형 설명 요청 → 최대 4줄
 - 복잡한 기획 → 최대 8줄 + 옵션 2개
 
+체인/파이프라인 제안 시:
+- 반드시 "추천안입니다. 확정하시면 실행합니다." 형태로 안내하세요.
+- 확정 전에는 "실행합니다" 또는 "진행합니다" 같은 단정 문구를 사용하지 마세요.
+- QA→Dev 등 역할 전환 시 "다음 단계로 ○○를 추천합니다. 진행할까요?" 형태를 사용하세요.
+
 미팅은 다음 경우에만 제안하세요:
 - 사용자가 명시적으로 회의를 요청한 경우
 - 3명 이상의 에이전트가 협업해야 하는 복잡한 작업인 경우
@@ -591,7 +597,7 @@ function recommendStartRoleFromIntent(title: string, description: string, explic
 function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
   const msg = (userMessage || '').toLowerCase();
 
-  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|언제\s*줘|언제\s*돼|언제\s*끝|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
+  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|언제\s*줘|언제\s*돼|언제\s*끝|다\s*됐|아직(이야|인가|이냐|이에요)?|어떻게\s*되|되고\s*있|결과\s*나왔|끝났|완료\s*됐|다\s*했|했어\?|됐어\?|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
   const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg);
 
   if (readOnlyStatusLike && !mutationLike) {
@@ -647,13 +653,25 @@ function buildMonitoringReply(userMessage: string): string {
     .map(t => `"${t.title}"`)
     .join(', ');
 
-  const wantsEta = /(eta|예상\s*시간|얼마나\s*남|언제\s*끝)/i.test(userMessage);
+  const wantsEta = /(eta|예상\s*시간|얼마나\s*남|언제\s*끝|언제\s*줘|언제\s*돼)/i.test(userMessage);
+  const wantsResult = /(다\s*됐|끝났|완료\s*됐|결과\s*나왔)/i.test(userMessage);
+
+  if (wantsResult) {
+    const recent = [...completed]
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 2);
+    if (recent.length > 0) {
+      const names = recent.map(t => `"${t.title}"`).join(', ');
+      return `최근 완료: ${names}. 전체 완료 ${completed.length}건 · 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다. 결과는 '결과 보기'에서 확인할 수 있습니다.`;
+    }
+    return `아직 완료된 작업이 없습니다. 현재 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다.`;
+  }
 
   if (wantsEta) {
     const etaLine = inProgress.length > 0
-      ? `ETA는 아직 고정하기 어렵지만, 현재 진행 중 ${inProgress.length}건(${latestProgress || '작업'}) 완료 후 바로 갱신해 드릴게요.`
-      : '현재 진행 중 작업이 없어 ETA는 즉시(대기 0건 기준)입니다.';
-    return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건입니다. ${etaLine}`;
+      ? `현재 진행 중 ${inProgress.length}건(${latestProgress || '작업'})이 있으며, 완료 시 바로 알려드리겠습니다.`
+      : '현재 진행 중 작업이 없어 즉시 처리 가능합니다.';
+    return `대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건. ${etaLine}`;
   }
 
   return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건이며, 에이전트는 ${agents.length}명입니다${latestProgress ? ` (진행중: ${latestProgress})` : ''}.`;
@@ -847,9 +865,9 @@ export function approveProposal(messageId: string, selectedIndices?: number[], o
   let summaryMsg = `🎯 **실행 완료** — 성공 ${successCount}건`;
   if (failCount > 0) summaryMsg += `, 실패 ${failCount}건`;
   if (pendingTasks.length > 0) {
-    summaryMsg += `\n\n📋 현재 진행/대기 중인 작업 ${pendingTasks.length}건이 있습니다. 결과가 나오면 알려드리겠습니다.`;
+    summaryMsg += `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• "진행중이야?"로 상태 확인 가능\n• 완료 시 자동으로 보고드립니다`;
   } else {
-    summaryMsg += `\n\n추가 작업이 필요하시면 말씀해주세요.`;
+    summaryMsg += `\n\n📌 **다음 단계:** 추가 작업이 필요하시면 말씀해주세요.`;
   }
 
   pushMessage('chief-default', {
@@ -1092,13 +1110,13 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
       let reply = `실행 결과:\n${results.join('\n')}`;
       if (remainingCount > 0) {
-        reply += `\n\n남은 액션 ${remainingCount}건:\n${remainingPending!.map((a, i) => `${i + 1}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join('\n')}\n\n'승인'이라고 하시면 나머지도 자동 실행합니다.`;
+        reply += `\n\n📌 **다음 단계:** 남은 액션 ${remainingCount}건이 있습니다.\n${remainingPending!.map((a, i) => `${i + 1}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join('\n')}\n\n'승인'이라고 하시면 나머지도 자동 실행합니다.`;
       } else {
         const pendingTasks = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress');
         if (pendingTasks.length > 0) {
-          reply += `\n\n📋 현재 ${pendingTasks.length}건의 작업이 진행/대기 중입니다. 결과가 나오면 알려드리겠습니다.`;
+          reply += `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• 상태 확인: "진행중이야?" 또는 "상태 확인"\n• 결과 확인: 완료 시 자동으로 알려드립니다\n• 추가 요청: 언제든 새 작업을 지시할 수 있습니다`;
         } else {
-          reply += `\n\n추가로 진행할 작업이 있나요?`;
+          reply += `\n\n📌 **다음 단계:** 모든 작업이 완료되었습니다.\n• 추가 작업이 필요하면 말씀해주세요\n• "상태 확인"으로 전체 현황을 볼 수 있습니다`;
         }
       }
 

@@ -8,7 +8,8 @@ import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren } from './task-queue.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, spawnChainFollowUp } from './task-queue.js';
+import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange } from './chain-plan.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, validateWebDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
@@ -59,6 +60,9 @@ onChiefCheckIn((checkIn) => {
 // Forward chief notifications (task/meeting results with inline actions)
 onChiefNotification((notification) => {
     broadcast({ type: 'chief_notification', payload: notification });
+});
+onChainPlanChange((plan) => {
+    broadcast({ type: 'chain_plan_update', payload: plan });
 });
 onTaskEvent((event) => {
     broadcast({ type: 'event', payload: event });
@@ -115,12 +119,12 @@ app.post('/api/chief/chat', (req, res) => {
     }
 });
 app.post('/api/chief/proposal/approve', (req, res) => {
-    const { messageId, selectedIndices } = req.body || {};
+    const { messageId, selectedIndices, overrideActions } = req.body || {};
     if (!messageId || typeof messageId !== 'string') {
         return res.status(400).json({ error: 'messageId is required' });
     }
     try {
-        const result = approveProposal(messageId, selectedIndices);
+        const result = approveProposal(messageId, selectedIndices, overrideActions);
         // Broadcast all updated state + chief messages so chat feedback appears
         broadcast({ type: 'agents_update', payload: listAgents() });
         broadcast({ type: 'tasks_update', payload: listTasks() });
@@ -734,6 +738,104 @@ app.post('/api/tech-spec/:id/rerun', (req, res) => {
     try {
         rerunTechSpecRole(req.params.id, role);
         res.json({ ok: true });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+// ---- Chain Plan API ----
+app.get('/api/chain-plans', (_req, res) => {
+    res.json(listAllChainPlans());
+});
+app.get('/api/chain-plans/active', (_req, res) => {
+    res.json(listActiveChainPlans());
+});
+app.get('/api/chain-plans/:id', (req, res) => {
+    const plan = getChainPlan(req.params.id);
+    if (!plan)
+        return res.status(404).json({ error: 'Plan not found' });
+    res.json(plan);
+});
+app.get('/api/chain-plans/by-task/:taskId', (req, res) => {
+    const plan = getChainPlanForTask(req.params.taskId);
+    if (!plan)
+        return res.status(404).json({ error: 'No plan for this task' });
+    res.json(plan);
+});
+app.post('/api/chain-plans/suggest', (req, res) => {
+    const { taskId, taskTitle, taskDescription, startRole, expectedDeliverables } = req.body;
+    if (!taskId || !taskTitle || !startRole) {
+        return res.status(400).json({ error: 'taskId, taskTitle, startRole required' });
+    }
+    const plan = suggestChainPlan(taskId, taskTitle, taskDescription || '', startRole, expectedDeliverables);
+    res.json(plan);
+});
+app.put('/api/chain-plans/:id/steps', (req, res) => {
+    const { steps } = req.body;
+    if (!Array.isArray(steps) || steps.length === 0) {
+        return res.status(400).json({ error: 'steps array required (min 1)' });
+    }
+    try {
+        const plan = editChainPlan(req.params.id, steps);
+        res.json(plan);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.put('/api/chain-plans/:id/auto-execute', (req, res) => {
+    const { autoExecute } = req.body;
+    if (typeof autoExecute !== 'boolean') {
+        return res.status(400).json({ error: 'autoExecute (boolean) required' });
+    }
+    try {
+        const plan = setChainAutoExecute(req.params.id, autoExecute);
+        res.json(plan);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/chain-plans/:id/confirm', (req, res) => {
+    try {
+        const plan = confirmChainPlan(req.params.id);
+        // If autoExecute is on and first step's task is pending, trigger queue
+        markChainRunning(plan.id);
+        processQueue();
+        broadcast({ type: 'tasks_update', payload: listTasks() });
+        res.json(plan);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/chain-plans/:id/advance', (req, res) => {
+    try {
+        const { nextStep, plan } = advanceChainPlan(req.params.id);
+        if (nextStep) {
+            // Find the latest completed task for this plan's task to chain from
+            const children = getChainChildren(plan.taskId);
+            const lastCompleted = children.length > 0
+                ? children.filter(t => t.status === 'completed').pop()
+                : null;
+            const sourceTaskId = lastCompleted?.id || plan.taskId;
+            const sourceTask = lastCompleted || listTasks().find(t => t.id === plan.taskId);
+            if (sourceTask && sourceTask.assigneeId) {
+                spawnChainFollowUp(sourceTask.assigneeId, sourceTaskId, plan.taskTitle, sourceTask.result || '');
+            }
+            processQueue();
+        }
+        broadcast({ type: 'tasks_update', payload: listTasks() });
+        res.json({ nextStep, plan });
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
+app.post('/api/chain-plans/:id/cancel', (req, res) => {
+    try {
+        const plan = cancelChainPlan(req.params.id);
+        res.json(plan);
     }
     catch (err) {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });

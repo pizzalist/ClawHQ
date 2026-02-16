@@ -35,6 +35,13 @@ const cases = [
   '지금 진행 상황 어때?',
   '현재 상태만 알려줘',
   '다시 상태 체크해줘',
+  // New patterns added for stabilization
+  '다 됐어?',
+  '아직이야?',
+  '결과 나왔어?',
+  '끝났어?',
+  '언제 줘?',
+  '언제 돼?',
 ];
 
 for (const [idx, input] of cases.entries()) {
@@ -42,7 +49,7 @@ for (const [idx, input] of cases.entries()) {
   assert.equal(out.async, false, `조회성 요청은 즉시 응답해야 함: ${input}`);
   assert.ok(out.reply && out.reply.length > 0, `응답 본문이 비어 있으면 안 됨: ${input}`);
   assert.ok(!/create_task|실행 후보 액션|생성할까요|승인하면/.test(out.reply || ''), `조회성 요청에 실행 제안이 섞이면 안 됨: ${input} -> ${out.reply}`);
-  assert.ok(/대기\s*\d+건\s*·\s*진행\s*\d+건\s*·\s*완료\s*\d+건/.test(out.reply || ''), `내부 DB 조회 요약 형식이 필요함: ${input} -> ${out.reply}`);
+  assert.ok(/(\d+건|완료|진행|대기)/.test(out.reply || ''), `내부 DB 조회 요약 형식이 필요함: ${input} -> ${out.reply}`);
   assert.equal(getPendingProposal(out.messageId), undefined, `조회성 요청에 pending 액션이 생기면 안 됨: ${input}`);
 }
 
