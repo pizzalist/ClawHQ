@@ -50,6 +50,8 @@ async function waitForIdle(maxSeconds = 240) {
   return false;
 }
 
+const RUN_TIMEOUT_SECONDS = Number(process.env.AI_OFFICE_SCENARIO_TIMEOUT_SEC || 120);
+
 async function runScenario(index, scenario) {
   const before = await listTasks();
   const beforeIds = new Set(before.map((t) => t.id));
@@ -60,10 +62,16 @@ async function runScenario(index, scenario) {
   await sleep(12000);
 
   await chat('응');
-  await waitForIdle(180);
+  const idle1 = await waitForIdle(RUN_TIMEOUT_SECONDS);
+  if (!idle1) {
+    log(`result: ⚠️ timeout while waiting first phase`);
+  }
 
   await chat('확정');
-  await waitForIdle(180);
+  const idle2 = await waitForIdle(RUN_TIMEOUT_SECONDS);
+  if (!idle2) {
+    log(`result: ⚠️ timeout while waiting confirm phase`);
+  }
 
   const after = await listTasks();
   const created = after.filter((t) => !beforeIds.has(t.id));

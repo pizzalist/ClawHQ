@@ -15,6 +15,7 @@
     "demo:start": "node scripts/demo-start.mjs",
     "demo:fixture": "node scripts/demo-fixture.mjs",
     "demo:scenarios": "node scripts/demo-scenarios.mjs",
+    "demo:report": "node scripts/demo-report.mjs",
     "docker:build": "docker build -t ai-office .",
     "docker:run": "docker compose up -d"
   },

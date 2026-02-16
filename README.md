@@ -75,7 +75,13 @@ npm run demo:fixture
 npm run demo:scenarios
 ```
 
-### 6) Open
+### 6) Generate latest demo report (optional)
+
+```bash
+npm run demo:report
+```
+
+### 7) Open
 
 - Web/API server: `http://localhost:3001`
 
