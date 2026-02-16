@@ -1,6 +1,6 @@
 # QC Hotfix Round 2 — 4 Bugs Fix Report
 
-**커밋**: `0a8da5d`
+**커밋**: `1e51bb3`
 **날짜**: 2026-02-16
 
 ## Bug 1: 미팅 인원 불일치 (3명 요청 → 2명 참여)
@@ -53,3 +53,16 @@ Time:    4.869s
 ```
 
 모든 패키지 빌드 성공 (shared, server, web).
+
+## Bug 5: 확정 후 자동 다음 단계 실행 안 됨
+
+**원인**: `handleChiefAction`의 approve 분기에서 review meeting 확정 시 "구체적인 작업 지시를 해주세요" 텍스트만 출력하고 종료
+
+**수정**:
+- `chief-agent.ts`: review meeting 확정 시 자동으로:
+  1. 추천안 기반 `[기획/명세서]` 태스크 생성 (상세 요구사항 포함)
+  2. idle PM 에이전트에 자동 배정 (없으면 생성)
+  3. `processQueue()` 호출로 즉시 실행 시작
+  4. 사용자에게 자동 실행 알림 표시 ("구체적인 작업 지시" 멘트 제거)
+
+**PASS** ✅

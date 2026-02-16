@@ -4,7 +4,7 @@ import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './a
 import { listTasks, createTask, processQueue } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
-import { suggestChainPlan } from './chain-plan.js';
+import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan } from './chain-plan.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
@@ -333,7 +333,6 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
   // Normalize: actionId may be compound like "approve-meeting-xxx" or "revise-meeting-xxx"
   if (actionId === 'approve' || actionId.startsWith('approve-') || actionId.startsWith('approve_')) {
-    // Generate context-aware next-step guidance
     const meetingId = params?.meetingId;
     const taskId = params?.taskId;
     const nextStepLines: string[] = ['✅ 확정되었습니다.'];
@@ -341,84 +340,188 @@ export function handleChiefAction(notificationId: string, actionId: string, para
     if (meetingId) {
       const meeting = getMeeting(meetingId);
       if (!meeting) {
-        nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
-      } else if (meeting) {
-        // Check for child review meetings or suggest next actions
-        const children = getChildMeetings(meetingId);
-        const hasReview = children.some(c => c.type === 'review' || c.sourceMeetingId === meetingId);
+        nextStepLines.push('\n\n완료.');
+      } else {
         if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
-          if (!hasReview) {
-            nextStepLines.push('\n\n📌 **다음 단계 옵션:**');
-            nextStepLines.push('• 리뷰어 점수화를 시작하여 후보를 평가할 수 있습니다');
-            nextStepLines.push('• 또는 바로 실행 작업을 생성할 수 있습니다');
-            nextStepLines.push('\n무엇을 진행할까요?');
+          // Auto-start review meeting for planning/brainstorm results
+          const candidates = extractCandidatesFromMeeting(meetingId);
+          if (candidates && candidates.length > 0) {
+            // Find or create 3 reviewers
+            const agents = listAgents();
+            const reviewerIds: string[] = [];
+            for (const r of agents.filter(a => a.role === 'reviewer')) {
+              if (reviewerIds.length < 3) reviewerIds.push(r.id);
+            }
+            while (reviewerIds.length < 3) {
+              const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', DEFAULT_MODEL_BY_ROLE.reviewer);
+              reviewerIds.push(created.id);
+            }
+            const reviewMeeting = startReviewMeetingFromSource(
+              `[리뷰] ${meeting.title}`,
+              meetingId,
+              reviewerIds,
+            );
+            if (reviewMeeting) {
+              nextStepLines.push(`\n\n🚀 **자동 실행:** 리뷰 미팅 "${reviewMeeting.title}" 자동 시작`);
+              nextStepLines.push(`🔍 ${reviewerIds.length}명의 리뷰어가 후보를 평가 중입니다.`);
+              nextStepLines.push(`완료 시 점수표와 최종 추천안을 자동 보고드리겠습니다.`);
+            } else {
+              // No candidates extractable — create spec task directly
+              const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
+              const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
+              const allAgents = listAgents();
+              let pmAgent = allAgents.find(a => a.role === 'pm' && a.state === 'idle') || allAgents.find(a => a.role === 'pm');
+              if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+              const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+              setTimeout(() => processQueue(), 200);
+              nextStepLines.push(`\n\n🚀 **자동 실행:** 기획/명세서 작성 태스크를 ${pmAgent.name}에게 배정했습니다.`);
+              nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+            }
           } else {
-            nextStepLines.push('\n\n📌 **다음 단계:** 리뷰 미팅 결과를 바탕으로 실행 작업을 생성할 수 있습니다. 어떤 작업이 필요한가요?');
+            // No structured candidates — create spec task from meeting content
+            const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
+            const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
+            const allAgents = listAgents();
+            let pmAgent = allAgents.find(a => a.role === 'pm' && a.state === 'idle') || allAgents.find(a => a.role === 'pm');
+            if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+            setTimeout(() => processQueue(), 200);
+            nextStepLines.push(`\n\n🚀 **자동 실행:** 기획/명세서 작성 태스크를 ${pmAgent.name}에게 배정했습니다.`);
+            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
           }
         } else if (meeting.sourceMeetingId) {
-          // Review meeting confirmed → auto-create spec task
+          // Review meeting confirmed → auto-create spec task from recommendation
           const rec = meeting.decisionPacket?.recommendation;
-          if (rec) {
-            const taskTitle = `[기획/명세서] ${rec.name}`;
-            const taskDesc = [
-              `회의 "${meeting.title}" 확정 결과 기반 자동 생성 태스크입니다.`,
-              ``,
-              `## 추천안`,
-              `- 이름: ${rec.name}`,
-              rec.summary ? `- 요약: ${rec.summary}` : '',
-              rec.score != null ? `- 점수: ${Number(rec.score).toFixed(2)}` : '',
-              ``,
-              `## 요구사항`,
-              `위 추천안을 기반으로 상세 기획서 및 개발 명세서를 작성하세요.`,
-              `- 기능 요구사항 정의`,
-              `- 기술 스택 및 아키텍처 제안`,
-              `- MVP 범위 및 마일스톤`,
-              `- 리스크 및 대응 방안`,
-            ].filter(Boolean).join('\n');
+          const recName = rec?.name || meeting.title;
+          const taskTitle = `[기획/명세서] ${recName}`;
+          const taskDesc = [
+            `회의 "${meeting.title}" 확정 결과 기반 자동 생성 태스크입니다.`,
+            ``,
+            rec ? `## 추천안` : '',
+            rec ? `- 이름: ${rec.name}` : '',
+            rec?.summary ? `- 요약: ${rec.summary}` : '',
+            rec?.score != null ? `- 점수: ${Number(rec.score).toFixed(2)}` : '',
+            ``,
+            `## 요구사항`,
+            `위 추천안을 기반으로 상세 기획서 및 개발 명세서를 작성하세요.`,
+            `- 기능 요구사항 정의`,
+            `- 기술 스택 및 아키텍처 제안`,
+            `- MVP 범위 및 마일스톤`,
+            `- 리스크 및 대응 방안`,
+          ].filter(Boolean).join('\n');
 
-            // Find or create a PM agent for assignment
-            const agents = listAgents();
-            let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle');
-            if (!pmAgent) pmAgent = agents.find(a => a.role === 'pm');
-            if (!pmAgent) {
-              pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
-            }
+          const agents = listAgents();
+          let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
+          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
 
-            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
-            setTimeout(() => processQueue(), 200);
+          const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+          setTimeout(() => processQueue(), 200);
 
-            nextStepLines.push(`\n\n🚀 **자동 실행:** 추천안 "${rec.name}" 기반 기획/명세서 작성 태스크를 생성하여 ${pmAgent.name}에게 배정했습니다.`);
-            nextStepLines.push(`📋 태스크: "${taskTitle}"`);
-            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
-          } else {
-            // No recommendation — still auto-create a generic spec task
-            const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
-            const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.`;
-            const agents = listAgents();
-            let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
-            if (!pmAgent) {
-              pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
-            }
-            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
-            setTimeout(() => processQueue(), 200);
-
-            nextStepLines.push(`\n\n🚀 **자동 실행:** 확정 결과 기반 기획/명세서 작성 태스크를 생성하여 ${pmAgent.name}에게 배정했습니다.`);
-            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
-          }
+          nextStepLines.push(`\n\n🚀 **자동 실행:** 추천안 "${recName}" 기반 기획/명세서 작성 태스크 생성 → ${pmAgent.name}에게 배정 → 실행 중`);
+          nextStepLines.push(`📋 태스크: "${taskTitle}"`);
+          nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
         } else {
-          nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
+          // Generic meeting — create task from content
+          const taskTitle = `[실행] ${meeting.title} 확정안`;
+          const taskDesc = `회의 "${meeting.title}" 결과를 실행하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
+          const agents = listAgents();
+          let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
+          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+          const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+          setTimeout(() => processQueue(), 200);
+          nextStepLines.push(`\n\n🚀 **자동 실행:** 실행 태스크를 ${pmAgent.name}에게 배정했습니다.`);
+          nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
         }
       }
     } else if (taskId) {
-      const tasks = listTasks();
-      const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in-progress').length;
-      if (pendingCount > 0) {
-        nextStepLines.push(`\n\n📌 **다음 단계:** 남은 작업 ${pendingCount}건이 진행/대기 중입니다. 완료 시 자동으로 보고드립니다.`);
+      // Task confirmed — auto-advance chain plan or create follow-up
+      const task = listTasks().find(t => t.id === taskId);
+      const chainPlan = task ? getChainPlanForTask(taskId) : null;
+
+      if (chainPlan && chainPlan.status !== 'completed' && chainPlan.status !== 'cancelled') {
+        const nextIdx = chainPlan.currentStep + 1;
+        if (nextIdx < chainPlan.steps.length) {
+          // Enable auto-execute and confirm plan if needed
+          if (!chainPlan.autoExecute) {
+            setChainAutoExecute(chainPlan.id, true);
+          }
+          if (chainPlan.status === 'proposed') {
+            confirmChainPlan(chainPlan.id);
+          }
+          // Advance to next step
+          const { nextStep } = advanceChainPlan(chainPlan.id);
+          if (nextStep) {
+            // Find or create agent for next step
+            const agents = listAgents();
+            let nextAgent = agents.find(a => a.role === nextStep.role && a.state === 'idle') || agents.find(a => a.role === nextStep.role);
+            if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextStep.role), nextStep.role, DEFAULT_MODEL_BY_ROLE[nextStep.role]);
+
+            const nextTitle = `[${nextStep.label}] ${task?.title || ''}`.trim();
+            const nextDesc = `이전 단계 결과를 기반으로 ${nextStep.label}을(를) 수행하세요.\n\n${nextStep.reason}\n\n## 이전 결과\n${(task?.result || '').slice(0, 2000)}`;
+            const newTask = createTask(nextTitle, nextDesc, nextAgent.id);
+            setTimeout(() => processQueue(), 200);
+
+            nextStepLines.push(`\n\n🚀 **자동 실행:** 다음 단계 "${nextStep.label}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
+            nextStepLines.push(`📋 태스크: "${nextTitle}"`);
+            nextStepLines.push(`📊 체인 진행: ${nextIdx + 1}/${chainPlan.steps.length} 단계`);
+            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+          } else {
+            nextStepLines.push(`\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`);
+          }
+        } else {
+          nextStepLines.push(`\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`);
+        }
+      } else if (task && task.result) {
+        // No chain plan — derive next step from task context
+        const taskTitle = task.title.toLowerCase();
+        let nextRole: import('@ai-office/shared').AgentRole = 'developer';
+        let nextLabel = '개발 실행';
+        if (/(기획|명세|spec|plan)/i.test(taskTitle)) {
+          nextRole = 'developer';
+          nextLabel = '개발 실행';
+        } else if (/(개발|구현|implement|code)/i.test(taskTitle)) {
+          nextRole = 'reviewer';
+          nextLabel = '코드 리뷰';
+        } else if (/(리뷰|review)/i.test(taskTitle)) {
+          nextRole = 'qa';
+          nextLabel = 'QA 검증';
+        } else {
+          // Default: no auto follow-up for ambiguous tasks
+          const pendingCount = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress').length;
+          if (pendingCount > 0) {
+            nextStepLines.push(`\n\n📌 남은 작업 ${pendingCount}건이 진행/대기 중입니다. 완료 시 자동 보고드립니다.`);
+          } else {
+            nextStepLines.push(`\n\n✅ 모든 작업이 완료되었습니다.`);
+          }
+          reply = nextStepLines.join('');
+          // skip the auto-follow-up below
+          const replyMsg2: ChiefChatMessage = {
+            id: `chief-action-reply-${Date.now()}`,
+            role: 'chief',
+            content: reply,
+            createdAt: new Date().toISOString(),
+          };
+          pushMessage(scopedSessionId, replyMsg2);
+          return { reply, sessionId: scopedSessionId };
+        }
+
+        const agents = listAgents();
+        let nextAgent = agents.find(a => a.role === nextRole && a.state === 'idle') || agents.find(a => a.role === nextRole);
+        if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextRole), nextRole, DEFAULT_MODEL_BY_ROLE[nextRole]);
+
+        const nextTaskTitle = `[${nextLabel}] ${task.title}`;
+        const nextTaskDesc = `이전 태스크 "${task.title}" 결과를 기반으로 ${nextLabel}을(를) 수행하세요.\n\n## 이전 결과\n${(task.result || '').slice(0, 2000)}`;
+        const newTask = createTask(nextTaskTitle, nextTaskDesc, nextAgent.id);
+        setTimeout(() => processQueue(), 200);
+
+        nextStepLines.push(`\n\n🚀 **자동 실행:** "${nextLabel}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
+        nextStepLines.push(`📋 태스크: "${nextTaskTitle}"`);
+        nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
       } else {
-        nextStepLines.push('\n\n📌 **다음 단계:** 모든 작업이 완료되었습니다. 추가 작업이 필요하면 말씀해주세요.');
+        nextStepLines.push(`\n\n✅ 확정 완료.`);
       }
     } else {
-      nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
+      nextStepLines.push(`\n\n✅ 확정 완료.`);
     }
 
     reply = nextStepLines.join('');
