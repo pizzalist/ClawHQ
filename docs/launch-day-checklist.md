@@ -3,10 +3,10 @@
 ## A. Repo polish (must)
 
 - [ ] Replace `<your-repo-url>` in README with actual GitHub URL
-- [ ] Generate media with `npm run demo:media`
-- [ ] Add 1 main screenshot (`docs/media/main-dashboard.png`)
-- [ ] Add 1 short demo GIF (`docs/media/demo-flow.gif`, 20~40s)
-- [ ] Pin key docs in README:
+- [x] Generate media with `npm run demo:media`
+- [x] Add 1 main screenshot (`docs/media/main-dashboard.png`)
+- [x] Add 1 short demo GIF (`docs/media/demo-flow.gif`, 20~40s)
+- [x] Pin key docs in README:
   - `docs/demo-scenarios.md`
   - `docs/demo-latest-report.md`
   - `docs/good-first-issues.md`

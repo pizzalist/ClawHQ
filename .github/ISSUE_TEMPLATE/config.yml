@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Quickstart / Demo docs
+    url: https://github.com/<owner>/<repo>/blob/master/docs/demo-scenarios.md
+    about: Start here before opening setup issues.
