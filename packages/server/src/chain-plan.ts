@@ -199,6 +199,15 @@ export function markChainRunning(planId: string): ChainPlan {
   return plan;
 }
 
+/** Force-complete a plan when the last step has actually finished. */
+export function markChainCompleted(planId: string): ChainPlan {
+  const plan = plans.get(planId);
+  if (!plan) throw new Error(`Plan ${planId} not found`);
+  plan.status = 'completed';
+  emitChange(plan);
+  return plan;
+}
+
 /** Cancel a plan */
 export function cancelChainPlan(planId: string): ChainPlan {
   const plan = plans.get(planId);

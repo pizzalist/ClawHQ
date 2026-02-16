@@ -9,13 +9,14 @@ import type { WSMessage, InitialState, TeamPlanSuggestion } from '@ai-office/sha
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, spawnChainFollowUp } from './task-queue.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp } from './task-queue.js';
 import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange } from './chain-plan.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult, validateWebDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
 import { stmts } from './db.js';
+import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample } from './monitoring-mock.js';
 
 const app = express();
 app.use(cors());
@@ -286,6 +287,48 @@ function extractHtmlFromResult(result: string): string | null {
   return null;
 }
 
+function roleOfTask(taskId: string): string | null {
+  const row = stmts.getTask.get(taskId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  const assigneeId = row.assignee_id as string | null;
+  if (!assigneeId) return null;
+  return getAgent(assigneeId)?.role || null;
+}
+
+function getThreadSummary(taskId: string) {
+  const root = findRootTask(taskId);
+  const children = getChainChildren(root.id);
+  const threadTasks = [root, ...children];
+  const threadTaskIds = threadTasks.map(t => t.id);
+
+  const allDeliverables = threadTaskIds.flatMap(id => listDeliverablesByTask(id));
+  const sorted = [...allDeliverables].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const byRole = {
+    draft: sorted.filter(d => roleOfTask(d.taskId) === 'pm'),
+    qa: sorted.filter(d => {
+      const role = roleOfTask(d.taskId);
+      return role === 'qa' || role === 'reviewer';
+    }),
+    final: sorted.filter(d => roleOfTask(d.taskId) === 'developer'),
+  };
+
+  const latestDeliverableByThread = sorted.length > 0 ? sorted[sorted.length - 1] : null;
+  const finalPreferred = byRole.final.length > 0
+    ? byRole.final[byRole.final.length - 1]
+    : latestDeliverableByThread;
+
+  return {
+    rootTaskId: root.id,
+    taskIds: threadTaskIds,
+    finalDeliverableId: finalPreferred?.id || null,
+    latestDeliverableByThread: latestDeliverableByThread?.id || null,
+    draftDeliverableId: byRole.draft[byRole.draft.length - 1]?.id || null,
+    qaDeliverableId: byRole.qa[byRole.qa.length - 1]?.id || null,
+    allDeliverables: sorted,
+  };
+}
+
 app.get('/api/tasks/:id', (req, res) => {
   const row = stmts.getTask.get(req.params.id) as Record<string, unknown> | undefined;
   if (!row) return res.status(404).json({ error: 'Task not found' });
@@ -306,6 +349,15 @@ app.get('/api/tasks/:id', (req, res) => {
 app.get('/api/tasks/:id/chain', (req, res) => {
   const children = getChainChildren(req.params.id);
   res.json(children);
+});
+
+app.get('/api/tasks/:id/thread-summary', (req, res) => {
+  try {
+    const summary = getThreadSummary(req.params.id);
+    res.json(summary);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 app.get('/api/tasks', (req, res) => {
@@ -468,6 +520,28 @@ app.get('/api/failures', (_req, res) => {
     error: (r.error as string) || 'Unknown error',
     failedAt: r.failed_at as string,
   })));
+});
+
+// Monitoring API (mock data): metrics / timeseries / alerts
+app.get('/api/monitoring/metrics', (req, res) => {
+  const window = typeof req.query.window === 'string' ? req.query.window : undefined;
+  res.json(getMockMetrics(window));
+});
+
+app.get('/api/monitoring/timeseries', (req, res) => {
+  const metric = typeof req.query.metric === 'string' ? req.query.metric : undefined;
+  const window = typeof req.query.window === 'string' ? req.query.window : undefined;
+  const interval = typeof req.query.interval === 'string' ? req.query.interval : undefined;
+  res.json(getMockTimeSeries(metric, window, interval));
+});
+
+app.get('/api/monitoring/alerts', (req, res) => {
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  res.json(getMockAlerts(status));
+});
+
+app.get('/api/monitoring/schema-sample', (_req, res) => {
+  res.json(getMonitoringSchemaSample());
 });
 
 // Export endpoints

@@ -6,7 +6,7 @@ import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
 import { createDeliverablesFromResult, validateWebDeliverable } from './deliverables.js';
-import { shouldAutoChain, advanceChainPlan, hasPendingChainPlan, getChainPlanForTask, markChainRunning } from './chain-plan.js';
+import { shouldAutoChain, advanceChainPlan, hasPendingChainPlan, getChainPlanForTask, markChainRunning, markChainCompleted } from './chain-plan.js';
 
 type Listener = (event: AppEvent) => void;
 const listeners: Listener[] = [];
@@ -413,7 +413,7 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
           let chainSpawned = false;
           if (autoChain) {
             // Auto-execute is ON and there's a next step — proceed
-            const { nextStep, plan } = advanceChainPlan(autoChain.planId);
+            const { nextStep } = advanceChainPlan(autoChain.planId);
             if (nextStep) {
               const chain = spawnChainFollowUp(agentId, taskId, title, result);
               chainSpawned = chain.spawned;
@@ -427,10 +427,19 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
               emitTaskEvent('message', agentId, taskId,
                 `⏸️ 다음 단계 대기 중: ${nextStep.label} (${nextStep.reason}). 계속하려면 승인해주세요.`);
             }
-          } else if (!getChainPlanForTask(rootTaskId)) {
-            // No chain plan exists — legacy behavior: try auto-chain for backward compat
-            const chain = spawnChainFollowUp(agentId, taskId, title, result);
-            chainSpawned = chain.spawned;
+          } else {
+            const plan = getChainPlanForTask(rootTaskId);
+            if (plan) {
+              // 강제 재계산: websocket/동기화 지연으로 running 상태가 남지 않도록 terminal 상태 확정
+              const noRemainingStep = (plan.currentStep + 1) >= plan.steps.length;
+              if (noRemainingStep && plan.status !== 'completed' && plan.status !== 'cancelled') {
+                markChainCompleted(plan.id);
+              }
+            } else {
+              // No chain plan exists — legacy behavior: try auto-chain for backward compat
+              const chain = spawnChainFollowUp(agentId, taskId, title, result);
+              chainSpawned = chain.spawned;
+            }
           }
 
           // Only emit task_completed for root when no follow-up chain was spawned.

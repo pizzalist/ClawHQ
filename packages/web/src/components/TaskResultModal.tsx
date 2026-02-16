@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import type { Task } from '@ai-office/shared';
+import type { Task, Deliverable } from '@ai-office/shared';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 import DeliverableList from './deliverables/DeliverableList';
 import { MarkdownContent } from '../lib/format/markdown';
@@ -45,6 +45,14 @@ export default function TaskResultModal() {
   const [copied, setCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [threadSummary, setThreadSummary] = useState<{
+    finalDeliverableId: string | null;
+    latestDeliverableByThread: string | null;
+    draftDeliverableId: string | null;
+    qaDeliverableId: string | null;
+    allDeliverables: Deliverable[];
+  } | null>(null);
+  const [activeOutputTab, setActiveOutputTab] = useState<'final' | 'qa' | 'draft'>('final');
 
   if (!selectedTaskId) return null;
 
@@ -89,8 +97,33 @@ export default function TaskResultModal() {
   // Parse chain progress
   const chainProgress = task.result?.match(/^⏳ Step (\d+)\/(\d+): (.+)$/);
 
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/tasks/${task.id}/thread-summary`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!alive || !data) return;
+        setThreadSummary(data);
+        if (data.finalDeliverableId) setActiveOutputTab('final');
+        else if (data.qaDeliverableId) setActiveOutputTab('qa');
+        else if (data.draftDeliverableId) setActiveOutputTab('draft');
+      })
+      .catch(() => {
+        if (alive) setThreadSummary(null);
+      });
+    return () => { alive = false; };
+  }, [task.id]);
+
+  const selectedDeliverableId = activeOutputTab === 'final'
+    ? (threadSummary?.finalDeliverableId || threadSummary?.latestDeliverableByThread)
+    : activeOutputTab === 'qa'
+      ? threadSummary?.qaDeliverableId
+      : threadSummary?.draftDeliverableId;
+  const selectedDeliverable = threadSummary?.allDeliverables?.find(d => d.id === selectedDeliverableId) || null;
+  const finalOutputText = selectedDeliverable?.content || devStep?.result || task.result || '';
+
   const handleCopy = () => {
-    const textToCopy = devStep?.result || task.result;
+    const textToCopy = finalOutputText;
     if (textToCopy) {
       navigator.clipboard.writeText(textToCopy);
       setCopied(true);
@@ -236,19 +269,42 @@ export default function TaskResultModal() {
             </>
           )}
 
-          {/* Show raw output: for chain tasks show dev result, for single tasks show task result */}
-          {task.result && !task.result.startsWith('⏳') && (
+          {/* Final/Draft/QA output view */}
+          {finalOutputText && !finalOutputText.startsWith('⏳') && (
             <div>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                {hasChain ? 'Final Deliverable' : 'Raw Output'}
-              </h3>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  {hasChain ? 'Deliverable View' : 'Raw Output'}
+                </h3>
+                {hasChain && (
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <button
+                      onClick={() => setActiveOutputTab('final')}
+                      className={`px-2 py-0.5 rounded ${activeOutputTab === 'final' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-700/40 text-gray-400'}`}
+                    >최종본</button>
+                    <button
+                      onClick={() => setActiveOutputTab('qa')}
+                      className={`px-2 py-0.5 rounded ${activeOutputTab === 'qa' ? 'bg-blue-500/20 text-blue-300' : 'bg-gray-700/40 text-gray-400'}`}
+                    >QA</button>
+                    <button
+                      onClick={() => setActiveOutputTab('draft')}
+                      className={`px-2 py-0.5 rounded ${activeOutputTab === 'draft' ? 'bg-amber-500/20 text-amber-300' : 'bg-gray-700/40 text-gray-400'}`}
+                    >초안</button>
+                  </div>
+                )}
+              </div>
+              {hasChain && (
+                <div className="text-[11px] text-gray-500 mb-2">
+                  연결: finalDeliverableId={threadSummary?.finalDeliverableId || '-'} · latestDeliverableByThread={threadSummary?.latestDeliverableByThread || '-'}
+                </div>
+              )}
               <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 leading-relaxed max-h-[40vh] overflow-y-auto">
-                <MarkdownContent text={task.result} className="text-sm" />
+                <MarkdownContent text={finalOutputText} className="text-sm" />
               </div>
             </div>
           )}
 
-          {!task.result && !isWorking && task.status !== 'pending' && (
+          {!finalOutputText && !isWorking && task.status !== 'pending' && (
             <div className="text-gray-500 text-sm italic py-4">No result available</div>
           )}
         </div>
@@ -263,7 +319,7 @@ export default function TaskResultModal() {
               ▶️ Run Preview
             </button>
           )}
-          {task.result && !task.result.startsWith('⏳') && (
+          {finalOutputText && !finalOutputText.startsWith('⏳') && (
             <button
               onClick={handleCopy}
               className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg hover:bg-gray-700/30 transition-colors"

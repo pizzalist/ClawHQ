@@ -46,6 +46,7 @@ interface Store {
   confirmChainPlan: (planId: string) => Promise<void>;
   advanceChainPlan: (planId: string) => Promise<void>;
   cancelChainPlan: (planId: string) => Promise<void>;
+  refreshActiveChainPlans: () => Promise<void>;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -250,6 +251,9 @@ export const useStore = create<Store>((set, get) => ({
   // Chain plan actions
   updateChainPlan: (plan) => {
     set((s) => {
+      if (plan.status === 'completed' || plan.status === 'cancelled') {
+        return { chainPlans: s.chainPlans.filter(p => p.id !== plan.id) };
+      }
       const existing = s.chainPlans.findIndex(p => p.id === plan.id);
       const plans = [...s.chainPlans];
       if (existing >= 0) plans[existing] = plan;
@@ -322,12 +326,25 @@ export const useStore = create<Store>((set, get) => ({
       toast(e instanceof Error ? e.message : '취소 실패', 'error');
     }
   },
+  refreshActiveChainPlans: async () => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/active`);
+      if (!res.ok) return;
+      const plans = await res.json();
+      set({ chainPlans: Array.isArray(plans) ? plans : [] });
+    } catch {
+      // silent, best effort sync
+    }
+  },
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
   setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
-  init: (state) => set({ agents: state.agents, tasks: state.tasks, events: state.events, meetings: state.meetings || [], selectedAgentId: null, initialized: true }),
+  init: (state) => {
+    set({ agents: state.agents, tasks: state.tasks, events: state.events, meetings: state.meetings || [], selectedAgentId: null, initialized: true });
+    setTimeout(() => { get().refreshActiveChainPlans(); }, 0);
+  },
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),
 
   createTask: async (title, description, assigneeId, expectedDeliverables) => {
@@ -587,6 +604,8 @@ export function connectWS() {
         break;
       case 'tasks_update':
         store.setTasks(msg.payload as Task[]);
+        // 강제 재동기화: 완료/취소 체인 잔상 제거
+        store.refreshActiveChainPlans();
         break;
       case 'meetings_update': {
         const newMeetings = msg.payload as Meeting[];
@@ -620,6 +639,8 @@ export function connectWS() {
       }
       case 'chain_plan_update': {
         store.updateChainPlan(msg.payload as ChainPlan);
+        // 서버 상태 기준으로 즉시 정리
+        store.refreshActiveChainPlans();
         break;
       }
       case 'event': {
