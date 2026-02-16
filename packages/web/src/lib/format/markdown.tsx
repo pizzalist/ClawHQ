@@ -124,7 +124,8 @@ export function markdownToHtml(markdown: string): string {
       paraLines.push(lines[i]);
       i++;
     }
-    out.push(`<p>${renderInline(paraLines.join('<br/>'))}</p>`);
+    const paraHtml = renderInline(paraLines.join('\n')).replace(/\n/g, '<br/>');
+    out.push(`<p>${paraHtml}</p>`);
   }
 
   return out.join('\n');
