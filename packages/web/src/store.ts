@@ -251,12 +251,18 @@ export const useStore = create<Store>((set, get) => ({
   // Chain plan actions
   updateChainPlan: (plan) => {
     set((s) => {
+      const existing = s.chainPlans.find((p) => p.id === plan.id);
+      // WS 누락/역전 방지: 더 오래된 이벤트는 무시
+      if (existing && existing.updatedAt && plan.updatedAt && existing.updatedAt > plan.updatedAt) {
+        return s;
+      }
+
       if (plan.status === 'completed' || plan.status === 'cancelled') {
         return { chainPlans: s.chainPlans.filter(p => p.id !== plan.id) };
       }
-      const existing = s.chainPlans.findIndex(p => p.id === plan.id);
+      const existingIndex = s.chainPlans.findIndex(p => p.id === plan.id);
       const plans = [...s.chainPlans];
-      if (existing >= 0) plans[existing] = plan;
+      if (existingIndex >= 0) plans[existingIndex] = plan;
       else plans.unshift(plan);
       return { chainPlans: plans };
     });

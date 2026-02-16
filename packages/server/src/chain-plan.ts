@@ -28,6 +28,7 @@ export interface ChainPlan {
   status: 'proposed' | 'confirmed' | 'running' | 'completed' | 'cancelled';
   autoExecute: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 import { listAgents, getAgent } from './agent-manager.js';
 
@@ -39,7 +40,8 @@ const taskPlanIndex = new Map<string, string>();
 type PlanChangeCallback = (plan: ChainPlan) => void;
 const changeCallbacks: PlanChangeCallback[] = [];
 export function onChainPlanChange(cb: PlanChangeCallback) { changeCallbacks.push(cb); }
-function emitChange(plan: ChainPlan) { for (const cb of changeCallbacks) cb(plan); }
+function touch(plan: ChainPlan) { plan.updatedAt = new Date().toISOString(); }
+function emitChange(plan: ChainPlan) { touch(plan); for (const cb of changeCallbacks) cb(plan); }
 
 const STEP_REASONS: Record<AgentRole, string> = {
   pm: '프로젝트 기획 및 작업 분해를 위한 PM 단계',
@@ -84,6 +86,7 @@ export function suggestChainPlan(
     currentRole = nextRole;
   }
 
+  const now = new Date().toISOString();
   const plan: ChainPlan = {
     id: uuid(),
     taskId,
@@ -92,7 +95,8 @@ export function suggestChainPlan(
     currentStep: -1,
     status: 'proposed',
     autoExecute: false,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
   };
 
   plans.set(plan.id, plan);

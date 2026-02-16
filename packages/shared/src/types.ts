@@ -54,6 +54,8 @@ export interface ChainPlan {
   status: 'proposed' | 'confirmed' | 'running' | 'completed' | 'cancelled';
   autoExecute: boolean;
   createdAt: string;
+  /** Last server mutation time. Used to ignore out-of-order WS updates on client. */
+  updatedAt: string;
 }
 
 // Chief Action types

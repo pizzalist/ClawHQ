@@ -408,6 +408,16 @@ function handleRunComplete(agentId: string, taskId: string, title: string, run: 
           const currentTask = rowToTask(stmts.getTask.get(taskId) as Record<string, unknown>);
           const isRootTask = !currentTask.parentTaskId;
           const rootTaskId = isRootTask ? taskId : findRootTask(taskId).id;
+
+          // 서버 단일 소스 정합성: 마지막 step 완료 시 즉시 completed로 확정
+          const completedPlan = getChainPlanForTask(rootTaskId);
+          if (completedPlan
+            && completedPlan.status !== 'completed'
+            && completedPlan.status !== 'cancelled'
+            && completedPlan.currentStep >= completedPlan.steps.length - 1) {
+            markChainCompleted(completedPlan.id);
+          }
+
           const autoChain = shouldAutoChain(rootTaskId);
 
           let chainSpawned = false;

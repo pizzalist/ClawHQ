@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { suggestChainPlan, confirmChainPlan, advanceChainPlan, listActiveChainPlans, markChainCompleted, cancelChainPlan } from './chain-plan.js';
+import { suggestChainPlan, confirmChainPlan, advanceChainPlan, listActiveChainPlans, markChainCompleted, cancelChainPlan, editChainPlan, markChainRunning, getChainPlan } from './chain-plan.js';
 import { chatWithChief, getPendingProposal } from './chief-agent.js';
 import { stmts } from './db.js';
 
@@ -39,4 +39,19 @@ resetAll();
   assert.ok(!active.find(p => p.id === p2.id));
 }
 
-console.log('✅ UX hotfix regression passed (status-query + chain-panel cleanup)');
+// R3) 1/1 완료 플랜은 completed로 확정되고 active에서 사라진다
+{
+  const p = suggestChainPlan('task-chain-3', '단일 단계', '원스텝 체인', 'pm', ['report']);
+  editChainPlan(p.id, [p.steps[0]]); // force single-step
+  confirmChainPlan(p.id);
+  markChainRunning(p.id);
+  markChainCompleted(p.id);
+
+  const saved = getChainPlan(p.id);
+  assert.equal(saved?.status, 'completed');
+
+  const active = listActiveChainPlans();
+  assert.ok(!active.find(x => x.id === p.id));
+}
+
+console.log('✅ UX hotfix regression passed (status-query + chain-panel cleanup + 1/1 hidden)');

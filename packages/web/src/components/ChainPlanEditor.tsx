@@ -20,10 +20,10 @@ const STATUS_STYLES: Record<string, { bg: string; label: string }> = {
 };
 
 function StepRow({
-  step, index, total, editable,
+  step, index, total, editable, isCurrent,
   onRemove, onMoveUp, onMoveDown, onEdit,
 }: {
-  step: ChainStep; index: number; total: number; editable: boolean;
+  step: ChainStep; index: number; total: number; editable: boolean; isCurrent: boolean;
   onRemove: () => void; onMoveUp: () => void; onMoveDown: () => void;
   onEdit: (s: ChainStep) => void;
 }) {
@@ -78,7 +78,7 @@ function StepRow({
           )}
         </div>
       )}
-      {!editable && index <= (0) && (
+      {!editable && isCurrent && (
         <span className="text-[10px] text-cyan-400">◀ 현재</span>
       )}
     </div>
@@ -92,10 +92,15 @@ export default function ChainPlanEditor({ plan }: { plan: ChainPlan }) {
   const advancePlan = useStore(s => s.advanceChainPlan);
   const cancelPlan = useStore(s => s.cancelChainPlan);
 
+  const allStepsCompleted = plan.steps.length > 0 && plan.currentStep >= plan.steps.length - 1;
+  const effectiveStatus = (plan.status === 'running' || plan.status === 'confirmed') && allStepsCompleted
+    ? 'completed'
+    : plan.status;
+
   const editable = plan.status === 'proposed';
   const canConfirm = plan.status === 'proposed';
   const canAdvance = (plan.status === 'running' || plan.status === 'confirmed') && !plan.autoExecute && plan.currentStep < plan.steps.length - 1;
-  const statusStyle = STATUS_STYLES[plan.status] || STATUS_STYLES.proposed;
+  const statusStyle = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.proposed;
 
   const [localSteps, setLocalSteps] = useState<ChainStep[]>(plan.steps);
   const stepsChanged = JSON.stringify(localSteps) !== JSON.stringify(plan.steps);
@@ -164,6 +169,7 @@ export default function ChainPlanEditor({ plan }: { plan: ChainPlan }) {
             index={idx}
             total={(editable ? localSteps : plan.steps).length}
             editable={editable}
+            isCurrent={idx === plan.currentStep && (plan.status === 'running' || plan.status === 'confirmed')}
             onRemove={() => handleRemove(idx)}
             onMoveUp={() => handleMoveUp(idx)}
             onMoveDown={() => handleMoveDown(idx)}
