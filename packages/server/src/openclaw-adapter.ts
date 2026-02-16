@@ -137,6 +137,72 @@ function unescapeJsonString(s: string): string {
     .replace(/\\\\/g, '\\');
 }
 
+function sanitizeAgentRawText(input: string): string {
+  let text = input
+    .replace(/\u001b\[[0-9;]*m/g, '') // ANSI colors
+    .replace(/\r\n/g, '\n');
+
+  // Remove fenced json blocks that are clearly tool logs/wrappers.
+  text = text.replace(/```json\s*[\s\S]*?```/gi, (block) => {
+    if (/(assistant\s+to=functions\.|tool[_\s]?(call|result)|"recipient_name"\s*:\s*"functions\.|"name"\s*:\s*"functions\.)/i.test(block)) {
+      return '';
+    }
+    return block;
+  });
+
+  const filteredLines: string[] = [];
+  let skippingTraceback = false;
+
+  for (const originalLine of text.split('\n')) {
+    const line = originalLine.trim();
+
+    if (/^Traceback \(most recent call last\):/i.test(line)) {
+      skippingTraceback = true;
+      continue;
+    }
+
+    if (skippingTraceback) {
+      if (
+        line === '' ||
+        /^\s*(?:\d+\.|[-*#>])\s+/.test(originalLine) ||
+        /^[A-Z][^:]{0,80}:\s*$/.test(line)
+      ) {
+        skippingTraceback = false;
+      } else {
+        continue;
+      }
+    }
+
+    if (
+      /^assistant\s+to=functions\./i.test(line) ||
+      /^tool\s*(call|result)\b/i.test(line) ||
+      /^\s*(\+|\$)\s*(openclaw|npm|node|python|bash|sh)\b/i.test(line)
+    ) {
+      continue;
+    }
+
+    // One-line JSON wrappers around function tool calls/results.
+    if (/^\{.*\}$/.test(line)) {
+      try {
+        const parsed = JSON.parse(line);
+        const blob = JSON.stringify(parsed);
+        if (/(tool[_\s]?(call|result)|recipient_name"\s*:\s*"functions\.|"name"\s*:\s*"functions\.|"call_id")/i.test(blob)) {
+          continue;
+        }
+      } catch {
+        // non-JSON line, keep as-is
+      }
+    }
+
+    filteredLines.push(originalLine);
+  }
+
+  return filteredLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Parse the agent JSON output to extract the reply */
 export function parseAgentOutput(stdout: string): string {
   // Try JSON parse first
@@ -171,8 +237,10 @@ export function parseAgentOutput(stdout: string): string {
         }
       } catch { /* skip non-JSON lines */ }
     }
-    // Fall back to raw text, trim to reasonable length
-    return stdout.trim().slice(0, 4000) || 'No output';
+
+    // Fall back to sanitized raw text, trim to reasonable length
+    const sanitized = sanitizeAgentRawText(stdout);
+    return sanitized.slice(0, 4000) || 'No output';
   }
 }
 
