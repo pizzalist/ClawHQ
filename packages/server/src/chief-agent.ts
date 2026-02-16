@@ -1025,11 +1025,12 @@ ${state}
 
 [ACTION:create_task title="작업 제목" description="설명" assignRole="developer"]
 [ACTION:create_agent name="이름" role="pm" model="claude-opus-4-6"]
-[ACTION:start_meeting title="미팅 제목" participants="pm,developer,reviewer" character="planning"]
+[ACTION:start_meeting title="미팅 제목" participants="pm,developer,reviewer" participantCount="3" character="planning"]
 [ACTION:assign_task taskId="태스크ID" agentId="에이전트ID"]
 [ACTION:cancel_task taskId="태스크ID"]
 [ACTION:cancel_all_pending]
 [ACTION:reset_agent agentId="에이전트ID"]
+[ACTION:cancel_meeting meetingId="미팅ID"]
 [ACTION:delete_meeting meetingId="미팅ID"]
 [ACTION:delete_all_meetings]
 
@@ -1340,7 +1341,7 @@ function executeAction(action: ChiefAction): ChiefAction {
         return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
       }
       case 'start_meeting': {
-        const { title, participants, character } = action.params;
+        const { title, participants, character, participantCount: participantCountRaw } = action.params;
         const isScoringReview = (character || '').toLowerCase() === 'review' || /(점수화|스코어|scoring)/i.test(title || '');
         if (isScoringReview) {
           return {
@@ -1352,7 +1353,37 @@ function executeAction(action: ChiefAction): ChiefAction {
           };
         }
         const roleCounts = parseMeetingParticipantRoleCounts(participants);
+
+        // If participantCount is explicitly specified, enforce it
+        const requestedCount = participantCountRaw ? parseInt(participantCountRaw, 10) : null;
+        if (requestedCount && !isNaN(requestedCount) && requestedCount > 0) {
+          // Scale up role counts proportionally to meet the requested total
+          const currentTotal = Object.values(roleCounts).reduce((a, b) => a + b, 0);
+          if (currentTotal < requestedCount) {
+            const deficit = requestedCount - currentTotal;
+            // Distribute deficit among requested roles proportionally, fallback to first role
+            const activeRoles = (Object.keys(roleCounts) as AgentRole[]).filter(r => roleCounts[r] > 0);
+            const fallbackRole = activeRoles[0] || 'pm';
+            for (let i = 0; i < deficit; i++) {
+              roleCounts[activeRoles[i % activeRoles.length] || fallbackRole]++;
+            }
+          }
+        }
+
         const { participantIds, createdAgentNames } = ensureMeetingParticipants(roleCounts);
+
+        // Hard assert: if participantCount was requested, enforce exact count
+        if (requestedCount && !isNaN(requestedCount) && requestedCount > 0) {
+          const fallbackRole: AgentRole = (Object.keys(roleCounts) as AgentRole[]).find(r => roleCounts[r] > 0) || 'pm';
+          while (participantIds.length < requestedCount) {
+            const created = createAgent(suggestFriendlyAgentName(fallbackRole), fallbackRole, DEFAULT_MODEL_BY_ROLE[fallbackRole]);
+            participantIds.push(created.id);
+            createdAgentNames.push(created.name);
+          }
+          if (participantIds.length !== requestedCount) {
+            console.error(`[chief] HARD ASSERT FAIL: requested ${requestedCount} participants but got ${participantIds.length}`);
+          }
+        }
 
         if (participantIds.length < 2) {
           return { ...action, result: { ok: false, message: '미팅 참여자 자동 구성 실패 (최소 2명 필요)' } };
@@ -1428,6 +1459,7 @@ function executeAction(action: ChiefAction): ChiefAction {
         stmts.updateAgentState.run('idle', null, null, agentId);
         return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 상태 초기화됨` } };
       }
+      case 'cancel_meeting': // alias for delete_meeting
       case 'delete_meeting': {
         const { meetingId } = action.params;
         if (!meetingId) {
@@ -1590,6 +1622,7 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   cancel_task: '작업 취소',
   cancel_all_pending: '대기 작업 전체 취소',
   reset_agent: '에이전트 초기화',
+  cancel_meeting: '미팅 삭제',
   delete_meeting: '미팅 삭제',
   delete_all_meetings: '전체 미팅 삭제',
 };

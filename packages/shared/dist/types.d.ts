@@ -52,7 +52,7 @@ export interface ChainPlan {
     /** Last server mutation time. Used to ignore out-of-order WS updates on client. */
     updatedAt: string;
 }
-export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings';
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting';
 export interface ChiefAction {
     type: ChiefActionType;
     params: Record<string, string>;
