@@ -63,7 +63,19 @@ npm run demo:start
 npm run healthcheck
 ```
 
-### 4) Open
+### 4) Seed demo fixture (optional but recommended)
+
+```bash
+npm run demo:fixture
+```
+
+### 5) Run scripted demo scenarios (optional)
+
+```bash
+npm run demo:scenarios
+```
+
+### 6) Open
 
 - Web/API server: `http://localhost:3001`
 

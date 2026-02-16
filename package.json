@@ -13,6 +13,8 @@
     "ops:cleanup-test-tasks": "node scripts/cleanup-test-tasks.mjs",
     "healthcheck": "node scripts/healthcheck.mjs",
     "demo:start": "node scripts/demo-start.mjs",
+    "demo:fixture": "node scripts/demo-fixture.mjs",
+    "demo:scenarios": "node scripts/demo-scenarios.mjs",
     "docker:build": "docker build -t ai-office .",
     "docker:run": "docker compose up -d"
   },
