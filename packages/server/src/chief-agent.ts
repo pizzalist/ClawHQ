@@ -1928,6 +1928,34 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
           const { actions: parsedActions, cleanText } = parseActions(rawOutput);
           const proposedActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
 
+          // Emergency auto-execute: stop/cancel commands skip approval
+          const isEmergencyStop = /^(멈춰|중지|스톱|stop|cancel|취소|다\s*멈춰|전부\s*중지|다\s*중지|그만)/i.test(userMessage.trim());
+          const allCancelActions = proposedActions.length > 0 && proposedActions.every(a => a.type === 'cancel_task' || a.type === 'cancel_all_pending' || a.type === 'cancel_meeting');
+          if (isEmergencyStop && allCancelActions) {
+            // Execute immediately without approval
+            const results: string[] = [`🛑 긴급 중지 — ${proposedActions.length}건 즉시 실행`];
+            for (const action of proposedActions) {
+              try {
+                const r = executeAction(action);
+                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || '완료'}`);
+              } catch (e) {
+                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : '실패'}`);
+              }
+            }
+            const emergencyReply = results.join('\n');
+            pushMessage(sessionId, { id: messageId, role: 'chief', content: emergencyReply, createdAt: new Date().toISOString() });
+            if (responseCallback) {
+              responseCallback(sessionId, {
+                messageId,
+                reply: emergencyReply,
+                actions: [],
+                state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+                sessionId,
+              });
+            }
+            return;
+          }
+
           const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
           const compactActionList = intent === 'simple_action' && proposedActions.length > 2
             ? `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`
