@@ -57,6 +57,46 @@
 
 ---
 
+### E. 리뷰 미팅 점수화 구조화 (이슈 #5)
+- **재현 전:** 리뷰 미팅에서 후보별 점수표 없이 점수화 방법론 일반론만 출력
+- **수정:**
+  1. `meetings.ts` — 리뷰 프롬프트를 구조화 포맷으로 전면 교체
+     - `[SCORE] 후보명 | Problem: X/10 | Feasibility: X/10 | ... | Total: X/50` 형식 강제
+     - `[RECOMMENDATION]` / `[ALTERNATIVE]` 태그 필수
+     - 5개 평가 항목: Problem, Feasibility, Differentiation, Time-to-Demo, Risk
+  2. `chief-agent.ts` — `generateDecisionPacket()` 전면 리팩터
+     - `parseStructuredScores()`: [SCORE] 태그 파싱 → 후보별 점수 breakdown 추출
+     - `parseRecommendation()`: [RECOMMENDATION]/[ALTERNATIVE] 태그 파싱
+     - 랜덤 점수 fallback 제거 (기존: `Math.floor(Math.random() * 3) + 6`)
+     - Legacy `N/10` 패턴 fallback 유지
+  3. sourceCandidates 없으면 리뷰 미팅 시작 금지 + 사용자에게 이유 안내
+- **재현 후:** 후보 3개 입력 → [SCORE] row 3개 + 총점 + 추천안 구조화 출력
+- **테스트:** PASS (5건)
+
+---
+
+## 회귀 테스트 결과 (전체)
+
+| # | 테스트 | 결과 |
+|---|--------|------|
+| 1 | view-meeting-* 클릭 → 회의 결과 표시 | ✅ PASS |
+| 2 | Unknown actionId → 친화 메시지 | ✅ PASS |
+| 3 | 리뷰어 3명 보장 | ✅ PASS |
+| 4 | 동일 회의 완료 알림 중복 0건 | ✅ PASS |
+| 5 | 후보 3개 → score table row 3개 | ✅ PASS |
+| 6 | [RECOMMENDATION]/[ALTERNATIVE] 파싱 | ✅ PASS |
+| 7 | Legacy N/10 fallback | ✅ PASS |
+| 8 | 빈 콘텐츠 → 랜덤 점수 미생성 | ✅ PASS |
+| 9 | 추천안 누락 시 빈 문자열 반환 | ✅ PASS |
+
+**테스트 파일:**
+- `packages/server/src/meeting-flow-dedup.regression.test.ts` (이슈 1-4)
+- `packages/server/src/review-scoring.regression.test.ts` (이슈 5)
+
+---
+
 ## 수정 파일
-- `packages/server/src/chief-agent.ts` — 주요 수정 (4건 모두)
-- `packages/server/src/meeting-flow-dedup.regression.test.ts` — 회귀 테스트 추가
+- `packages/server/src/chief-agent.ts` — 주요 수정 (5건 모두)
+- `packages/server/src/meetings.ts` — 리뷰 프롬프트 구조화
+- `packages/server/src/meeting-flow-dedup.regression.test.ts` — 회귀 테스트 (이슈 1-4)
+- `packages/server/src/review-scoring.regression.test.ts` — 회귀 테스트 (이슈 5)
