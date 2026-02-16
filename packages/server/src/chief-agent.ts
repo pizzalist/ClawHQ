@@ -472,18 +472,21 @@ function buildChiefSystemPrompt(): string {
   return `당신은 AI Office의 총괄자(Chief)입니다.
 
 규칙:
-1. 간결하게 답하세요. 간단한 요청에는 1-3문장이면 충분합니다.
+1. 간결하게 답하세요. 기본은 1~2문장, 필요해도 3문장을 넘기지 마세요.
 2. 상태 조회, 삭제, 취소 같은 단순 작업은 바로 실행 제안하세요. 미팅을 제안하지 마세요.
 3. 복잡한 작업(새 프로젝트 시작, 팀 구성 등)에만 옵션을 제시하세요.
 4. 옵션을 제시할 때는 최대 2개까지만.
 5. 한국어로 대화하세요.
 6. 실행 전에 반드시 사용자 승인을 받으세요.
 7. 아래 오피스 상태를 참고해 taskId, agentId 등을 직접 사용하세요.
+8. 단순/정의형 질문(예: "원칙 설명", "기준 요약", "체크리스트 n개")은 설명 모드로 짧게 직답하고, 불필요한 실행 제안/추가 액션 요청을 붙이지 마세요.
+9. add/create/reset/cancel 계열 요청은 1~2문장으로 답하고, 필요한 최소 액션만 제시하세요.
 
 응답 길이:
-- 상태 조회 → 5줄 이내
-- 단순 액션(삭제/취소) → 실행 제안 1줄 + 확인 요청
-- 복잡한 기획 → 최대 10줄 + 옵션 2개
+- 상태 조회 → 1~2문장(가능하면 한 줄)
+- 단순 액션(add/create/reset/cancel) → 1~2문장 + 최소 액션
+- 단순/정의형 설명 요청 → 최대 4줄
+- 복잡한 기획 → 최대 8줄 + 옵션 2개
 
 미팅은 다음 경우에만 제안하세요:
 - 사용자가 명시적으로 회의를 요청한 경우
@@ -531,6 +534,48 @@ function parseActions(text: string): { actions: ChiefAction[]; cleanText: string
 
   const cleanText = text.replace(actionRegex, '').replace(/\n{3,}/g, '\n\n').trim();
   return { actions, cleanText };
+}
+
+function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
+  const msg = (userMessage || '').toLowerCase();
+  if (/(상태|현황|지금\s*상태|현재\s*상태|status|몇\s*명|몇\s*건)/i.test(msg) && !/(추가|생성|create|리셋|reset|취소|cancel)/i.test(msg)) {
+    return 'status';
+  }
+  if (/(추가|생성|create|리셋|reset|취소|cancel|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg)) {
+    return 'simple_action';
+  }
+  if (/(설명|요약|원칙|기준|체크리스트|절차|포인트|가능\s*여부|몇\s*개|\d+\s*줄)/i.test(msg)) {
+    return 'definition';
+  }
+  return 'other';
+}
+
+function toConciseModeReply(userMessage: string, reply: string): string {
+  const intent = classifyIntent(userMessage);
+  const normalized = (reply || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!normalized) return '처리가 완료되었습니다.';
+
+  if (intent === 'status') {
+    const oneLine = normalized.split('\n').map(s => s.trim()).filter(Boolean).join(' ');
+    return oneLine.slice(0, 180);
+  }
+
+  if (intent === 'simple_action') {
+    const lines = normalized.split('\n').map(s => s.trim()).filter(Boolean);
+    const picked: string[] = [];
+    for (const line of lines) {
+      picked.push(line);
+      if (/[?]|승인|진행할까요|실행할까요/.test(line) || picked.length >= 2) break;
+    }
+    return picked.join(' ');
+  }
+
+  if (intent === 'definition') {
+    const lines = normalized.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 4);
+    return lines.join('\n');
+  }
+
+  return normalized;
 }
 
 /** Execute a single parsed action. Called only after user approval. */
@@ -848,8 +893,12 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
           const rawOutput = parseAgentOutput(run.stdout);
           const { actions: proposedActions, cleanText } = parseActions(rawOutput);
 
-          const baseReply = cleanText || '처리가 완료되었습니다.';
-          const reply = `${baseReply}${formatActionList(proposedActions)}`;
+          const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
+          const intent = classifyIntent(userMessage);
+          const compactActionList = intent === 'simple_action' && proposedActions.length > 2
+            ? `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`
+            : formatActionList(proposedActions);
+          const reply = `${conciseBaseReply}${compactActionList}`;
           pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
           // Store proposed actions for approval — do NOT execute yet

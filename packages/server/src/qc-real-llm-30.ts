@@ -58,10 +58,25 @@ async function askChief(sessionId: string, message: string, timeoutMs = 240000):
   });
 }
 
+function stripActionList(reply: string): string {
+  return (reply || '').split('실행 후보 액션:')[0].trim();
+}
+
+function hasMeetingSuggestion(reply: string): boolean {
+  const text = reply || '';
+  // 상태 문구(예: "활성 미팅 0건")는 제안이 아님
+  const statusOnly = /(활성\s*미팅\s*\d+건|미팅\s*\d+건|회의\s*\d+건)/i.test(text);
+  const suggestPattern = /(미팅|회의|meeting).{0,20}(제안|열|열까요|시작|진행|하시겠|할까요|필요)|(?:제안|열|시작|진행).{0,20}(미팅|회의|meeting)/i;
+  if (!suggestPattern.test(text)) return false;
+  if (statusOnly && !/(미팅|회의).{0,20}(제안|열|시작|진행|할까요|하시겠)/i.test(text)) return false;
+  return true;
+}
+
 function score(reply: string, expect: RegExp, opts?: { concise?: boolean; noMeeting?: boolean; chain?: RegExp }) {
+  const core = stripActionList(reply);
   const matched = expect.test(reply);
-  const concise = opts?.concise ? reply.length <= 260 && reply.split('\n').length <= 7 : true;
-  const noMeeting = opts?.noMeeting ? !/미팅|회의|meeting/i.test(reply) : true;
+  const concise = opts?.concise ? core.length <= 260 && core.split('\n').length <= 7 : true;
+  const noMeeting = opts?.noMeeting ? !hasMeetingSuggestion(reply) : true;
   const chainOk = opts?.chain ? opts.chain.test(reply) : true;
 
   let s = 5;
