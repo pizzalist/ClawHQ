@@ -317,6 +317,8 @@ export function notifyChief(notification: ChiefNotification) {
  */
 export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string): { reply: string; sessionId: string } {
   const scopedSessionId = (notificationSessionById.get(notificationId) || sessionId || 'chief-default').trim() || 'chief-default';
+  // Keep lastActiveChiefSessionId in sync so async notifications (e.g. meeting completion) route to the correct client session
+  if (sessionId && sessionId.trim()) lastActiveChiefSessionId = sessionId.trim();
 
   const actionKey = makeInlineActionIdempotencyKey(notificationId, actionId);
   if (handledInlineActionKeys.has(actionKey)) {

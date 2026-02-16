@@ -269,22 +269,23 @@ function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; ch
 
   return (
     <div className="space-y-2">
-      <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${
-        isUser
-          ? 'ml-auto bg-accent/20 text-accent border border-accent/40'
-          : hasNotification
-            ? `${notifStyle!.bg} border ${notifStyle!.border} text-gray-100`
+      {/* For notification messages, only render InlineNotification (avoids duplicate content) */}
+      {hasNotification ? (
+        m.notification!.actions.length > 0 && (
+          <div className="max-w-[85%]">
+            <InlineNotification notification={m.notification!} onPreviewMeeting={onPreviewMeeting} />
+          </div>
+        )
+      ) : (
+        <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${
+          isUser
+            ? 'ml-auto bg-accent/20 text-accent border border-accent/40'
             : 'bg-gray-800/70 border border-gray-700/50 text-gray-100'
-      }`}>
-        <div className="text-[11px] mb-1 opacity-70">
-          {isUser ? '나' : hasNotification ? `${notifStyle!.icon} 총괄자` : '총괄자'}
-        </div>
-        <MarkdownContent text={m.content} className="text-sm" />
-      </div>
-      {/* Inline action buttons for notifications */}
-      {hasNotification && m.notification!.actions.length > 0 && (
-        <div className="max-w-[85%]">
-          <InlineNotification notification={m.notification!} onPreviewMeeting={onPreviewMeeting} />
+        }`}>
+          <div className="text-[11px] mb-1 opacity-70">
+            {isUser ? '나' : '총괄자'}
+          </div>
+          <MarkdownContent text={m.content} className="text-sm" />
         </div>
       )}
       {/* Check-in options */}
