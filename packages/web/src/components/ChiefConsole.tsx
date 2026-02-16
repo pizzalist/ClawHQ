@@ -297,7 +297,7 @@ function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; ch
   );
 }
 
-export default function ChiefConsole() {
+export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
   const chiefMessages = useStore((s) => s.chiefMessages);
   const chiefSuggestions = useStore((s) => s.chiefSuggestions);
   const chiefMeetingDraft = useStore((s) => s.chiefMeetingDraft);
@@ -422,9 +422,9 @@ export default function ChiefConsole() {
   };
 
   return (
-    <div className="flex-1 min-h-0 p-4 flex gap-4 overflow-hidden">
+    <div className={`flex-1 min-h-0 flex overflow-hidden ${panel ? 'flex-col' : 'p-4 gap-4'}`}>
       {/* Chat area — main interaction */}
-      <div className="flex-1 min-w-0 border border-gray-700/40 rounded-xl bg-surface flex flex-col overflow-hidden">
+      <div className={`flex-1 min-w-0 flex flex-col overflow-hidden ${panel ? '' : 'border border-gray-700/40 rounded-xl bg-surface'}`}>
         <div className="px-4 py-3 border-b border-gray-700/30 text-sm font-semibold text-gray-200 flex items-center gap-2">
           🧠 총괄자 콘솔
           {chiefThinking && <span className="text-xs text-accent animate-pulse">처리 중...</span>}
@@ -464,7 +464,7 @@ export default function ChiefConsole() {
       </div>
 
       {/* Side panel — proposals & actions */}
-      <div className="w-72 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4">
+      <div className={`${panel ? 'border-t border-gray-700/30 p-3 overflow-y-auto space-y-3 max-h-48' : 'w-72 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4'} ${!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && panel ? 'hidden' : ''}`}>
 
         {/* LLM Proposal awaiting approval */}
         {hasProposal && (
@@ -543,7 +543,7 @@ export default function ChiefConsole() {
           </div>
         )}
 
-        {!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && (
+        {!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && !panel && (
           <div>
             <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 가이드</h3>
             <div className="text-xs text-gray-400 space-y-2">
