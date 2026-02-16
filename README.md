@@ -11,6 +11,8 @@ Not just task execution — decision history, failure timeline, and team-level o
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+> Demo media (to add before launch): `docs/media/main-dashboard.png`, `docs/media/demo-flow.gif`
+
 </div>
 
 ---
@@ -140,6 +142,15 @@ app/
 ├── README.md
 └── package.json
 ```
+
+---
+
+## Demo artifacts
+
+- Scenario script: `docs/demo-scenarios.md`
+- Latest demo report: `docs/demo-latest-report.md`
+- Launch checklist: `docs/launch-day-checklist.md`
+- Good first issues: `docs/good-first-issues.md`
 
 ---
 
