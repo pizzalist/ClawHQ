@@ -51,6 +51,26 @@ interface MonitoringAlert {
   resolvedAt: string | null;
 }
 
+function normalizeAlert(raw: Partial<MonitoringAlert> | null | undefined, index: number): MonitoringAlert {
+  const severity = raw?.severity === 'critical' || raw?.severity === 'warning' || raw?.severity === 'info'
+    ? raw.severity
+    : 'info';
+  const status = raw?.status === 'active' || raw?.status === 'resolved' ? raw.status : 'active';
+  const now = new Date().toISOString();
+
+  return {
+    id: (raw?.id || `alert-fallback-${index}`).toString(),
+    severity,
+    status,
+    source: (raw?.source || 'unknown').toString(),
+    title: (raw?.title || 'Untitled alert').toString(),
+    message: (raw?.message || '').toString(),
+    firstSeenAt: raw?.firstSeenAt || now,
+    lastSeenAt: raw?.lastSeenAt || now,
+    resolvedAt: raw?.resolvedAt ?? null,
+  };
+}
+
 interface AlertsResponse {
   total: number;
   active: number;
@@ -208,10 +228,16 @@ export default function Dashboard() {
 
         if (cancelled) return;
 
+        const normalizedAlerts = Array.isArray(alertsData?.alerts)
+          ? alertsData.alerts.map((a, i) => normalizeAlert(a, i))
+          : [];
+
         const safeAlerts: AlertsResponse = {
-          total: Number.isFinite(alertsData?.total) ? alertsData.total : 0,
-          active: Number.isFinite(alertsData?.active) ? alertsData.active : 0,
-          alerts: Array.isArray(alertsData?.alerts) ? alertsData.alerts : [],
+          total: Number.isFinite(alertsData?.total) ? alertsData.total : normalizedAlerts.length,
+          active: Number.isFinite(alertsData?.active)
+            ? alertsData.active
+            : normalizedAlerts.filter((a) => a.status === 'active').length,
+          alerts: normalizedAlerts,
         };
 
         setMetrics(metricsData);
