@@ -7,8 +7,8 @@ type Case = {
   title: string;
   description: string;
   expectedDeliverables: DeliverableType[];
-  currentRole: 'pm' | 'developer';
-  expectedNext: 'developer' | 'reviewer' | undefined;
+  currentRole: 'pm' | 'developer' | 'qa' | 'reviewer';
+  expectedNext: 'developer' | 'reviewer' | 'qa' | undefined;
 };
 
 const cases: Case[] = [
@@ -58,6 +58,30 @@ const cases: Case[] = [
     description: '대기열 상태 check 후 보고',
     expectedDeliverables: ['document'],
     currentRole: 'pm',
+    expectedNext: undefined,
+  },
+  {
+    name: 'QA→Dev 체인 시작: QC 리뷰 후 개발 반영',
+    title: 'QC 한명 붙여 리뷰하고 개발자가 반영해서 재수정해',
+    description: 'QA 리뷰 후 개발자 수정',
+    expectedDeliverables: ['web'],
+    currentRole: 'pm',
+    expectedNext: 'qa',
+  },
+  {
+    name: 'QA 단계 다음은 Developer',
+    title: 'QC 한명 붙여 리뷰하고 개발자가 반영해서 재수정해',
+    description: 'QA 리뷰 후 개발자 수정',
+    expectedDeliverables: ['web'],
+    currentRole: 'qa',
+    expectedNext: 'developer',
+  },
+  {
+    name: 'QA→Dev 교정 체인은 개발에서 종료',
+    title: 'QC 한명 붙여 리뷰하고 개발자가 반영해서 재수정해',
+    description: 'QA 리뷰 후 개발자 수정',
+    expectedDeliverables: ['web'],
+    currentRole: 'developer',
     expectedNext: undefined,
   },
 ];

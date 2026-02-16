@@ -211,45 +211,10 @@ export const useStore = create<Store>((set, get) => ({
       const executedCount = data.executedActions?.filter((a: ChiefAction) => a.result?.ok).length ?? 0;
       toast(`총괄자 제안 승인: ${executedCount}건 실행 완료`, 'success');
 
-      // Build feedback messages from executed actions
-      const feedbackMessages: ChiefChatMessage[] = [];
-      const execActions = data.executedActions || [];
-      if (execActions.length > 0) {
-        feedbackMessages.push({
-          id: `approval-ack-${Date.now()}`,
-          role: 'chief' as const,
-          content: `✅ **승인됨** — ${execActions.length}건의 액션을 실행했습니다.`,
-          createdAt: new Date().toISOString(),
-        });
-        for (let i = 0; i < execActions.length; i++) {
-          const a = execActions[i] as ChiefAction;
-          const ok = a.result?.ok;
-          feedbackMessages.push({
-            id: `exec-result-client-${Date.now()}-${i}`,
-            role: 'chief' as const,
-            content: ok
-              ? `✅ [${i+1}/${execActions.length}] ${a.result!.message}`
-              : `❌ [${i+1}/${execActions.length}] ${a.result?.message || '실패'}`,
-            createdAt: new Date().toISOString(),
-          });
-        }
-        // Next step guide
-        const pendingTasks = (data.state?.tasks || []).filter((t: Task) => t.status === 'pending' || t.status === 'in-progress');
-        feedbackMessages.push({
-          id: `exec-summary-client-${Date.now()}`,
-          role: 'chief' as const,
-          content: pendingTasks.length > 0
-            ? `📋 현재 ${pendingTasks.length}건의 작업이 진행/대기 중입니다. 결과가 나오면 알려드리겠습니다.`
-            : `추가 작업이 필요하시면 말씀해주세요.`,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
       set((s) => ({
         chiefExecutedActions: data.executedActions || [],
         chiefProposedActions: [],
         chiefPendingMessageId: null,
-        chiefMessages: [...s.chiefMessages, ...feedbackMessages],
         agents: data.state?.agents || get().agents,
         tasks: data.state?.tasks || get().tasks,
         meetings: data.state?.meetings || get().meetings,

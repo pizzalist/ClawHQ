@@ -24,9 +24,42 @@ function emitEvent(type, agentId, taskId, message, metadata = {}) {
     return event;
 }
 /** Well-known QC/test agent name patterns */
-const TEST_AGENT_PATTERN = /^(pm|dev|developer|reviewer|designer|devops|qa)[-_]?(qc|test|debug)/i;
+const TEST_AGENT_PATTERN = /(?:^|[-_\s])(qc|test|debug)(?:$|[-_\s])/i;
+const FRIENDLY_ROLE_PREFIX = {
+    pm: 'PM',
+    developer: 'DEV',
+    reviewer: 'REV',
+    designer: 'DES',
+    devops: 'OPS',
+    qa: 'QA',
+};
 function isTestAgentName(name) {
     return TEST_AGENT_PATTERN.test(name);
+}
+export function suggestFriendlyAgentName(role) {
+    const all = stmts.listAgents.all()
+        .map((r) => r.name || '')
+        .filter(Boolean);
+    const prefix = FRIENDLY_ROLE_PREFIX[role] || role.toUpperCase();
+    const used = new Set();
+    const re = new RegExp(`^${prefix}-(\\d{2})$`, 'i');
+    for (const n of all) {
+        const m = n.match(re);
+        if (m)
+            used.add(parseInt(m[1], 10));
+    }
+    let idx = 1;
+    while (used.has(idx))
+        idx += 1;
+    return `${prefix}-${String(idx).padStart(2, '0')}`;
+}
+function normalizeAgentName(name, role, isTest = false) {
+    const trimmed = (name || '').trim();
+    if (!trimmed)
+        return suggestFriendlyAgentName(role);
+    if (!isTest && isTestAgentName(trimmed))
+        return suggestFriendlyAgentName(role);
+    return trimmed;
 }
 function rowToAgent(row) {
     return {
@@ -38,7 +71,7 @@ function rowToAgent(row) {
         currentTaskId: row.current_task_id ?? null,
         sessionId: row.session_id ?? null,
         deskIndex: row.desk_index,
-        isTest: !!row.is_test || isTestAgentName(row.name),
+        isTest: !!row.is_test || isTestAgentName(row.name), // keep legacy name-based hiding
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -84,13 +117,14 @@ export function getAgent(id) {
 export function createAgent(name, role, model, isTest) {
     const id = uuid();
     const count = stmts.countAgents.get().count;
-    stmts.insertAgent.run(id, name, role, model, count);
-    // Mark as test if explicitly flagged or name matches QC pattern
-    if (isTest || isTestAgentName(name)) {
+    const safeName = normalizeAgentName(name, role, !!isTest);
+    stmts.insertAgent.run(id, safeName, role, model, count);
+    // Test visibility is controlled by explicit flag only.
+    if (isTest) {
         stmts.markAgentTest.run(1, id);
     }
     const agent = getAgent(id);
-    emitEvent('agent_created', id, null, `Agent "${name}" created as ${role}`);
+    emitEvent('agent_created', id, null, `Agent "${safeName}" created as ${role}`);
     return agent;
 }
 export function transitionAgent(id, newState, taskId, sessionId) {

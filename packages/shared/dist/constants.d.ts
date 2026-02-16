@@ -20,6 +20,7 @@ export declare const TECH_SPEC_ROLES: Record<import('./types.js').TechSpecRole, 
     prompt: (task: string) => string;
 }>;
 export declare const TECH_SPEC_SYNTHESIS_PROMPT: (specs: string) => string;
+export declare const FRIENDLY_AGENT_PREFIX: Record<AgentRole, string>;
 export declare const MAX_CONCURRENT_TASKS = 3;
 export declare const SERVER_PORT = 3001;
 export declare const WS_PATH = "/ws";

@@ -128,6 +128,15 @@ export const TECH_SPEC_ROLES = {
     },
 };
 export const TECH_SPEC_SYNTHESIS_PROMPT = (specs) => `Synthesize these 4 specs into one unified development specification. Resolve conflicts. Create a final sprint plan.\n\n${specs}`;
+// User-facing default naming policy (non-test agents)
+export const FRIENDLY_AGENT_PREFIX = {
+    pm: 'PM',
+    developer: 'DEV',
+    reviewer: 'REV',
+    designer: 'DES',
+    devops: 'OPS',
+    qa: 'QA',
+};
 export const MAX_CONCURRENT_TASKS = 3;
 export const SERVER_PORT = 3001;
 export const WS_PATH = '/ws';

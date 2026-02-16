@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
-import { listAgents, createAgent, getAgent } from './agent-manager.js';
+import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
@@ -154,6 +154,21 @@ const reportedMeetingCompletions = new Set<string>();
  * Chief monitors progress and proactively communicates with the user.
  */
 export function chiefHandleTaskEvent(event: AppEvent) {
+  if (event.type === 'chain_spawned' && event.taskId) {
+    emitCheckIn({
+      id: `checkin-chain-${event.taskId}-${Date.now()}`,
+      stage: 'progress',
+      message: `🔗 승인된 체인을 계속 진행합니다.\n현재 단계가 완료되어 다음 단계를 자동 시작했습니다.\n\n${event.message}`,
+      options: [
+        { id: 'ok', label: '👍 계속 진행', description: '자동 체인 진행을 유지합니다' },
+        { id: 'pause', label: '⏸️ 멈춤', description: '현재 체인을 일시중지합니다' },
+      ],
+      taskId: event.taskId,
+      createdAt: new Date().toISOString(),
+    });
+    return;
+  }
+
   if (event.type === 'task_completed' && event.taskId) {
     if (reportedTaskCompletions.has(event.taskId)) return;
     reportedTaskCompletions.add(event.taskId);
@@ -549,6 +564,13 @@ function parseActions(text: string): { actions: ChiefAction[]; cleanText: string
   return { actions, cleanText };
 }
 
+function hasQaToDevIntent(text: string): boolean {
+  const msg = (text || '').toLowerCase();
+  const qaLike = /(qc|qa|리뷰|검토|테스트|품질)/i.test(msg);
+  const devLike = /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(msg);
+  return qaLike && devLike;
+}
+
 function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
   const msg = (userMessage || '').toLowerCase();
   if (/(상태|현황|지금\s*상태|현재\s*상태|status|몇\s*명|몇\s*건)/i.test(msg) && !/(추가|생성|create|리셋|reset|취소|cancel)/i.test(msg)) {
@@ -597,20 +619,27 @@ function executeAction(action: ChiefAction): ChiefAction {
     switch (action.type) {
       case 'create_task': {
         const { title, description, assignRole } = action.params;
+        const taskTitle = title || 'Untitled';
+        const taskDescription = description || '';
+        const mergedIntentText = `${taskTitle}\n${taskDescription}`;
+        const preferredRole = assignRole || (hasQaToDevIntent(mergedIntentText) ? 'qa' : '');
+
         let assigneeId: string | null = null;
-        if (assignRole) {
+        if (preferredRole) {
           const agents = listAgents();
-          const candidate = agents.find(a => a.role === assignRole && a.state === 'idle');
+          const candidate = agents.find(a => a.role === preferredRole && a.state === 'idle')
+            || agents.find(a => a.role === preferredRole);
           if (candidate) assigneeId = candidate.id;
         }
-        const task = createTask(title || 'Untitled', description || '', assigneeId);
+        const task = createTask(taskTitle, taskDescription, assigneeId);
         return { ...action, result: { ok: true, message: `작업 "${task.title}" 생성됨`, id: task.id } };
       }
       case 'create_agent': {
         const { name, role, model } = action.params;
         const agentRole = (role || 'developer') as AgentRole;
         const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
-        const agent = createAgent(name || `${agentRole.toUpperCase()}-${Date.now()}`, agentRole, agentModel);
+        const safeName = name || suggestFriendlyAgentName(agentRole);
+        const agent = createAgent(safeName, agentRole, agentModel);
         return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
       }
       case 'start_meeting': {
@@ -687,9 +716,10 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
     throw new Error(`No pending proposal found for messageId: ${messageId}`);
   }
 
-  const toExecute = selectedIndices
+  const selected = selectedIndices
     ? selectedIndices.filter(i => i >= 0 && i < actions.length).map(i => actions[i])
     : actions;
+  const toExecute = normalizeChainedTaskActions(selected);
 
   const totalCount = toExecute.length;
 
@@ -759,6 +789,38 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
     executedActions,
     state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
   };
+}
+
+function normalizeChainedTaskActions(actions: ChiefAction[]): ChiefAction[] {
+  if (!actions || actions.length < 2) return actions;
+
+  const normalized: ChiefAction[] = [];
+  let i = 0;
+  while (i < actions.length) {
+    const current = actions[i];
+    const next = actions[i + 1];
+
+    const isQaTask = current?.type === 'create_task' && /(qc|qa|리뷰|검토|테스트)/i.test(`${current.params.title || ''}\n${current.params.description || ''}\n${current.params.assignRole || ''}`);
+    const isDevTask = next?.type === 'create_task' && /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(`${next.params.title || ''}\n${next.params.description || ''}\n${next.params.assignRole || ''}`);
+
+    if (isQaTask && isDevTask) {
+      normalized.push({
+        ...current,
+        params: {
+          ...current.params,
+          assignRole: 'qa',
+          description: `${current.params.description || ''}\n\n[체인 정책] QA 리뷰 후 개발자 반영 단계를 자동으로 이어서 진행하세요.`.trim(),
+        },
+      });
+      i += 2;
+      continue;
+    }
+
+    normalized.push(current);
+    i += 1;
+  }
+
+  return normalized;
 }
 
 const ACTION_LABEL_MAP: Record<string, string> = {
@@ -946,16 +1008,21 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
     const selected = parseApprovalSelection(userMessage, pending.length);
     if (selected && selected.length > 0) {
       // If user says generic approval ("응", "승인"), execute ALL pending actions sequentially
-      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(userMessage.trim().toLowerCase());
-      const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
+      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase());
+      const selectedActions = isGenericApproval ? [...pending] : [pending[selected[0]]];
+      const toExecute = normalizeChainedTaskActions(selectedActions);
 
       const results: string[] = [];
+      results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
       for (let i = 0; i < toExecute.length; i++) {
         const action = toExecute[i];
         const stepLabel = toExecute.length > 1 ? `[${i + 1}/${toExecute.length}] ` : '';
         const executed = executeAction(action);
         const ok = executed.result?.ok;
         results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
+        if (ok && action.type === 'create_task' && hasQaToDevIntent(`${action.params.title || ''}\n${action.params.description || ''}`)) {
+          results.push(`${stepLabel}↪ QA 단계 완료 후 Developer 단계가 자동으로 이어집니다.`);
+        }
       }
 
       // Remove executed actions from pending

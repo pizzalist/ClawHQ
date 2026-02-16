@@ -116,5 +116,72 @@ test('R12: Clamping - "개발자 99명" → max 5', () => {
   assert.equal(dev!.count, 5); // MAX_COUNT_PER_ROLE = 5
 });
 
+// --- 4. QA->Dev chained intent regression (real-user flow) ---
+const qaDevSentence = 'QC 한명 붙여 리뷰하고 개발자가 반영해서 재수정해';
+
+test('R13: QA->Dev 의도 문장: PM next should be QA', () => {
+  const next = decideNextRoleByIntent(
+    { title: qaDevSentence, description: qaDevSentence, expectedDeliverables: ['web'] as DeliverableType[] },
+    'pm'
+  );
+  assert.equal(next, 'qa');
+});
+
+test('R14: QA step then Developer step', () => {
+  const next = decideNextRoleByIntent(
+    { title: qaDevSentence, description: qaDevSentence, expectedDeliverables: ['web'] as DeliverableType[] },
+    'qa'
+  );
+  assert.equal(next, 'developer');
+});
+
+test('R15: QA->Dev correction flow stops after Developer', () => {
+  const next = decideNextRoleByIntent(
+    { title: qaDevSentence, description: qaDevSentence, expectedDeliverables: ['web'] as DeliverableType[] },
+    'developer'
+  );
+  assert.equal(next, undefined);
+});
+
+test('R16: reviewer도 QA처럼 dev 반영 체인으로 연결', () => {
+  const next = decideNextRoleByIntent(
+    { title: qaDevSentence, description: qaDevSentence, expectedDeliverables: ['web'] as DeliverableType[] },
+    'reviewer'
+  );
+  assert.equal(next, 'developer');
+});
+
+test('R17: QA 의도 없는 일반 구현은 PM->Developer 유지', () => {
+  const next = decideNextRoleByIntent(
+    { title: '대시보드 구현', description: '웹 기능 개발', expectedDeliverables: ['web'] as DeliverableType[] },
+    'pm'
+  );
+  assert.equal(next, 'developer');
+});
+
+test('R18: report-only + QA->Dev 문구라도 QA 우선 체인', () => {
+  const next = decideNextRoleByIntent(
+    { title: qaDevSentence, description: '문서 리뷰 후 개발 반영', expectedDeliverables: ['report'] as DeliverableType[] },
+    'pm'
+  );
+  assert.equal(next, 'qa');
+});
+
+test('R19: 상태 조회형 문장은 체인 생성 안 함', () => {
+  const next = decideNextRoleByIntent(
+    { title: '현재 상태 조회', description: '진행률만 보고', expectedDeliverables: ['document'] as DeliverableType[] },
+    'pm'
+  );
+  assert.equal(next, undefined);
+});
+
+test('R20: QA 키워드만 있고 개발 반영이 없으면 기존 리뷰 체계 유지', () => {
+  const next = decideNextRoleByIntent(
+    { title: '기능 구현 후 QA 리뷰', description: '검증 중심', expectedDeliverables: ['web'] as DeliverableType[] },
+    'developer'
+  );
+  assert.equal(next, 'reviewer');
+});
+
 console.log(`\n=== Results: ${passed} passed, ${failed} failed out of ${passed + failed} ===\n`);
 if (failed > 0) process.exit(1);

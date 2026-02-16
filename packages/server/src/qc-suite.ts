@@ -84,6 +84,7 @@ async function run() {
     ['C18', '복합 요청', '분석 보고서와 리뷰', 'report', { pm: 'reviewer', dev: 'reviewer' }],
     ['C19', '복합 요청', 'API 구현 및 검토', 'web', { pm: 'developer', dev: 'reviewer' }],
     ['C20', '엣지', '긴급 hotfix 코드 수정', 'web', { pm: 'developer', dev: undefined }],
+    ['C33', '실사용 체인', 'QC 한명 붙여 리뷰하고 개발자가 반영해서 재수정해', 'web', { pm: 'qa', dev: undefined }],
   ] as const;
 
   for (const [id, category, input, deliverable, expect] of planCases) {

@@ -235,7 +235,14 @@ function isReportOnlyDeliverable(types: DeliverableType[] | undefined): boolean 
 
 function needsReviewByIntent(task: Pick<Task, 'title' | 'description'>): boolean {
   const text = `${task.title}\n${task.description}`.toLowerCase();
-  return /(리뷰|검토|review|qa|test|테스트|품질|검증)/i.test(text);
+  return /(리뷰|검토|review|qa|test|테스트|품질|검증|qc)/i.test(text);
+}
+
+function needsDevFollowupAfterReview(task: Pick<Task, 'title' | 'description'>): boolean {
+  const text = `${task.title}\n${task.description}`.toLowerCase();
+  const reviewIntent = /(qc|qa|리뷰|검토|테스트|품질)/i.test(text);
+  const devFixIntent = /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(text);
+  return reviewIntent && devFixIntent;
 }
 
 function isAdministrativeTask(task: Pick<Task, 'title' | 'description' | 'expectedDeliverables'>): boolean {
@@ -250,8 +257,10 @@ export function decideNextRoleByIntent(task: Pick<Task, 'title' | 'description' 
 
   const reportOnly = isReportOnlyDeliverable(task.expectedDeliverables as DeliverableType[] | undefined);
   const reviewRequested = needsReviewByIntent(task);
+  const qaToDevRequested = needsDevFollowupAfterReview(task);
 
   if (currentRole === 'pm') {
+    if (qaToDevRequested) return 'qa';
     // report/document: PM -> Reviewer only when explicitly asked
     if (reportOnly) return reviewRequested ? 'reviewer' : undefined;
 
@@ -259,7 +268,13 @@ export function decideNextRoleByIntent(task: Pick<Task, 'title' | 'description' 
     return 'developer';
   }
 
+  if (currentRole === 'qa' || currentRole === 'reviewer') {
+    return qaToDevRequested ? 'developer' : undefined;
+  }
+
   if (currentRole === 'developer') {
+    // QA->Developer corrective chain defaults to stop after developer fix.
+    if (qaToDevRequested) return undefined;
     // Developer -> Reviewer only when explicitly requested by intent
     return reviewRequested ? 'reviewer' : undefined;
   }

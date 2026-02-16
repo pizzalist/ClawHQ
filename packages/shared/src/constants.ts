@@ -151,6 +151,16 @@ export const TECH_SPEC_ROLES: Record<import('./types.js').TechSpecRole, {
 export const TECH_SPEC_SYNTHESIS_PROMPT = (specs: string) =>
   `Synthesize these 4 specs into one unified development specification. Resolve conflicts. Create a final sprint plan.\n\n${specs}`;
 
+// User-facing default naming policy (non-test agents)
+export const FRIENDLY_AGENT_PREFIX: Record<AgentRole, string> = {
+  pm: 'PM',
+  developer: 'DEV',
+  reviewer: 'REV',
+  designer: 'DES',
+  devops: 'OPS',
+  qa: 'QA',
+};
+
 export const MAX_CONCURRENT_TASKS = 3;
 export const SERVER_PORT = 3001;
 export const WS_PATH = '/ws';
