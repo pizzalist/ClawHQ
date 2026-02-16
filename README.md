@@ -4,7 +4,7 @@
 
 ### Plan, Execute, Decide, Review — your AI team operating system.
 
-AI Office is an open-source platform for running AI agents as a real team.
+AI Office is an open-source platform for running AI agents as a real team on top of OpenClaw.
 Not just task execution — decision history, failure timeline, and team-level observability.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -43,6 +43,17 @@ AI Office focuses on **team operations**, not just single-shot generation.
 
 ---
 
+## Runtime requirement (important)
+
+- **Full mode (recommended): OpenClaw required**
+  - real agent orchestration
+  - real task execution chain quality
+- **Demo mode (fallback): OpenClaw optional**
+  - UI + simulated flow for product preview
+  - not equivalent to full production behavior
+
+If your goal is real usage, connect/install OpenClaw.
+
 ## 5-minute quickstart
 
 ### 1) Install
@@ -60,9 +71,9 @@ npm run demo:start
 ```
 
 `demo:start` behavior:
-- If OpenClaw exists: uses full runtime mode
+- If OpenClaw exists: uses **full runtime mode** (real usage)
 - If OpenClaw is missing: tries auto-install (`npm install -g openclaw`)
-- If install fails: falls back to demo mode (UI/simulated flow still works)
+- If install fails: falls back to **demo mode** (preview only)
 
 (or `npm run dev` if you want raw logs immediately)
 
