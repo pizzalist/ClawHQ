@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal } from '@ai-office/shared';
+import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal, MeetingCandidate, DecisionPacket } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
@@ -21,6 +21,10 @@ function rowToMeeting(row: Record<string, unknown>): Meeting {
     decision: row.decision ? JSON.parse(row.decision as string) : null,
     character: (row.character as MeetingCharacter) || undefined,
     report: (row.report as string) || undefined,
+    parentMeetingId: (row.parent_meeting_id as string) || null,
+    sourceMeetingId: (row.source_meeting_id as string) || null,
+    sourceCandidates: row.source_candidates ? JSON.parse(row.source_candidates as string) : undefined,
+    decisionPacket: row.decision_packet ? JSON.parse(row.decision_packet as string) : null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -43,15 +47,43 @@ export function getMeeting(id: string): Meeting | null {
 
 function saveMeeting(m: Meeting) {
   stmts.updateMeeting.run(m.status, JSON.stringify(m.proposals), m.decision ? JSON.stringify(m.decision) : null, m.report || null, m.id);
+  // Persist lineage fields separately
+  try {
+    stmts.updateMeetingLineage.run(
+      m.parentMeetingId || null,
+      m.sourceMeetingId || null,
+      m.sourceCandidates ? JSON.stringify(m.sourceCandidates) : null,
+      m.decisionPacket ? JSON.stringify(m.decisionPacket) : null,
+      m.id,
+    );
+  } catch { /* migration not yet applied */ }
   emitChange();
 }
 
 // Track pending contributions per meeting
 const pendingContributions = new Map<string, { total: number; done: number }>();
 
-export function createMeeting(title: string, description: string, type: MeetingType, participantIds: string[], character?: MeetingCharacter): Meeting {
+export function createMeeting(
+  title: string,
+  description: string,
+  type: MeetingType,
+  participantIds: string[],
+  character?: MeetingCharacter,
+  lineage?: { parentMeetingId?: string; sourceMeetingId?: string; sourceCandidates?: MeetingCandidate[] },
+): Meeting {
   const id = uuid();
   stmts.insertMeeting.run(id, title, description, type, JSON.stringify(participantIds), character || null);
+  if (lineage) {
+    try {
+      stmts.updateMeetingLineage.run(
+        lineage.parentMeetingId || null,
+        lineage.sourceMeetingId || null,
+        lineage.sourceCandidates ? JSON.stringify(lineage.sourceCandidates) : null,
+        null, // no decision packet yet
+        id,
+      );
+    } catch { /* migration not yet applied */ }
+  }
   const meeting = getMeeting(id)!;
   emitChange();
   return meeting;
@@ -250,6 +282,104 @@ function generateConsolidatedReport(meeting: Meeting): string {
 // Keep startReviewPhase for backward compatibility but redirect to finalize
 export function startReviewPhase(meetingId: string) {
   finalizeMeeting(meetingId);
+}
+
+/**
+ * Extract structured candidates from a completed planning/brainstorm meeting.
+ * Parses proposals into MeetingCandidate[] for downstream review meetings.
+ */
+export function extractCandidatesFromMeeting(meetingId: string): MeetingCandidate[] {
+  const meeting = getMeeting(meetingId);
+  if (!meeting || meeting.status !== 'completed') return [];
+
+  return meeting.proposals.map(p => ({
+    name: p.agentName,
+    summary: p.content.slice(0, 800),
+    score: undefined,
+    rationale: undefined,
+  }));
+}
+
+/**
+ * Start a review meeting that scores candidates from a source meeting.
+ * Automatically injects sourceMeetingId and sourceCandidates.
+ */
+export function startReviewMeetingFromSource(
+  title: string,
+  sourceMeetingId: string,
+  reviewerIds: string[],
+): Meeting | null {
+  const sourceMeeting = getMeeting(sourceMeetingId);
+  if (!sourceMeeting || sourceMeeting.status !== 'completed') return null;
+
+  const candidates = extractCandidatesFromMeeting(sourceMeetingId);
+  if (candidates.length === 0) return null;
+
+  const meeting = createMeeting(
+    title,
+    `"${sourceMeeting.title}" 회의 결과를 기반으로 후보를 평가합니다.`,
+    'review',
+    reviewerIds,
+    'review',
+    {
+      parentMeetingId: sourceMeetingId,
+      sourceMeetingId,
+      sourceCandidates: candidates,
+    },
+  );
+
+  // Start reviewer scoring sessions
+  let startedContributions = 0;
+  const candidatesSummary = candidates.map((c, i) => `${i + 1}. **${c.name}**: ${c.summary.slice(0, 200)}`).join('\n');
+
+  for (const agentId of reviewerIds) {
+    const agent = getAgent(agentId);
+    if (!agent) continue;
+
+    const sessionId = `review-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
+    const prompt = `당신은 ${agent.name}, 전문 리뷰어입니다.
+
+"${sourceMeeting.title}" 기획 회의에서 도출된 후보들을 평가해주세요.
+
+## 평가 대상 후보
+${candidatesSummary}
+
+## 평가 기준
+각 후보에 대해 다음을 제공하세요:
+1. 점수 (1-10)
+2. 가중치 근거
+3. 장단점
+
+최종적으로 가장 추천하는 1안과 대안 1-2안을 제시하세요.
+반드시 한국어로 응답하세요.`;
+
+    try { transitionAgent(agentId, 'working', null, sessionId); } catch { /* may already be working */ }
+
+    spawnAgentSession({
+      sessionId,
+      agentName: agent.name,
+      role: agent.role,
+      model: agent.model,
+      prompt,
+      onComplete: (run) => handleContributionComplete(meeting.id, agentId, agent.name, agent.role, run),
+    });
+    startedContributions++;
+  }
+
+  pendingContributions.set(meeting.id, { total: startedContributions, done: 0 });
+  if (startedContributions === 0) {
+    pendingContributions.delete(meeting.id);
+    finalizeMeeting(meeting.id);
+  }
+
+  return meeting;
+}
+
+/**
+ * Get child meetings that reference a parent meeting.
+ */
+export function getChildMeetings(parentMeetingId: string): Meeting[] {
+  return listMeetings(true).filter(m => m.parentMeetingId === parentMeetingId || m.sourceMeetingId === parentMeetingId);
 }
 
 export function decideMeeting(meetingId: string, winnerId: string, feedback: string): Meeting {

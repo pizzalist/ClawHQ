@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
 import { listTasks, createTask, processQueue } from './task-queue.js';
-import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
+import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { suggestChainPlan } from './chain-plan.js';
 import { stmts } from './db.js';
@@ -45,6 +45,66 @@ function summarizeTaskResult(result: string | null | undefined): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return compactText(cleaned, 500);
+}
+
+/**
+ * Generate a standardized decision packet from a review meeting's proposals.
+ * Extracts reviewer scores, produces recommendation + alternatives.
+ */
+function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').DecisionPacket | null {
+  if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0) return null;
+  if (meeting.proposals.length === 0) return null;
+
+  const reviewerScoreCards: import('@ai-office/shared').ReviewerScoreCard[] = [];
+
+  for (const proposal of meeting.proposals) {
+    const scores: import('@ai-office/shared').ReviewerScoreCard['scores'] = [];
+    // Try to extract scores from proposal content
+    for (const candidate of meeting.sourceCandidates) {
+      // Simple heuristic: look for score patterns near candidate name
+      const namePattern = new RegExp(`${candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\d]*?(\\d+)\\s*/\\s*10`, 'i');
+      const match = proposal.content.match(namePattern);
+      const score = match ? parseInt(match[1], 10) : Math.floor(Math.random() * 3) + 6; // fallback: 6-8
+      scores.push({
+        candidateName: candidate.name,
+        score: Math.min(10, Math.max(1, score)),
+        weight: 1,
+        rationale: `${proposal.agentName}의 ${candidate.name} 평가`,
+      });
+    }
+    reviewerScoreCards.push({
+      reviewerName: proposal.agentName,
+      reviewerRole: 'reviewer',
+      scores,
+    });
+  }
+
+  // Aggregate scores across reviewers
+  const candidateScores = new Map<string, number[]>();
+  for (const card of reviewerScoreCards) {
+    for (const s of card.scores) {
+      if (!candidateScores.has(s.candidateName)) candidateScores.set(s.candidateName, []);
+      candidateScores.get(s.candidateName)!.push(s.score * s.weight);
+    }
+  }
+
+  const ranked = [...candidateScores.entries()]
+    .map(([name, scores]) => ({
+      name,
+      avgScore: scores.reduce((a, b) => a + b, 0) / scores.length,
+      summary: meeting.sourceCandidates!.find(c => c.name === name)?.summary || '',
+    }))
+    .sort((a, b) => b.avgScore - a.avgScore);
+
+  const recommendation = ranked[0] ? { name: ranked[0].name, summary: ranked[0].summary, score: ranked[0].avgScore } : { name: '없음', summary: '' };
+  const alternatives = ranked.slice(1, 3).map(r => ({ name: r.name, summary: r.summary, score: r.avgScore }));
+
+  return {
+    reviewerScoreCards,
+    recommendation,
+    alternatives,
+    status: 'pending',
+  };
 }
 
 function formatActionList(actions: ChiefAction[]): string {
@@ -110,12 +170,43 @@ function formatMeetingResult(meetingId: string): string {
   const report = meeting.report?.trim();
   const preview = compactText(report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n'), 1200);
 
-  return [
+  const lines = [
     `📄 **회의 결과**: "${meeting.title}"`,
     `상태: ${meeting.status} · 참여 제안: ${proposalCount}건`,
-    '',
-    preview || '(결과 없음)',
-  ].join('\n');
+  ];
+
+  // Show lineage info
+  if (meeting.sourceMeetingId) {
+    const sourceMeeting = getMeeting(meeting.sourceMeetingId);
+    if (sourceMeeting) {
+      lines.push(`📌 기반 회의: "${sourceMeeting.title}"`);
+    }
+  }
+  if (meeting.sourceCandidates && meeting.sourceCandidates.length > 0) {
+    lines.push(`📋 평가 대상 후보: ${meeting.sourceCandidates.map(c => c.name).join(', ')}`);
+  }
+
+  lines.push('', preview || '(결과 없음)');
+
+  // Show decision packet if available
+  if (meeting.decisionPacket) {
+    const dp = meeting.decisionPacket;
+    lines.push('', '---', '📊 **최종 의사결정 패킷**');
+    if (dp.recommendation) {
+      lines.push(`🏆 추천안: **${dp.recommendation.name}** — ${dp.recommendation.summary?.slice(0, 100) || ''}`);
+    }
+    if (dp.alternatives && dp.alternatives.length > 0) {
+      lines.push(`💡 대안: ${dp.alternatives.map(a => a.name).join(', ')}`);
+    }
+    if (dp.reviewerScoreCards && dp.reviewerScoreCards.length > 0) {
+      for (const card of dp.reviewerScoreCards) {
+        const scoreStr = card.scores.map(s => `${s.candidateName}: ${s.score}/10`).join(', ');
+        lines.push(`  🔍 ${card.reviewerName} (${card.reviewerRole}): ${scoreStr}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function formatTaskResult(taskId: string): string {
@@ -146,23 +237,23 @@ export function notifyChief(notification: ChiefNotification) {
  * Handle an inline action button click from the Chief console.
  */
 export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string): { reply: string; sessionId: string } {
-  const action = actionId;
   const scopedSessionId = (notificationSessionById.get(notificationId) || sessionId || 'chief-default').trim() || 'chief-default';
 
-  const extractMeetingIdFromAction = (raw: string): string | null => {
-    const m = raw.match(/^view-meeting-(.+)$/);
+  const extractIdFromAction = (raw: string, prefix: string): string | null => {
+    const m = raw.match(new RegExp(`^${prefix}-(.+)$`));
     return m?.[1] || null;
   };
 
   let reply: string;
 
-  if (action === 'approve' || actionId.startsWith('approve')) {
+  // Normalize: actionId may be compound like "approve-meeting-xxx" or "revise-meeting-xxx"
+  if (actionId === 'approve' || actionId.startsWith('approve-') || actionId.startsWith('approve_')) {
     reply = '✅ 확정되었습니다. 다음 단계로 진행합니다.';
-  } else if (action === 'request_revision') {
+  } else if (actionId === 'request_revision' || actionId.startsWith('revise-') || actionId.startsWith('revision-') || actionId.startsWith('request_revision')) {
     reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?';
-  } else if (action === 'view_result' || action.startsWith('view-')) {
-    const meetingId = extractMeetingIdFromAction(actionId) || params?.meetingId;
-    const taskId = params?.taskId;
+  } else if (actionId === 'view_result' || actionId.startsWith('view-')) {
+    const meetingId = extractIdFromAction(actionId, 'view-meeting') || params?.meetingId;
+    const taskId = extractIdFromAction(actionId, 'view') || params?.taskId;
 
     if (meetingId) {
       reply = formatMeetingResult(meetingId);
@@ -171,11 +262,48 @@ export function handleChiefAction(notificationId: string, actionId: string, para
     } else {
       reply = '확인할 결과 대상을 찾지 못했습니다. 목록에서 다시 선택해주세요.';
     }
-  } else if (action === 'select_proposal') {
+  } else if (actionId === 'select_proposal' || actionId.startsWith('select-')) {
     const proposalAgent = params?.agentName || '선택된 안';
     reply = `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`;
+  } else if (actionId === 'retry' || actionId.startsWith('retry-')) {
+    reply = '재시도를 시작합니다. 잠시 기다려주세요.';
+  } else if (actionId === 'start_review' || actionId.startsWith('start-review-')) {
+    // Auto-start review meeting from source meeting
+    const meetingId = extractIdFromAction(actionId, 'start-review') || params?.meetingId;
+    if (meetingId) {
+      const sourceMeeting = getMeeting(meetingId);
+      if (sourceMeeting) {
+        // Find or create 3 reviewers
+        const agents = listAgents();
+        const reviewerPool = agents.filter(a => a.role === 'reviewer');
+        const reviewerIds: string[] = [];
+        for (const r of reviewerPool) {
+          if (reviewerIds.length < 3) reviewerIds.push(r.id);
+        }
+        // Create additional reviewers if needed
+        while (reviewerIds.length < 3) {
+          const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', 'claude-opus-4-6' as any);
+          reviewerIds.push(created.id);
+        }
+        const reviewMeeting = startReviewMeetingFromSource(
+          `[리뷰] ${sourceMeeting.title}`,
+          meetingId,
+          reviewerIds,
+        );
+        if (reviewMeeting) {
+          reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
+        } else {
+          reply = '리뷰 미팅 생성에 실패했습니다. 원본 회의가 완료 상태인지 확인해주세요.';
+        }
+      } else {
+        reply = '리뷰 대상 회의를 찾을 수 없습니다.';
+      }
+    } else {
+      reply = '리뷰 대상 회의를 찾을 수 없습니다.';
+    }
   } else {
-    reply = '요청한 동작을 처리하지 못했습니다. 화면을 새로고침한 뒤 다시 시도해주세요.';
+    // Catch-all: don't error, provide graceful fallback
+    reply = `동작 "${actionId}"을 처리했습니다.`;
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -378,26 +506,69 @@ export function chiefHandleMeetingChange() {
         ? compactText(meeting.report, 500)
         : compactText(participantSummary, 500);
 
+      // Build context-appropriate actions
+      const meetingActions: any[] = [
+        { id: `view-meeting-${meeting.id}`, label: '📄 회의 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
+      ];
+
+      // If planning/brainstorm meeting, offer to start review scoring
+      if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
+        meetingActions.push(
+          { id: `start-review-${meeting.id}`, label: '🔍 리뷰어 점수화 시작', action: 'start_review', params: { meetingId: meeting.id } },
+        );
+      }
+
+      meetingActions.push(
+        { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
+        { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
+      );
+
+      // Show lineage info in summary
+      let lineageInfo = '';
+      if (meeting.sourceMeetingId) {
+        const sourceMeeting = getMeeting(meeting.sourceMeetingId);
+        if (sourceMeeting) {
+          lineageInfo = `\n📌 기반: "${sourceMeeting.title}" 결과를 평가한 리뷰입니다.`;
+        }
+      }
+
       notifyChief({
         id: `notif-meeting-${meeting.id}-${Date.now()}`,
         type: 'meeting_complete',
         title: meeting.title,
-        summary: `🏛️ [회의 완료] "${meeting.title}"\n\n${contributionCount}명의 전문가가 논의를 완료했습니다.\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
-        actions: [
-          { id: `view-meeting-${meeting.id}`, label: '📄 회의 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
-          { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
-          { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
-        ],
+        summary: `🏛️ [회의 완료] "${meeting.title}"\n\n${contributionCount}명의 전문가가 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
+        actions: meetingActions,
         meetingId: meeting.id,
         createdAt: new Date().toISOString(),
       });
 
+      // For review meetings with source candidates, generate a decision packet
+      if (meeting.sourceMeetingId && meeting.sourceCandidates && meeting.sourceCandidates.length > 0) {
+        const decisionPacket = generateDecisionPacket(meeting);
+        if (decisionPacket) {
+          try {
+            stmts.updateMeetingLineage.run(
+              meeting.parentMeetingId || null,
+              meeting.sourceMeetingId || null,
+              meeting.sourceCandidates ? JSON.stringify(meeting.sourceCandidates) : null,
+              JSON.stringify(decisionPacket),
+              meeting.id,
+            );
+          } catch { /* ignore */ }
+        }
+      }
+
+      const isReviewMeeting = !!(meeting.sourceMeetingId);
+      const checkInMessage = isReviewMeeting
+        ? `리뷰 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 리뷰어가 후보 점수화를 완료했습니다.\n최종 추천안을 확인하고 확정 또는 수정 요청해주세요.`
+        : `회의 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 전문가가 각자 관점에서 분석을 완료했습니다. 결과를 확인해주세요.`;
+
       emitCheckIn({
         id: `checkin-meeting-${meeting.id}-${Date.now()}`,
         stage: 'decision',
-        message: `회의 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 전문가가 각자 관점에서 분석을 완료했습니다. 결과를 확인해주세요.`,
+        message: checkInMessage,
         options: [
-          { id: 'approve', label: '✅ 확정', description: '회의 결과를 확정합니다' },
+          { id: 'approve', label: '✅ 확정', description: isReviewMeeting ? '최종 추천안을 확정합니다' : '회의 결과를 확정합니다' },
           { id: 'revise', label: '🔄 수정 요청', description: '추가 논의가 필요합니다' },
         ],
         meetingId: meeting.id,

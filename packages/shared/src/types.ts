@@ -241,6 +241,26 @@ export interface MeetingReview {
   isDevilsAdvocate?: boolean;
 }
 
+export interface MeetingCandidate {
+  name: string;
+  summary: string;
+  score?: number;
+  rationale?: string;
+}
+
+export interface ReviewerScoreCard {
+  reviewerName: string;
+  reviewerRole: string;
+  scores: Array<{ candidateName: string; score: number; weight: number; rationale: string }>;
+}
+
+export interface DecisionPacket {
+  reviewerScoreCards: ReviewerScoreCard[];
+  recommendation: MeetingCandidate;
+  alternatives: MeetingCandidate[];
+  status: 'pending' | 'approved' | 'revision_requested';
+}
+
 export interface Meeting {
   id: string;
   title: string;
@@ -253,6 +273,14 @@ export interface Meeting {
   techSpec?: TechSpecMeetingData;
   character?: MeetingCharacter;
   report?: string;
+  /** Lineage: parent meeting that spawned this one */
+  parentMeetingId?: string | null;
+  /** Source meeting ID whose candidates are being reviewed */
+  sourceMeetingId?: string | null;
+  /** Structured candidates inherited from source meeting */
+  sourceCandidates?: MeetingCandidate[];
+  /** Final decision packet (reviewer scoring + recommendation) */
+  decisionPacket?: DecisionPacket | null;
   createdAt: string;
   updatedAt: string;
 }

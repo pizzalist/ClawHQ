@@ -138,6 +138,12 @@ try {
   db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id)`);
 } catch { /* column already exists */ }
 
+// Migration: meeting lineage columns
+try { db.exec(`ALTER TABLE meetings ADD COLUMN parent_meeting_id TEXT`); } catch { /* exists */ }
+try { db.exec(`ALTER TABLE meetings ADD COLUMN source_meeting_id TEXT`); } catch { /* exists */ }
+try { db.exec(`ALTER TABLE meetings ADD COLUMN source_candidates TEXT`); } catch { /* exists */ }
+try { db.exec(`ALTER TABLE meetings ADD COLUMN decision_packet TEXT`); } catch { /* exists */ }
+
 // Migration: add expected_deliverables if missing
 try {
   db.exec(`ALTER TABLE tasks ADD COLUMN expected_deliverables TEXT`);
@@ -270,6 +276,10 @@ export const stmts = {
   `),
   updateMeeting: db.prepare(`
     UPDATE meetings SET status = ?, proposals = ?, decision = ?, report = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `),
+  updateMeetingLineage: db.prepare(`
+    UPDATE meetings SET parent_meeting_id = ?, source_meeting_id = ?, source_candidates = ?, decision_packet = ?, updated_at = datetime('now')
     WHERE id = ?
   `),
 

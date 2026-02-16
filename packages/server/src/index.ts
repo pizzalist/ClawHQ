@@ -12,7 +12,7 @@ import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seed
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp } from './task-queue.js';
 import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange } from './chain-plan.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, createDeliverablesFromResult, validateWebDeliverable } from './deliverables.js';
-import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
+import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings, startReviewMeetingFromSource, extractCandidatesFromMeeting, getChildMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
 import { stmts } from './db.js';

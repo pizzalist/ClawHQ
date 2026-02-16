@@ -84,16 +84,17 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
 
   const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
     setActing(actionId);
-    // Special: view_result opens the task result modal
-    if (action === 'view_result' && params.taskId) {
+    // Special: view_result opens the task result modal (client-side only for tasks)
+    if (action === 'view_result' && params.taskId && !params.meetingId) {
       setSelectedTask(params.taskId);
       setActing(null);
       return;
     }
+    // All other actions (including view-meeting, approve, revise, start-review) go to server
     await handleAction(notification.id, actionId, params);
     setActing(null);
-    // Dismiss after handling (except view_result)
-    if (action !== 'view_result') {
+    // Dismiss after handling (except view actions)
+    if (action !== 'view_result' && !actionId.startsWith('view-')) {
       setDismissed(true);
     }
   };
