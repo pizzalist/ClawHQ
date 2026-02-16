@@ -38,6 +38,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     status: row.status as TaskStatus,
     result: (row.result as string) ?? null,
     parentTaskId: (row.parent_task_id as string) ?? null,
+    batchId: (row.batch_id as string) ?? null,
     isTest: !!(row.is_test as number),
     expectedDeliverables: row.expected_deliverables ? JSON.parse(row.expected_deliverables as string) : undefined,
     createdAt: row.created_at as string,
@@ -61,7 +62,7 @@ export function createTask(
   assigneeId?: string | null,
   parentTaskId?: string | null,
   expectedDeliverables?: string[],
-  opts?: { isTest?: boolean }
+  opts?: { isTest?: boolean; batchId?: string }
 ): Task {
   // Auto-detect deliverable type if not explicitly provided
   if (!expectedDeliverables || expectedDeliverables.length === 0) {
@@ -81,6 +82,7 @@ export function createTask(
   }
   const id = uuid();
   const isTest = opts?.isTest === true || shouldForceTestTask(title, description);
+  const batchId = opts?.batchId || null;
   stmts.insertTask.run(
     id,
     title,
@@ -89,6 +91,10 @@ export function createTask(
     expectedDeliverables ? JSON.stringify(expectedDeliverables) : null,
     isTest ? 1 : 0,
   );
+  // Set batch_id if provided
+  if (batchId) {
+    try { stmts.setBatchId.run(batchId, id); } catch { /* ignore if column missing */ }
+  }
 
   // Default owner policy: root tasks go to PM first (unless explicitly assigned)
   let resolvedAssigneeId = assigneeId || null;
@@ -564,6 +570,26 @@ function spawnChainFollowUp(agentId: string, taskId: string, title: string, resu
 }
 
 export { getChainChildren, findRootTask, spawnChainFollowUp };
+
+/** Get all tasks in a batch */
+export function getTasksByBatchId(batchId: string): Task[] {
+  return (stmts.getTasksByBatchId.all(batchId) as Record<string, unknown>[]).map(rowToTask);
+}
+
+/** Check if all tasks in a batch are completed */
+export function isBatchComplete(batchId: string): boolean {
+  const tasks = getTasksByBatchId(batchId);
+  return tasks.length > 0 && tasks.every(t => t.status === 'completed' || t.status === 'cancelled');
+}
+
+/** Get combined results of all tasks in a batch */
+export function getBatchResults(batchId: string): { tasks: Task[]; combinedResult: string } {
+  const tasks = getTasksByBatchId(batchId).filter(t => t.status === 'completed');
+  const combinedResult = tasks.map((t, i) => {
+    return `## ${t.title} (${i + 1}/${tasks.length})\n\n${t.result || '(결과 없음)'}`;
+  }).join('\n\n---\n\n');
+  return { tasks, combinedResult };
+}
 
 export function listEvents(): AppEvent[] {
   return (stmts.listEvents.all() as Record<string, unknown>[]).map(row => ({

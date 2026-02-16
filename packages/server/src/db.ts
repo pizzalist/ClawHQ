@@ -154,6 +154,11 @@ try {
   db.exec(`ALTER TABLE tasks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
 } catch { /* column already exists */ }
 
+// Migration: add batch_id for parallel task grouping
+try {
+  db.exec(`ALTER TABLE tasks ADD COLUMN batch_id TEXT`);
+} catch { /* column already exists */ }
+
 // Prepared statements
 export const stmts = {
   listAgents: db.prepare('SELECT * FROM agents ORDER BY desk_index'),
@@ -312,6 +317,10 @@ export const stmts = {
     ORDER BY created_at DESC
   `),
   deleteMeetingById: db.prepare('DELETE FROM meetings WHERE id = ?'),
+
+  // Batch operations
+  setBatchId: db.prepare('UPDATE tasks SET batch_id = ? WHERE id = ?'),
+  getTasksByBatchId: db.prepare('SELECT * FROM tasks WHERE batch_id = ? ORDER BY created_at'),
 
   listEvents: db.prepare('SELECT * FROM events ORDER BY created_at DESC LIMIT 200'),
   insertEvent: db.prepare(`

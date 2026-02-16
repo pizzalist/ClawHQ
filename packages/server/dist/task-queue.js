@@ -33,6 +33,7 @@ function rowToTask(row) {
         status: row.status,
         result: row.result ?? null,
         parentTaskId: row.parent_task_id ?? null,
+        batchId: row.batch_id ?? null,
         isTest: !!row.is_test,
         expectedDeliverables: row.expected_deliverables ? JSON.parse(row.expected_deliverables) : undefined,
         createdAt: row.created_at,
@@ -68,7 +69,15 @@ export function createTask(title, description, assigneeId, parentTaskId, expecte
     }
     const id = uuid();
     const isTest = opts?.isTest === true || shouldForceTestTask(title, description);
+    const batchId = opts?.batchId || null;
     stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null, isTest ? 1 : 0);
+    // Set batch_id if provided
+    if (batchId) {
+        try {
+            stmts.setBatchId.run(batchId, id);
+        }
+        catch { /* ignore if column missing */ }
+    }
     // Default owner policy: root tasks go to PM first (unless explicitly assigned)
     let resolvedAssigneeId = assigneeId || null;
     if (!resolvedAssigneeId && !parentTaskId) {
@@ -526,6 +535,23 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
     }
 }
 export { getChainChildren, findRootTask, spawnChainFollowUp };
+/** Get all tasks in a batch */
+export function getTasksByBatchId(batchId) {
+    return stmts.getTasksByBatchId.all(batchId).map(rowToTask);
+}
+/** Check if all tasks in a batch are completed */
+export function isBatchComplete(batchId) {
+    const tasks = getTasksByBatchId(batchId);
+    return tasks.length > 0 && tasks.every(t => t.status === 'completed' || t.status === 'cancelled');
+}
+/** Get combined results of all tasks in a batch */
+export function getBatchResults(batchId) {
+    const tasks = getTasksByBatchId(batchId).filter(t => t.status === 'completed');
+    const combinedResult = tasks.map((t, i) => {
+        return `## ${t.title} (${i + 1}/${tasks.length})\n\n${t.result || '(결과 없음)'}`;
+    }).join('\n\n---\n\n');
+    return { tasks, combinedResult };
+}
 export function listEvents() {
     return stmts.listEvents.all().map(row => ({
         id: row.id,

@@ -162,8 +162,7 @@ export const useStore = create<Store>((set, get) => ({
   }),
   setChiefThinking: (chiefThinking) => set({ chiefThinking }),
   handleChiefResponse: (response) => {
-    const currentSession = get().chiefSessionId;
-    if (response.sessionId && response.sessionId !== currentSession) return;
+    // Accept all responses — strict session filtering caused missed notifications after server restart
 
     // Guard: skip empty replies (prevents blank bubbles)
     const hasContent = (response.reply || '').trim().length > 0;
@@ -195,8 +194,7 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
   handleChiefCheckIn: (checkIn) => {
-    const currentSession = get().chiefSessionId;
-    if (checkIn.sessionId && checkIn.sessionId !== currentSession) return;
+    // Accept all check-ins — session filtering removed to prevent missed notifications
     set((s) => {
       // Deduplicate
       if (s.chiefMessages.some(m => m.id === checkIn.id)) return s;
@@ -213,8 +211,8 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
   handleChiefNotification: (notification) => {
-    const currentSession = get().chiefSessionId;
-    if (notification.sessionId && notification.sessionId !== currentSession) return;
+    // Always accept notifications — session filtering caused missed meeting completions
+    // when server's lastActiveChiefSessionId was stale (e.g. after restart)
     set((s) => {
       // Deduplicate
       if (s.chiefMessages.some(m => m.id === notification.id)) return s;

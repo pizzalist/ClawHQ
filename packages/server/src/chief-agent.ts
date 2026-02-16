@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
-import { listTasks, createTask, processQueue } from './task-queue.js';
+import { listTasks, createTask, processQueue, isBatchComplete, getBatchResults, getTasksByBatchId } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings, deleteMeeting, deleteAllMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan } from './chain-plan.js';
@@ -434,9 +434,12 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             nextStepLines.push(`\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`);
           }
         } else {
-          nextStepLines.push(`\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`);
+          // Chain plan exhausted — fall through to context-based next step derivation below
         }
-      } else if (task && task.result) {
+      }
+      // If no chain advancement happened (chain exhausted or no chain), derive next step from task context
+      if (nextStepLines.length === 1 && task && task.result) {
+        // Only the "✅ 확정되었습니다." line — need to add next step
         // No chain plan — derive next step from task context
         const taskTitle = task.title.toLowerCase();
         let nextRole: import('@ai-office/shared').AgentRole = 'developer';
@@ -674,21 +677,46 @@ export function chiefHandleTaskEvent(event: AppEvent) {
       createdAt: new Date().toISOString(),
     });
 
-    // Check how many tasks remain
-    const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in-progress').length;
-    const completedCount = tasks.filter(t => t.status === 'completed').length;
+    // Batch consolidation: if this task belongs to a batch and all batch tasks are done,
+    // automatically create a consolidation task that merges all results
+    if (task.batchId && isBatchComplete(task.batchId)) {
+      const batchKey = `batch_consolidation::${task.batchId}`;
+      if (!emittedNotificationKeys.has(batchKey)) {
+        emittedNotificationKeys.add(batchKey);
+        const { tasks: batchTasks, combinedResult } = getBatchResults(task.batchId);
+        
+        // Create consolidation task assigned to a PM
+        const agents = listAgents();
+        let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
+        if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
 
-    if (pendingCount === 0 && completedCount > 0) {
-      // Informational only: keep a single confirmation entry point on notification card
-      if (!isNotificationDuplicate('checkin_task_completion_info', task.id)) {
-        emitCheckIn({
-          id: `checkin-completion-${Date.now()}`,
-          stage: 'completion',
-          message: `모든 작업이 완료되었습니다! 🎉\n\n` +
-            `완료된 작업 ${completedCount}건의 최종 결과를 확인해주세요.\n` +
-            `확정/수정은 상단 완료 알림 카드의 버튼에서 한 번만 진행해 주세요.`,
-          taskId: task.id,
-          resultSummary: resultPreview,
+        const consolidationTitle = `[취합 보고서] ${batchTasks.map(t => t.title).join(' + ')}`;
+        const consolidationDesc = [
+          `## 병렬 작업 결과 취합`,
+          `아래 ${batchTasks.length}건의 작업 결과를 분석하여 **하나의 통합 보고서**로 정리하세요.`,
+          ``,
+          `### 요구사항`,
+          `1. 각 작업의 핵심 내용을 비교/분석`,
+          `2. 공통점과 차이점 정리`,
+          `3. 최종 추천안 또는 통합 결론 도출`,
+          `4. 우선순위가 있다면 순위 매기기`,
+          ``,
+          `---`,
+          ``,
+          combinedResult,
+        ].join('\n');
+
+        const consolidationTask = createTask(consolidationTitle, consolidationDesc, pmAgent.id);
+        setTimeout(() => processQueue(), 200);
+
+        notifyChief({
+          id: `notif-batch-consolidation-${task.batchId}-${Date.now()}`,
+          type: 'task_complete',
+          title: `📋 병렬 작업 ${batchTasks.length}건 완료 → 취합 진행 중`,
+          summary: `✅ 병렬 작업 ${batchTasks.length}건이 모두 완료되었습니다.\n\n` +
+            batchTasks.map(t => `• "${t.title}" ✅`).join('\n') +
+            `\n\n🔄 결과를 통합하는 취합 보고서를 ${pmAgent.name}에게 배정하여 자동 진행 중입니다.`,
+          actions: [],
           createdAt: new Date().toISOString(),
         });
       }
@@ -719,22 +747,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
       createdAt: new Date().toISOString(),
     });
 
-    emitCheckIn({
-      id: `checkin-failure-${Date.now()}`,
-      stage: 'decision',
-      message: `⚠️ 작업 실패: "${task.title}"\n\n` +
-        `담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n` +
-        `오류: ${task.result || event.message || '알 수 없는 오류'}\n\n` +
-        `어떻게 처리할까요?`,
-      options: [
-        { id: 'retry', label: '🔄 재시도', description: '같은 에이전트로 재시도합니다' },
-        { id: 'reassign', label: '👤 다른 에이전트', description: '다른 에이전트에게 배정합니다' },
-        { id: 'skip', label: '⏭️ 건너뛰기', description: '이 작업을 건너뜁니다' },
-        { id: 'modify', label: '✏️ 수정 후 재시도', description: '작업 내용을 수정합니다' },
-      ],
-      taskId: task.id,
-      createdAt: new Date().toISOString(),
-    });
+    // No check-in — notification card above is the single entry point
   }
 }
 
@@ -1322,7 +1335,8 @@ function executeAction(action: ChiefAction): ChiefAction {
           if (candidate) assigneeId = candidate.id;
         }
 
-        const task = createTask(taskTitle, taskDescription, assigneeId);
+        const taskBatchId = action.params.batchId || null;
+        const task = createTask(taskTitle, taskDescription, assigneeId, null, undefined, taskBatchId ? { batchId: taskBatchId } : undefined);
 
         // 3) Persist a real editable plan for the task
         const plan = suggestChainPlan(task.id, task.title, task.description, preferredRole || 'pm', task.expectedDeliverables);
@@ -1528,6 +1542,15 @@ export function approveProposal(
   let stoppedReason: string | undefined;
   let stopIndex = -1;
   const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
+
+  // Auto-assign batchId when multiple create_task actions are in the same approval
+  const createTaskActions = toExecute.filter(a => a.type === 'create_task');
+  const batchId = createTaskActions.length >= 2 ? uuid() : null;
+  if (batchId) {
+    for (const a of createTaskActions) {
+      a.params = { ...a.params, batchId };
+    }
+  }
 
   for (let i = 0; i < toExecute.length; i++) {
     const action = bindActionWithRuntimeContext(toExecute[i], runtimeBinding);

@@ -28,6 +28,8 @@ export interface Task {
   status: TaskStatus;
   result: string | null;
   parentTaskId: string | null;
+  /** Groups parallel tasks that should be consolidated when all complete */
+  batchId: string | null;
   isTest: boolean;
   taskType?: TaskType;
   linkedMeetingId?: string | null;
