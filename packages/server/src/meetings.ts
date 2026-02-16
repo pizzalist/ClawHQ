@@ -602,6 +602,23 @@ export function getChildMeetings(parentMeetingId: string): Meeting[] {
   return listMeetings(true).filter(m => m.parentMeetingId === parentMeetingId || m.sourceMeetingId === parentMeetingId);
 }
 
+export function deleteMeeting(meetingId: string): boolean {
+  const meeting = getMeeting(meetingId);
+  if (!meeting) return false;
+  stmts.deleteMeetingById.run(meetingId);
+  emitChange();
+  return true;
+}
+
+export function deleteAllMeetings(): number {
+  const meetings = listMeetings(true);
+  for (const m of meetings) {
+    stmts.deleteMeetingById.run(m.id);
+  }
+  if (meetings.length > 0) emitChange();
+  return meetings.length;
+}
+
 export function decideMeeting(meetingId: string, winnerId: string, feedback: string): Meeting {
   const meeting = getMeeting(meetingId);
   if (!meeting) throw new Error('Meeting not found');

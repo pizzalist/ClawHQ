@@ -2,7 +2,7 @@ import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
 import { listTasks, createTask, processQueue } from './task-queue.js';
-import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings } from './meetings.js';
+import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings, deleteMeeting, deleteAllMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan } from './chain-plan.js';
 import { stmts } from './db.js';
@@ -1030,6 +1030,8 @@ ${state}
 [ACTION:cancel_task taskId="태스크ID"]
 [ACTION:cancel_all_pending]
 [ACTION:reset_agent agentId="에이전트ID"]
+[ACTION:delete_meeting meetingId="미팅ID"]
+[ACTION:delete_all_meetings]
 
 사용 가능한 role: pm, developer, reviewer, designer, devops, qa
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
@@ -1426,6 +1428,22 @@ function executeAction(action: ChiefAction): ChiefAction {
         stmts.updateAgentState.run('idle', null, null, agentId);
         return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 상태 초기화됨` } };
       }
+      case 'delete_meeting': {
+        const { meetingId } = action.params;
+        if (!meetingId) {
+          return { ...action, result: { ok: false, message: 'meetingId가 필요합니다' } };
+        }
+        const meeting = getMeeting(meetingId);
+        if (!meeting) {
+          return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+        }
+        const deleted = deleteMeeting(meetingId);
+        return { ...action, result: { ok: deleted, message: deleted ? `미팅 "${meeting.title}" 삭제됨` : '미팅 삭제 실패' } };
+      }
+      case 'delete_all_meetings': {
+        const count = deleteAllMeetings();
+        return { ...action, result: { ok: true, message: `미팅 ${count}건 삭제됨` } };
+      }
       default:
         return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
     }
@@ -1572,6 +1590,8 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   cancel_task: '작업 취소',
   cancel_all_pending: '대기 작업 전체 취소',
   reset_agent: '에이전트 초기화',
+  delete_meeting: '미팅 삭제',
+  delete_all_meetings: '전체 미팅 삭제',
 };
 
 /** Reject / discard a pending proposal */
