@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
-import { listTasks, createTask } from './task-queue.js';
+import { listTasks, createTask, processQueue } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { suggestChainPlan } from './chain-plan.js';
@@ -590,10 +590,14 @@ function recommendStartRoleFromIntent(title: string, description: string, explic
 
 function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
   const msg = (userMessage || '').toLowerCase();
-  if (/(상태|현황|지금\s*상태|현재\s*상태|status|몇\s*명|몇\s*건)/i.test(msg) && !/(추가|생성|create|리셋|reset|취소|cancel)/i.test(msg)) {
+
+  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|언제\s*줘|언제\s*돼|언제\s*끝|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
+  const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg);
+
+  if (readOnlyStatusLike && !mutationLike) {
     return 'status';
   }
-  if (/(추가|생성|create|리셋|reset|취소|cancel|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg)) {
+  if (mutationLike) {
     return 'simple_action';
   }
   if (/(설명|요약|원칙|기준|체크리스트|절차|포인트|가능\s*여부|몇\s*개|\d+\s*줄)/i.test(msg)) {
@@ -628,6 +632,35 @@ function toConciseModeReply(userMessage: string, reply: string): string {
   }
 
   return normalized;
+}
+
+function buildMonitoringReply(userMessage: string): string {
+  const agents = listAgents();
+  const tasks = listTasks();
+  const pending = tasks.filter(t => t.status === 'pending');
+  const inProgress = tasks.filter(t => t.status === 'in-progress');
+  const completed = tasks.filter(t => t.status === 'completed');
+
+  const latestProgress = [...inProgress]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 2)
+    .map(t => `"${t.title}"`)
+    .join(', ');
+
+  const wantsEta = /(eta|예상\s*시간|얼마나\s*남|언제\s*끝)/i.test(userMessage);
+
+  if (wantsEta) {
+    const etaLine = inProgress.length > 0
+      ? `ETA는 아직 고정하기 어렵지만, 현재 진행 중 ${inProgress.length}건(${latestProgress || '작업'}) 완료 후 바로 갱신해 드릴게요.`
+      : '현재 진행 중 작업이 없어 ETA는 즉시(대기 0건 기준)입니다.';
+    return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건입니다. ${etaLine}`;
+  }
+
+  return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건이며, 에이전트는 ${agents.length}명입니다${latestProgress ? ` (진행중: ${latestProgress})` : ''}.`;
+}
+
+function shouldSuppressActionsByIntent(intent: 'status' | 'simple_action' | 'definition' | 'other'): boolean {
+  return intent === 'status' || intent === 'definition';
 }
 
 /** Execute a single parsed action. Called only after user approval. */
@@ -695,7 +728,24 @@ function executeAction(action: ChiefAction): ChiefAction {
         if (!taskId || !agentId) {
           return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
         }
-        return { ...action, result: { ok: false, message: 'assign_task는 아직 구현 중입니다' } };
+
+        const task = stmts.getTask.get(taskId) as any;
+        if (!task) {
+          return { ...action, result: { ok: false, message: `작업을 찾을 수 없습니다: ${taskId}` } };
+        }
+
+        const agent = stmts.getAgent.get(agentId) as any;
+        if (!agent) {
+          return { ...action, result: { ok: false, message: `에이전트를 찾을 수 없습니다: ${agentId}` } };
+        }
+
+        if (task.status === 'in-progress') {
+          return { ...action, result: { ok: false, message: '진행 중 작업은 재배정할 수 없습니다. 먼저 중지/취소 후 재배정하세요.' } };
+        }
+
+        stmts.updateTask.run(agentId, 'pending', task.result || null, taskId);
+        setTimeout(() => processQueue(), 100);
+        return { ...action, result: { ok: true, message: `작업 "${task.title}"를 ${agent.name}에게 배정했습니다.` } };
       }
       case 'cancel_task': {
         const { taskId } = action.params;
@@ -1061,6 +1111,15 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
     }
   }
 
+  const intent = classifyIntent(userMessage);
+
+  // Read-only monitoring/status requests should be answered immediately from internal state.
+  if (intent === 'status') {
+    const reply = buildMonitoringReply(userMessage);
+    pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+    return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+  }
+
   // LLM mode
   if (!isDemoMode()) {
     const systemPrompt = buildChiefSystemPrompt();
@@ -1080,10 +1139,10 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       onComplete: (run: AgentRun) => {
         try {
           const rawOutput = parseAgentOutput(run.stdout);
-          const { actions: proposedActions, cleanText } = parseActions(rawOutput);
+          const { actions: parsedActions, cleanText } = parseActions(rawOutput);
+          const proposedActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
 
           const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
-          const intent = classifyIntent(userMessage);
           const compactActionList = intent === 'simple_action' && proposedActions.length > 2
             ? `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`
             : formatActionList(proposedActions);
