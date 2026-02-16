@@ -1,5 +1,0 @@
-df4c304 feat(office): add retro naruto-style pixel sprites for agent avatars
-packages/web/src/office/AgentSprite.ts
-
-Role mapping:
-pm=Naruto-like, developer=Sasuke-like, reviewer=Kakashi-like, designer=Sakura-like, devops=Orochimaru-like, qa=Jiraiya-like

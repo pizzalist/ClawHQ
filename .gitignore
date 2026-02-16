@@ -5,7 +5,12 @@ dist/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
+
+# Generated media frames
+docs/media/frames/
 
 # Environment
 .env
