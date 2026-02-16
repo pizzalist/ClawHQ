@@ -48,6 +48,8 @@ export interface ChainPlan {
     status: 'proposed' | 'confirmed' | 'running' | 'completed' | 'cancelled';
     autoExecute: boolean;
     createdAt: string;
+    /** Last server mutation time. Used to ignore out-of-order WS updates on client. */
+    updatedAt: string;
 }
 export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent';
 export interface ChiefAction {

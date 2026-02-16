@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal } from '@ai-office/shared';
 import { stmts } from './db.js';
-import { getAgent, listAgents, transitionAgent } from './agent-manager.js';
+import { getAgent, listAgents, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
 type MeetingListener = () => void;
@@ -162,11 +162,14 @@ function handleContributionComplete(meetingId: string, agentId: string, agentNam
   meeting.proposals.push(contribution);
   saveMeeting(meeting);
 
-  // Reset agent
+  // Reset agent to idle (force reset to avoid FSM race conditions)
   try { transitionAgent(agentId, 'done', null); } catch { /* ignore */ }
   setTimeout(() => {
-    try { transitionAgent(agentId, 'idle', null, null); } catch { /* ignore */ }
-  }, 1000);
+    try { transitionAgent(agentId, 'idle', null, null); } catch {
+      // Force reset if FSM transition fails
+      try { resetAgent(agentId); } catch { /* ignore */ }
+    }
+  }, 500);
 
   cleanupRun(run.sessionId);
 
