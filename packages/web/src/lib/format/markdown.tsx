@@ -59,16 +59,19 @@ export function markdownToHtml(markdown: string): string {
       continue;
     }
 
-    const fence = line.match(/^```(\w+)?\s*$/);
+    // Fenced code block: ```lang or ``` with optional trailing text
+    const fence = line.match(/^(`{3,})(\w*)\s*.*$/);
     if (fence) {
-      const lang = fence[1] || '';
+      const fenceTicks = fence[1];
+      const lang = fence[2] || '';
+      const closeRe = new RegExp(`^${fenceTicks}\\s*$`);
       i++;
       const codeLines: string[] = [];
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+      while (i < lines.length && !closeRe.test(lines[i])) {
         codeLines.push(lines[i]);
         i++;
       }
-      if (i < lines.length) i++;
+      if (i < lines.length) i++; // skip closing fence
       out.push(`<pre><code class="language-${escapeHtml(lang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
       continue;
     }
@@ -120,7 +123,16 @@ export function markdownToHtml(markdown: string): string {
 
     const paraLines: string[] = [line];
     i++;
-    while (i < lines.length && lines[i].trim() && !/^(#{1,6})\s+/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !/^```/.test(lines[i]) && !/^[-*]\s+/.test(lines[i]) && !/^\d+\.\s+/.test(lines[i])) {
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^>\s?/.test(lines[i]) &&
+      !/^`{3,}/.test(lines[i]) &&
+      !/^[-*]\s+/.test(lines[i]) &&
+      !/^\d+\.\s+/.test(lines[i]) &&
+      !/^\|.*\|\s*$/.test(lines[i])
+    ) {
       paraLines.push(lines[i]);
       i++;
     }

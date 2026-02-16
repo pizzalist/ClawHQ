@@ -730,22 +730,39 @@ function clampSuggestions(raw: TeamPlanSuggestion[]): TeamPlanSuggestion[] {
   return next;
 }
 
+const KOREAN_NUMS: Record<string, number> = {
+  '한': 1, '하나': 1, '일': 1, '두': 2, '둘': 2, '이': 2,
+  '세': 3, '셋': 3, '삼': 3, '네': 4, '넷': 4, '사': 4,
+  '다섯': 5, '오': 5, '여섯': 6, '육': 6,
+  '일곱': 7, '칠': 7, '여덟': 8, '팔': 8,
+  '아홉': 9, '구': 9, '열': 10, '십': 10,
+};
+
+function parseKoreanOrArabicNum(s: string): number | null {
+  const trimmed = s.trim();
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  const num = KOREAN_NUMS[trimmed];
+  return num ?? null;
+}
+
 function parseExplicitRoleCounts(text: string): Record<AgentRole, number> | null {
   const result: Partial<Record<AgentRole, number>> = {};
   let found = false;
+  const koreanNumPattern = Object.keys(KOREAN_NUMS).sort((a, b) => b.length - a.length).join('|');
+  const numCapture = `(\\d+|${koreanNumPattern})`;
   const sortedAliases = Object.entries(ROLE_ALIASES).sort((a, b) => b[0].length - a[0].length);
   for (const [alias, role] of sortedAliases) {
     const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const patterns = [
-      new RegExp(`${escaped}\\s*(\\d+)\\s*명?`, 'i'),
-      new RegExp(`(\\d+)\\s*명?\\s*의?\\s*${escaped}`, 'i'),
+      new RegExp(`${escaped}\\s*${numCapture}\\s*명?`, 'i'),
+      new RegExp(`${numCapture}\\s*명?\\s*의?\\s*${escaped}`, 'i'),
     ];
     if (result[role] !== undefined) continue;
     for (const pattern of patterns) {
       const match = text.match(pattern);
       if (match) {
-        const count = parseInt(match[1], 10);
-        if (count > 0) { result[role] = count; found = true; break; }
+        const count = parseKoreanOrArabicNum(match[1]);
+        if (count && count > 0) { result[role] = count; found = true; break; }
       }
     }
   }
