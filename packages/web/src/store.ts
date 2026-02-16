@@ -12,6 +12,7 @@ interface Store {
   chiefMessages: ChiefChatMessage[];
   chiefSuggestions: TeamPlanSuggestion[];
   chiefMeetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null;
+  chiefSessionId: string;
   chiefThinking: boolean;
   chiefProposedActions: ChiefAction[];   // proposed, awaiting approval
   chiefExecutedActions: ChiefAction[];   // approved & executed results
@@ -77,6 +78,7 @@ export const useStore = create<Store>((set, get) => ({
   chiefMessages: [],
   chiefSuggestions: [],
   chiefMeetingDraft: null,
+  chiefSessionId: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   chiefThinking: false,
   chiefProposedActions: [],
   chiefExecutedActions: [],
@@ -100,6 +102,9 @@ export const useStore = create<Store>((set, get) => ({
   setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({ chiefMessages, chiefSuggestions, chiefMeetingDraft }),
   setChiefThinking: (chiefThinking) => set({ chiefThinking }),
   handleChiefResponse: (response) => {
+    const currentSession = get().chiefSessionId;
+    if (response.sessionId && response.sessionId !== currentSession) return;
+
     const chiefMsg: ChiefChatMessage = {
       id: response.messageId,
       role: 'chief',
@@ -119,6 +124,8 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
   handleChiefCheckIn: (checkIn) => {
+    const currentSession = get().chiefSessionId;
+    if (checkIn.sessionId && checkIn.sessionId !== currentSession) return;
     set((s) => {
       // Deduplicate
       if (s.chiefMessages.some(m => m.id === checkIn.id)) return s;
@@ -135,6 +142,8 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
   handleChiefNotification: (notification) => {
+    const currentSession = get().chiefSessionId;
+    if (notification.sessionId && notification.sessionId !== currentSession) return;
     set((s) => {
       // Deduplicate
       if (s.chiefMessages.some(m => m.id === notification.id)) return s;
@@ -154,10 +163,11 @@ export const useStore = create<Store>((set, get) => ({
   },
   handleChiefInlineAction: async (notificationId, actionId, params) => {
     try {
+      const currentSession = get().chiefSessionId;
       const res = await fetch(`${API}/api/chief/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notificationId, actionId, params }),
+        body: JSON.stringify({ notificationId, actionId, params, sessionId: currentSession }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       const data = await res.json();
@@ -372,8 +382,9 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  chiefChat: async (message, sessionId = 'chief-default') => {
-    const { setLoading, setChiefState, setChiefThinking } = get();
+  chiefChat: async (message, sessionId) => {
+    const { setLoading, setChiefState, setChiefThinking, chiefSessionId } = get();
+    const resolvedSessionId = sessionId || chiefSessionId;
     setLoading('chiefChat', true);
     // Add user message optimistically
     const userMsg: ChiefChatMessage = {
@@ -387,7 +398,7 @@ export const useStore = create<Store>((set, get) => ({
       const res = await fetch(`${API}/api/chief/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, sessionId }),
+        body: JSON.stringify({ message, sessionId: resolvedSessionId }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -411,14 +422,15 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  applyChiefPlan: async (suggestions, sessionId = 'chief-default') => {
-    const { setLoading, setChiefState } = get();
+  applyChiefPlan: async (suggestions, sessionId) => {
+    const { setLoading, setChiefState, chiefSessionId } = get();
+    const resolvedSessionId = sessionId || chiefSessionId;
     setLoading('chiefApply', true);
     try {
       const res = await fetch(`${API}/api/chief/plan/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ suggestions, sessionId }),
+        body: JSON.stringify({ suggestions, sessionId: resolvedSessionId }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       const data = await res.json();

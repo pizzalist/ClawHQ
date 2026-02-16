@@ -70,6 +70,8 @@ export interface ChiefResponse {
         tasks: Task[];
         meetings: Meeting[];
     };
+    /** Session scoping key for isolating concurrent chief chats */
+    sessionId?: string;
 }
 export type ChiefCheckInStage = 'planning' | 'progress' | 'decision' | 'completion';
 export interface ChiefCheckInOption {
@@ -85,6 +87,8 @@ export interface ChiefCheckIn {
     /** Related entity IDs for context */
     taskId?: string;
     meetingId?: string;
+    /** Session scoping key for isolating concurrent chief chats */
+    sessionId?: string;
     /** Summary of agent result if applicable */
     resultSummary?: string;
     createdAt: string;
@@ -243,6 +247,8 @@ export interface ChiefNotification {
     actions: ChiefInlineAction[];
     taskId?: string;
     meetingId?: string;
+    /** Session scoping key for isolating concurrent chief chats */
+    sessionId?: string;
     createdAt: string;
 }
 export interface ChiefChatMessage {

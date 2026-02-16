@@ -180,22 +180,28 @@ app.post('/api/chief/checkin/respond', (req, res) => {
 });
 
 app.post('/api/chief/action', (req, res) => {
-  const { notificationId, actionId, params } = req.body || {};
+  const { notificationId, actionId, params, sessionId } = req.body || {};
   if (!notificationId || !actionId) {
     return res.status(400).json({ error: 'notificationId and actionId are required' });
   }
+  const resolvedSessionId =
+    typeof sessionId === 'string' && sessionId.trim().length > 0
+      ? sessionId.trim()
+      : (req.header('x-chief-session-id') || 'chief-default');
+
   try {
-    const result = handleChiefAction(notificationId, actionId, params);
-    // Broadcast the reply to all clients
+    const result = handleChiefAction(notificationId, actionId, params, resolvedSessionId);
+    // Broadcast the reply to all clients (clients filter by sessionId)
     broadcast({ type: 'chief_response', payload: {
       messageId: `action-reply-${Date.now()}`,
       reply: result.reply,
       actions: [],
       state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+      sessionId: result.sessionId,
     }});
     res.json({ ok: true, ...result });
-  } catch (err: unknown) {
-    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  } catch {
+    res.status(400).json({ error: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.' });
   }
 });
 

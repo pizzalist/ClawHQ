@@ -27,6 +27,10 @@ const sessionMessages = new Map<string, ChiefChatMessage[]>();
 const pendingProposals = new Map<string, ChiefAction[]>();
 const pendingProposalBySession = new Map<string, string>();
 
+// Session-aware routing context for inline notifications/actions
+const notificationSessionById = new Map<string, string>();
+let lastActiveChiefSessionId = 'chief-default';
+
 function compactText(input: string, limit = 500): string {
   const normalized = (input || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   if (normalized.length <= limit) return normalized;
@@ -92,36 +96,86 @@ export function onChiefNotification(cb: ChiefNotificationCallback) { notificatio
  * Push a notification into Chief chat with inline action buttons.
  * This is the core function that makes Chief the central hub.
  */
+function resolveNotificationSession(notification: ChiefNotification): string {
+  const sid = (notification.sessionId || '').trim();
+  if (sid) return sid;
+  return lastActiveChiefSessionId || 'chief-default';
+}
+
+function formatMeetingResult(meetingId: string): string {
+  const meeting = getMeeting(meetingId);
+  if (!meeting) return '해당 회의를 찾을 수 없습니다. 회의 목록에서 다시 선택해주세요.';
+
+  const proposalCount = meeting.proposals?.length || 0;
+  const report = meeting.report?.trim();
+  const preview = compactText(report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n'), 1200);
+
+  return [
+    `📄 **회의 결과**: "${meeting.title}"`,
+    `상태: ${meeting.status} · 참여 제안: ${proposalCount}건`,
+    '',
+    preview || '(결과 없음)',
+  ].join('\n');
+}
+
+function formatTaskResult(taskId: string): string {
+  const task = listTasks().find(t => t.id === taskId);
+  if (!task) return '해당 작업을 찾을 수 없습니다. 목록에서 다시 선택해주세요.';
+  const status = task.status;
+  const preview = compactText(task.result || '(결과 없음)', 1200);
+  return `📄 **작업 결과**: "${task.title}"\n상태: ${status}\n\n${preview}`;
+}
+
 export function notifyChief(notification: ChiefNotification) {
+  const sessionId = resolveNotificationSession(notification);
+  const scopedNotification: ChiefNotification = { ...notification, sessionId };
+  notificationSessionById.set(notification.id, sessionId);
+
   const msg: ChiefChatMessage = {
-    id: notification.id,
+    id: scopedNotification.id,
     role: 'chief',
-    content: notification.summary,
-    notification,
-    createdAt: notification.createdAt,
+    content: scopedNotification.summary,
+    notification: scopedNotification,
+    createdAt: scopedNotification.createdAt,
   };
-  pushMessage('chief-default', msg);
-  if (notificationCallback) notificationCallback(notification);
+  pushMessage(sessionId, msg);
+  if (notificationCallback) notificationCallback(scopedNotification);
 }
 
 /**
  * Handle an inline action button click from the Chief console.
  */
-export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>): { reply: string } {
+export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string): { reply: string; sessionId: string } {
   const action = actionId;
+  const scopedSessionId = (notificationSessionById.get(notificationId) || sessionId || 'chief-default').trim() || 'chief-default';
+
+  const extractMeetingIdFromAction = (raw: string): string | null => {
+    const m = raw.match(/^view-meeting-(.+)$/);
+    return m?.[1] || null;
+  };
+
   let reply: string;
 
   if (action === 'approve' || actionId.startsWith('approve')) {
     reply = '✅ 확정되었습니다. 다음 단계로 진행합니다.';
   } else if (action === 'request_revision') {
     reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?';
-  } else if (action === 'view_result') {
-    reply = '결과를 확인합니다.';
+  } else if (action === 'view_result' || action.startsWith('view-')) {
+    const meetingId = extractMeetingIdFromAction(actionId) || params?.meetingId;
+    const taskId = params?.taskId;
+
+    if (meetingId) {
+      reply = formatMeetingResult(meetingId);
+    } else if (taskId) {
+      reply = formatTaskResult(taskId);
+    } else {
+      reply = '확인할 결과 대상을 찾지 못했습니다. 목록에서 다시 선택해주세요.';
+    }
   } else if (action === 'select_proposal') {
     const proposalAgent = params?.agentName || '선택된 안';
     reply = `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`;
   } else {
-    throw new Error(`Unsupported actionId: ${actionId}`);
+    reply = '요청한 동작을 처리하지 못했습니다. 화면을 새로고침한 뒤 다시 시도해주세요.';
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -130,19 +184,20 @@ export function handleChiefAction(notificationId: string, actionId: string, para
     content: reply,
     createdAt: new Date().toISOString(),
   };
-  pushMessage('chief-default', replyMsg);
-  return { reply };
+  pushMessage(scopedSessionId, replyMsg);
+  return { reply, sessionId: scopedSessionId };
 }
 
 function emitCheckIn(checkIn: ChiefCheckIn) {
-  // Also add to default session messages so it appears in chat history
-  pushMessage('chief-default', {
-    id: checkIn.id,
+  const sessionId = (checkIn.sessionId || lastActiveChiefSessionId || 'chief-default').trim() || 'chief-default';
+  const scopedCheckIn: ChiefCheckIn = { ...checkIn, sessionId };
+  pushMessage(sessionId, {
+    id: scopedCheckIn.id,
     role: 'chief',
-    content: checkIn.message,
-    createdAt: checkIn.createdAt,
+    content: scopedCheckIn.message,
+    createdAt: scopedCheckIn.createdAt,
   });
-  if (checkInCallback) checkInCallback(checkIn);
+  if (checkInCallback) checkInCallback(scopedCheckIn);
 }
 
 // Track which tasks/meetings we've already reported on to avoid duplicates
@@ -1198,6 +1253,7 @@ export function getChiefMessages(sessionId: string): ChiefChatMessage[] {
  * In demo/keyword mode, returns synchronous result.
  */
 export function chatWithChief(sessionId: string, userMessage: string): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
+  lastActiveChiefSessionId = sessionId || 'chief-default';
   const now = new Date().toISOString();
   pushMessage(sessionId, { id: `user-${Date.now()}`, role: 'user', content: userMessage, createdAt: now });
 
@@ -1317,6 +1373,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
               tasks: listTasks(),
               meetings: listMeetings(),
             },
+            sessionId,
           };
 
           if (responseCallback) {

@@ -72,6 +72,8 @@ export interface ChiefResponse {
   reply: string;
   actions: ChiefAction[];
   state: { agents: Agent[]; tasks: Task[]; meetings: Meeting[] };
+  /** Session scoping key for isolating concurrent chief chats */
+  sessionId?: string;
 }
 
 // Chief proactive check-in types
@@ -91,6 +93,8 @@ export interface ChiefCheckIn {
   /** Related entity IDs for context */
   taskId?: string;
   meetingId?: string;
+  /** Session scoping key for isolating concurrent chief chats */
+  sessionId?: string;
   /** Summary of agent result if applicable */
   resultSummary?: string;
   createdAt: string;
@@ -270,6 +274,8 @@ export interface ChiefNotification {
   actions: ChiefInlineAction[];
   taskId?: string;
   meetingId?: string;
+  /** Session scoping key for isolating concurrent chief chats */
+  sessionId?: string;
   createdAt: string;
 }
 
