@@ -52,10 +52,18 @@ npm install
 ### 2) Run
 
 ```bash
-npm run dev
+npm run demo:start
 ```
 
-### 3) Open
+(or `npm run dev` if you want raw logs immediately)
+
+### 3) Verify
+
+```bash
+npm run healthcheck
+```
+
+### 4) Open
 
 - Web/API server: `http://localhost:3001`
 
