@@ -1,12 +1,48 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
 const waitMs = Number(process.env.AI_OFFICE_BOOT_WAIT_MS || 6000);
+const autoInstall = process.env.AI_OFFICE_AUTO_INSTALL_OPENCLAW !== '0';
 
 function log(msg) {
   console.log(`[demo:start] ${msg}`);
+}
+
+function hasOpenClaw() {
+  const result = spawnSync('openclaw', ['--version'], { encoding: 'utf8' });
+  return result.status === 0;
+}
+
+function installOpenClaw() {
+  log('OpenClaw not found. Trying auto-install: npm install -g openclaw');
+  const install = spawnSync('npm', ['install', '-g', 'openclaw'], {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  return install.status === 0;
+}
+
+function ensureRuntime() {
+  if (hasOpenClaw()) {
+    log('OpenClaw detected → Full runtime mode enabled.');
+    return;
+  }
+
+  if (!autoInstall) {
+    log('OpenClaw not found → Running in demo mode (auto-install disabled).');
+    log('To enable full mode, install OpenClaw then restart: npm install -g openclaw');
+    return;
+  }
+
+  const installed = installOpenClaw();
+  if (installed && hasOpenClaw()) {
+    log('OpenClaw install successful → Full runtime mode enabled.');
+  } else {
+    log('OpenClaw install failed → Continuing in demo mode.');
+    log('You can install manually later: npm install -g openclaw');
+  }
 }
 
 async function isHealthy() {
@@ -17,6 +53,8 @@ async function isHealthy() {
     return false;
   }
 }
+
+ensureRuntime();
 
 if (await isHealthy()) {
   log(`Server already running at ${baseUrl}`);

@@ -59,7 +59,14 @@ npm install
 npm run demo:start
 ```
 
+`demo:start` behavior:
+- If OpenClaw exists: uses full runtime mode
+- If OpenClaw is missing: tries auto-install (`npm install -g openclaw`)
+- If install fails: falls back to demo mode (UI/simulated flow still works)
+
 (or `npm run dev` if you want raw logs immediately)
+
+Tip: disable auto-install with `AI_OFFICE_AUTO_INSTALL_OPENCLAW=0 npm run demo:start`
 
 ### 3) Verify
 
