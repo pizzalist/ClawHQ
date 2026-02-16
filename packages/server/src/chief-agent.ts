@@ -170,9 +170,10 @@ function formatMeetingResult(meetingId: string): string {
   const report = meeting.report?.trim();
   const preview = compactText(report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n'), 1200);
 
+  const participantTotal = meeting.participants?.length || proposalCount;
   const lines = [
     `📄 **회의 결과**: "${meeting.title}"`,
-    `상태: ${meeting.status} · 참여 제안: ${proposalCount}건`,
+    `상태: ${meeting.status} · 참여자: ${participantTotal}명 · 제안: ${proposalCount}건`,
   ];
 
   // Show lineage info
@@ -302,8 +303,8 @@ export function handleChiefAction(notificationId: string, actionId: string, para
       reply = '리뷰 대상 회의를 찾을 수 없습니다.';
     }
   } else {
-    // Catch-all: don't error, provide graceful fallback
-    reply = `동작 "${actionId}"을 처리했습니다.`;
+    // Catch-all: graceful fallback — never expose raw actionId to user
+    reply = `요청을 처리하지 못했습니다. 다시 시도하거나 다른 옵션을 선택해주세요.`;
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -332,6 +333,20 @@ function emitCheckIn(checkIn: ChiefCheckIn) {
 const reportedTaskCompletions = new Set<string>();
 const reportedTaskFailures = new Set<string>();
 const reportedMeetingCompletions = new Set<string>();
+
+// Session-scoped notification dedup: tracks notificationId hashes to prevent duplicate cards
+const emittedNotificationKeys = new Set<string>();
+
+function dedupeNotificationKey(type: string, entityId: string): string {
+  return `${type}::${entityId}`;
+}
+
+function isNotificationDuplicate(type: string, entityId: string): boolean {
+  const key = dedupeNotificationKey(type, entityId);
+  if (emittedNotificationKeys.has(key)) return true;
+  emittedNotificationKeys.add(key);
+  return false;
+}
 
 /**
  * Called by index.ts when a task event fires.
@@ -381,6 +396,9 @@ export function chiefHandleTaskEvent(event: AppEvent) {
         break;
       }
     }
+
+    // Dedup: skip if already emitted for this task
+    if (isNotificationDuplicate('task_complete', event.taskId)) return;
 
     // Emit notification with inline actions
     notifyChief({
@@ -532,15 +550,19 @@ export function chiefHandleMeetingChange() {
         }
       }
 
-      notifyChief({
-        id: `notif-meeting-${meeting.id}-${Date.now()}`,
-        type: 'meeting_complete',
-        title: meeting.title,
-        summary: `🏛️ [회의 완료] "${meeting.title}"\n\n${contributionCount}명의 전문가가 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
-        actions: meetingActions,
-        meetingId: meeting.id,
-        createdAt: new Date().toISOString(),
-      });
+      // Dedup: skip if we already emitted a notification for this meeting
+      if (!isNotificationDuplicate('meeting_complete', meeting.id)) {
+        const participantCount = meeting.participants?.length || contributionCount;
+        notifyChief({
+          id: `notif-meeting-${meeting.id}-${Date.now()}`,
+          type: 'meeting_complete',
+          title: meeting.title,
+          summary: `🏛️ [회의 완료] "${meeting.title}"\n\n참여자 ${participantCount}명 중 ${contributionCount}명이 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
+          actions: meetingActions,
+          meetingId: meeting.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
 
       // For review meetings with source candidates, generate a decision packet
       if (meeting.sourceMeetingId && meeting.sourceCandidates && meeting.sourceCandidates.length > 0) {
@@ -563,17 +585,20 @@ export function chiefHandleMeetingChange() {
         ? `리뷰 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 리뷰어가 후보 점수화를 완료했습니다.\n최종 추천안을 확인하고 확정 또는 수정 요청해주세요.`
         : `회의 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 전문가가 각자 관점에서 분석을 완료했습니다. 결과를 확인해주세요.`;
 
-      emitCheckIn({
-        id: `checkin-meeting-${meeting.id}-${Date.now()}`,
-        stage: 'decision',
-        message: checkInMessage,
-        options: [
-          { id: 'approve', label: '✅ 확정', description: isReviewMeeting ? '최종 추천안을 확정합니다' : '회의 결과를 확정합니다' },
-          { id: 'revise', label: '🔄 수정 요청', description: '추가 논의가 필요합니다' },
-        ],
-        meetingId: meeting.id,
-        createdAt: new Date().toISOString(),
-      });
+      // Dedup: skip checkin if already emitted for this meeting
+      if (!isNotificationDuplicate('checkin_meeting', meeting.id)) {
+        emitCheckIn({
+          id: `checkin-meeting-${meeting.id}-${Date.now()}`,
+          stage: 'decision',
+          message: checkInMessage,
+          options: [
+            { id: 'approve', label: '✅ 확정', description: isReviewMeeting ? '최종 추천안을 확정합니다' : '회의 결과를 확정합니다' },
+            { id: 'revise', label: '🔄 수정 요청', description: '추가 논의가 필요합니다' },
+          ],
+          meetingId: meeting.id,
+          createdAt: new Date().toISOString(),
+        });
+      }
     }
   }
 }
@@ -753,6 +778,12 @@ function buildChiefSystemPrompt(): string {
 - 사용자가 명시적으로 회의를 요청한 경우
 - 3명 이상의 에이전트가 협업해야 하는 복잡한 작업인 경우
 단순 작업(삭제, 상태 확인, 1인 작업)에는 절대 미팅을 제안하지 마세요.
+
+## 미팅 흐름 규칙 (엄격)
+- "PM N명 먼저 미팅" 요청 시: 반드시 미팅을 먼저 생성/실행하세요.
+- 미팅 생성 전에 후보안을 선제 제시하지 마세요. 후보는 미팅 완료 후 결과에서만 도출됩니다.
+- 순서: 미팅 생성 → 미팅 완료 대기 → 결과 보고 → 후보 제시 (이 순서를 반드시 지키세요)
+- 미팅 전에 "A안/B안/C안" 또는 후보 목록을 제시하면 안 됩니다.
 
 ## 현재 오피스 상태
 ${state}
