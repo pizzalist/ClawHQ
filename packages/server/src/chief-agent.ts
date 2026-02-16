@@ -47,29 +47,90 @@ function summarizeTaskResult(result: string | null | undefined): string {
   return compactText(cleaned, 500);
 }
 
+/** Parse structured [SCORE] lines from reviewer output */
+function parseStructuredScores(content: string, candidateNames: string[]): { candidateName: string; total: number; breakdown: Record<string, number> }[] {
+  const results: { candidateName: string; total: number; breakdown: Record<string, number> }[] = [];
+  const scoreLineRegex = /\[SCORE\]\s*(.+?)\s*\|(.+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scoreLineRegex.exec(content)) !== null) {
+    const name = match[1].trim();
+    const rest = match[2];
+    const breakdown: Record<string, number> = {};
+    const fieldRegex = /(\w[\w\s-]*?):\s*(\d+)\s*\/\s*\d+/gi;
+    let fm: RegExpExecArray | null;
+    let total = 0;
+    while ((fm = fieldRegex.exec(rest)) !== null) {
+      const field = fm[1].trim();
+      const val = parseInt(fm[2], 10);
+      if (field.toLowerCase() === 'total') {
+        total = val;
+      } else {
+        breakdown[field] = val;
+      }
+    }
+    if (total === 0) total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+    results.push({ candidateName: name, total, breakdown });
+  }
+  // Fallback: try legacy pattern (Name ... N/10)
+  if (results.length === 0) {
+    for (const cName of candidateNames) {
+      const escaped = cName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const legacyPattern = new RegExp(`${escaped}[^\\d]*?(\\d+)\\s*/\\s*10`, 'i');
+      const lm = content.match(legacyPattern);
+      if (lm) {
+        results.push({ candidateName: cName, total: parseInt(lm[1], 10), breakdown: {} });
+      }
+    }
+  }
+  return results;
+}
+
+/** Parse [RECOMMENDATION] and [ALTERNATIVE] lines */
+function parseRecommendation(content: string): { recommendation: string; reason: string; alternatives: string[] } {
+  const recMatch = content.match(/\[RECOMMENDATION\]\s*1순위:\s*(.+?)(?:\s*\||$)/im);
+  const recommendation = recMatch?.[1]?.trim() || '';
+  const reasonMatch = content.match(/\[RECOMMENDATION\].*이유:\s*(.+?)(?:\s*\||$)/im);
+  const reason = reasonMatch?.[1]?.trim() || '';
+  const alternatives: string[] = [];
+  const altRegex = /\[ALTERNATIVE\]\s*\d*순위:\s*(.+?)(?:\s*\||$)/gim;
+  let am: RegExpExecArray | null;
+  while ((am = altRegex.exec(content)) !== null) {
+    alternatives.push(am[1].trim());
+  }
+  return { recommendation, reason, alternatives };
+}
+
 /**
  * Generate a standardized decision packet from a review meeting's proposals.
- * Extracts reviewer scores, produces recommendation + alternatives.
+ * Extracts structured [SCORE] lines, produces recommendation + alternatives.
  */
 function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').DecisionPacket | null {
+  if (meeting.decisionPacket) return meeting.decisionPacket;
   if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0) return null;
   if (meeting.proposals.length === 0) return null;
 
+  const candidateNames = meeting.sourceCandidates.map(c => c.name);
   const reviewerScoreCards: import('@ai-office/shared').ReviewerScoreCard[] = [];
 
   for (const proposal of meeting.proposals) {
+    const parsed = parseStructuredScores(proposal.content, candidateNames);
     const scores: import('@ai-office/shared').ReviewerScoreCard['scores'] = [];
-    // Try to extract scores from proposal content
+
     for (const candidate of meeting.sourceCandidates) {
-      // Simple heuristic: look for score patterns near candidate name
-      const namePattern = new RegExp(`${candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\d]*?(\\d+)\\s*/\\s*10`, 'i');
-      const match = proposal.content.match(namePattern);
-      const score = match ? parseInt(match[1], 10) : Math.floor(Math.random() * 3) + 6; // fallback: 6-8
+      const found = parsed.find(p => p.candidateName === candidate.name);
+      // Use parsed total normalized to 10-scale, or fallback to 5
+      const breakdownCount = found ? Math.max(1, Object.keys(found.breakdown).length) : 1;
+      const score = found && found.total > 0
+        ? Math.min(10, Math.max(1, Math.round(found.total / breakdownCount)))
+        : 5;
+      const rationale = found && Object.keys(found.breakdown).length > 0
+        ? Object.entries(found.breakdown).map(([k, v]) => `${k}: ${v}/10`).join(', ')
+        : `${proposal.agentName}의 ${candidate.name} 평가`;
       scores.push({
         candidateName: candidate.name,
-        score: Math.min(10, Math.max(1, score)),
+        score,
         weight: 1,
-        rationale: `${proposal.agentName}의 ${candidate.name} 평가`,
+        rationale,
       });
     }
     reviewerScoreCards.push({
@@ -96,8 +157,22 @@ function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').D
     }))
     .sort((a, b) => b.avgScore - a.avgScore);
 
-  const recommendation = ranked[0] ? { name: ranked[0].name, summary: ranked[0].summary, score: ranked[0].avgScore } : { name: '없음', summary: '' };
-  const alternatives = ranked.slice(1, 3).map(r => ({ name: r.name, summary: r.summary, score: r.avgScore }));
+  // Try to use parsed [RECOMMENDATION] from proposals
+  const allContent = meeting.proposals.map(p => p.content).join('\n');
+  const parsedRec = parseRecommendation(allContent);
+
+  const recommendation = parsedRec.recommendation
+    ? { name: parsedRec.recommendation, summary: parsedRec.reason, score: ranked.find(r => r.name === parsedRec.recommendation)?.avgScore }
+    : ranked[0]
+      ? { name: ranked[0].name, summary: ranked[0].summary, score: ranked[0].avgScore }
+      : { name: '없음', summary: '' };
+
+  const alternatives = parsedRec.alternatives.length > 0
+    ? parsedRec.alternatives.slice(0, 2).map(name => {
+        const r = ranked.find(x => x.name === name);
+        return { name, summary: r?.summary || '', score: r?.avgScore };
+      })
+    : ranked.slice(1, 3).map(r => ({ name: r.name, summary: r.summary, score: r.avgScore }));
 
   return {
     reviewerScoreCards,
@@ -106,6 +181,9 @@ function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').D
     status: 'pending',
   };
 }
+
+// Exported for testing
+export { parseStructuredScores as _parseStructuredScores, parseRecommendation as _parseRecommendation };
 
 function formatActionList(actions: ChiefAction[]): string {
   if (actions.length === 0) return '';
@@ -294,7 +372,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         if (reviewMeeting) {
           reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
         } else {
-          reply = '리뷰 미팅 생성에 실패했습니다. 원본 회의가 완료 상태인지 확인해주세요.';
+          reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보(sourceCandidates)가 없습니다. 먼저 기획/브레인스토밍 회의를 완료하여 후보를 도출한 뒤 "리뷰어 점수화 시작"을 눌러주세요.';
         }
       } else {
         reply = '리뷰 대상 회의를 찾을 수 없습니다.';
@@ -304,7 +382,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
     }
   } else {
     // Catch-all: graceful fallback — never expose raw actionId to user
-    reply = `요청을 처리하지 못했습니다. 다시 시도하거나 다른 옵션을 선택해주세요.`;
+    reply = `요청을 확인했습니다. 다시 시도하거나 다른 옵션을 선택해주세요.`;
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -1070,6 +1148,16 @@ function executeAction(action: ChiefAction): ChiefAction {
       }
       case 'start_meeting': {
         const { title, participants, character } = action.params;
+        const isScoringReview = (character || '').toLowerCase() === 'review' || /(점수화|스코어|scoring)/i.test(title || '');
+        if (isScoringReview) {
+          return {
+            ...action,
+            result: {
+              ok: false,
+              message: '점수화 리뷰 미팅은 sourceCandidates가 필요합니다. 완료된 기획/브레인스토밍 미팅에서 "리뷰어 점수화 시작"으로 생성해주세요.',
+            },
+          };
+        }
         const roleCounts = parseMeetingParticipantRoleCounts(participants);
         const { participantIds, createdAgentNames } = ensureMeetingParticipants(roleCounts);
 

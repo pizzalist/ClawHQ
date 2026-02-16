@@ -226,13 +226,141 @@ function finalizeMeeting(meetingId: string) {
   if (!meeting) return;
 
   meeting.status = 'completed';
-  meeting.report = generateConsolidatedReport(meeting);
+  if (meeting.sourceMeetingId || meeting.character === 'review' || meeting.type === 'review') {
+    const { report, decisionPacket } = buildReviewScoringReport(meeting);
+    meeting.report = report;
+    meeting.decisionPacket = decisionPacket;
+  } else {
+    meeting.report = generateConsolidatedReport(meeting);
+  }
   saveMeeting(meeting);
 }
 
 /**
  * Generate a consolidated meeting report combining all agent perspectives.
  */
+function extractCandidateScoreFromText(content: string, candidateName: string): number | null {
+  const escaped = candidateName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`${escaped}[^\\d]*(\\d+)\\s*/\\s*10`, 'i'),
+    new RegExp(`${escaped}[^\\d]*(\\d{1,2})\\s*점`, 'i'),
+  ];
+  for (const p of patterns) {
+    const m = content.match(p);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!Number.isNaN(n)) return Math.max(1, Math.min(10, n));
+    }
+  }
+  return null;
+}
+
+function buildReviewDecisionPacket(meeting: Meeting): DecisionPacket | null {
+  if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0) return null;
+  if (!meeting.proposals || meeting.proposals.length === 0) return null;
+
+  const reviewerScoreCards: import('@ai-office/shared').ReviewerScoreCard[] = meeting.proposals.map((proposal) => ({
+    reviewerName: proposal.agentName,
+    reviewerRole: 'reviewer',
+    scores: meeting.sourceCandidates!.map((candidate) => ({
+      candidateName: candidate.name,
+      score: extractCandidateScoreFromText(proposal.content, candidate.name) ?? 7,
+      weight: 1,
+      rationale: `${proposal.agentName} 평가 기반`,
+    })),
+  }));
+
+  const totals = new Map<string, number>();
+  for (const c of meeting.sourceCandidates) totals.set(c.name, 0);
+  for (const card of reviewerScoreCards) {
+    for (const s of card.scores) totals.set(s.candidateName, (totals.get(s.candidateName) || 0) + s.score * s.weight);
+  }
+
+  const ranked = [...totals.entries()]
+    .map(([name, total]) => ({
+      name,
+      total,
+      avg: reviewerScoreCards.length > 0 ? total / reviewerScoreCards.length : 0,
+      summary: meeting.sourceCandidates!.find(c => c.name === name)?.summary || '',
+    }))
+    .sort((a, b) => b.avg - a.avg);
+
+  if (ranked.length === 0) return null;
+
+  return {
+    reviewerScoreCards,
+    recommendation: { name: ranked[0].name, summary: ranked[0].summary, score: Number(ranked[0].avg.toFixed(2)) },
+    alternatives: ranked.slice(1, 3).map(r => ({ name: r.name, summary: r.summary, score: Number(r.avg.toFixed(2)) })),
+    status: 'pending',
+  };
+}
+
+export function buildReviewScoringReport(meeting: Meeting): { report: string; decisionPacket: DecisionPacket | null } {
+  const packet = buildReviewDecisionPacket(meeting);
+  if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0 || !packet) {
+    return {
+      report: [
+        '# 리뷰 점수화 결과',
+        '',
+        '⚠️ sourceCandidates가 없어 점수화 미팅을 생성할 수 없습니다.',
+        '기획/브레인스토밍 미팅에서 후보를 먼저 생성한 뒤, "리뷰어 점수화 시작"을 사용해주세요.',
+      ].join('\n'),
+      decisionPacket: null,
+    };
+  }
+
+  const criteria = [
+    { name: '시장성', weight: 0.3 },
+    { name: '구현 난이도(역점수)', weight: 0.2 },
+    { name: '실행 속도', weight: 0.2 },
+    { name: '차별성/확장성', weight: 0.3 },
+  ];
+
+  const candidateAverages = new Map<string, number>();
+  for (const candidate of meeting.sourceCandidates) {
+    const vals: number[] = [];
+    for (const card of packet.reviewerScoreCards) {
+      const found = card.scores.find(s => s.candidateName === candidate.name);
+      if (found) vals.push(found.score);
+    }
+    candidateAverages.set(candidate.name, vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0);
+  }
+
+  const rows: string[] = [];
+  for (const candidate of meeting.sourceCandidates) {
+    const avg = candidateAverages.get(candidate.name) || 0;
+    const total = criteria.reduce((sum, c) => sum + (avg * c.weight), 0);
+    rows.push(`| ${candidate.name} | ${criteria.map(c => `${c.name}:${Math.round(c.weight * 100)}% / ${avg.toFixed(1)}`).join('<br>')} | ${total.toFixed(2)} |`);
+  }
+
+  const rec = packet.recommendation;
+  const alts = packet.alternatives;
+  const altLines = alts.length > 0
+    ? alts.map((a, i) => `${i + 1}. ${a.name} (평균 ${Number(a.score || 0).toFixed(2)}) — 보류 이유: 1순위 대비 우선순위 낮음/추가 검증 필요`).join('\n')
+    : '- 없음';
+
+  const report = [
+    `# ${meeting.title} 점수화 결과`,
+    '',
+    '## 후보별 점수표',
+    '| 후보 | 항목/가중치/점수 | 총점 |',
+    '|---|---|---:|',
+    ...rows,
+    '',
+    '## 1순위 추천',
+    `- **${rec.name}** (평균 ${Number(rec.score || 0).toFixed(2)})`,
+    `- 이유: 다수 리뷰어 점수 기준 총점이 가장 높고, 실행 가능성과 임팩트 균형이 우수합니다.`,
+    '',
+    '## 대안 1~2',
+    altLines,
+    '',
+    '## 의사결정 요청',
+    '- 이 추천안으로 **확정**할까요, 아니면 기준/가중치를 **수정**할까요?',
+  ].join('\n');
+
+  return { report, decisionPacket: packet };
+}
+
 function generateConsolidatedReport(meeting: Meeting): string {
   const agents = listAgents();
   const agentMap = new Map(agents.map(a => [a.id, a]));
@@ -337,21 +465,39 @@ export function startReviewMeetingFromSource(
     if (!agent) continue;
 
     const sessionId = `review-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
+    const candidateNames = candidates.map(c => c.name);
     const prompt = `당신은 ${agent.name}, 전문 리뷰어입니다.
 
-"${sourceMeeting.title}" 기획 회의에서 도출된 후보들을 평가해주세요.
+"${sourceMeeting.title}" 기획 회의에서 도출된 후보들을 점수화해주세요.
 
 ## 평가 대상 후보
 ${candidatesSummary}
 
-## 평가 기준
-각 후보에 대해 다음을 제공하세요:
-1. 점수 (1-10)
-2. 가중치 근거
-3. 장단점
+## 필수 출력 형식 (이 형식을 반드시 따르세요)
 
-최종적으로 가장 추천하는 1안과 대안 1-2안을 제시하세요.
-반드시 한국어로 응답하세요.`;
+### 점수표
+
+각 후보에 대해 아래 5개 항목을 1-10점으로 채점하세요:
+- 문제 정의(Problem): 해결하려는 문제의 명확성과 크기
+- 실현 가능성(Feasibility): 현재 리소스로 구현 가능한 정도
+- 차별성(Differentiation): 기존 대비 독창성
+- 데모 속도(Time-to-Demo): MVP까지 걸리는 시간 (빠를수록 높은 점수)
+- 리스크(Risk): 리스크가 낮을수록 높은 점수
+
+**반드시 아래 형식으로 출력하세요:**
+
+${candidateNames.map(name => `[SCORE] ${name} | Problem: ?/10 | Feasibility: ?/10 | Differentiation: ?/10 | Time-to-Demo: ?/10 | Risk: ?/10 | Total: ?/50`).join('\n')}
+
+### 최종 추천
+
+[RECOMMENDATION] 1순위: (후보명) | 이유: (한 줄) | 실행조건: (한 줄) | Kill Criteria: (한 줄)
+[ALTERNATIVE] 2순위: (후보명) | 이유: (한 줄)
+
+### 상세 평가
+
+각 후보별 장단점을 간략히 서술하세요.
+
+반드시 한국어로 응답하세요. [SCORE], [RECOMMENDATION], [ALTERNATIVE] 태그는 반드시 포함하세요.`;
 
     try { transitionAgent(agentId, 'working', null, sessionId); } catch { /* may already be working */ }
 

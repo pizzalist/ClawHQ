@@ -4,7 +4,7 @@
  */
 
 import { handleChiefAction, chatWithChief, getChiefMessages, approveProposal, __unsafeSetPendingProposalForTest } from './chief-agent.js';
-import { listMeetings, getMeeting, startPlanningMeeting, createMeeting, extractCandidatesFromMeeting, getChildMeetings } from './meetings.js';
+import { listMeetings, getMeeting, startPlanningMeeting, createMeeting, extractCandidatesFromMeeting, getChildMeetings, buildReviewScoringReport } from './meetings.js';
 import { listAgents, createAgent } from './agent-manager.js';
 import type { ChiefAction, MeetingCandidate } from '@ai-office/shared';
 
@@ -184,6 +184,63 @@ test('T14: meeting completion with planning character has review action', () => 
   // Verify that if we were to notify, the actions would include start-review
   const actionId = `start-review-${meeting.id}`;
   assert(actionId.startsWith('start-review-'), 'action ID format correct');
+});
+
+test('T15: review scoring report has >=3 candidate rows', () => {
+  const meeting = {
+    id: 'm-review-1',
+    title: '사이드프로젝트 후보 점수화 및 최종 추천',
+    description: '',
+    type: 'review',
+    status: 'completed',
+    participants: [],
+    proposals: [
+      { agentId: 'r1', agentName: 'Reviewer1', content: '[SCORE] 후보A 8/10\n[SCORE] 후보B 7/10\n[SCORE] 후보C 6/10', taskId: 't1', reviews: [] },
+    ],
+    decision: null,
+    character: 'review',
+    sourceMeetingId: 'src-1',
+    sourceCandidates: [
+      { name: '후보A', summary: 'A' },
+      { name: '후보B', summary: 'B' },
+      { name: '후보C', summary: 'C' },
+    ],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } as any;
+
+  const { report } = buildReviewScoringReport(meeting);
+  const rowCount = (report.match(/^\| 후보[ABC] \|/gm) || []).length;
+  assert(rowCount >= 3, 'score table should include at least 3 candidate rows');
+});
+
+test('T16: review scoring report contains total and recommendation', () => {
+  const meeting = {
+    id: 'm-review-2',
+    title: '사이드프로젝트 후보 점수화 및 최종 추천',
+    description: '',
+    type: 'review',
+    status: 'completed',
+    participants: [],
+    proposals: [
+      { agentId: 'r1', agentName: 'Reviewer1', content: '[SCORE] 후보A 9/10\n[SCORE] 후보B 7/10\n[SCORE] 후보C 6/10', taskId: 't1', reviews: [] },
+    ],
+    decision: null,
+    character: 'review',
+    sourceMeetingId: 'src-1',
+    sourceCandidates: [
+      { name: '후보A', summary: 'A' },
+      { name: '후보B', summary: 'B' },
+      { name: '후보C', summary: 'C' },
+    ],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } as any;
+
+  const { report, decisionPacket } = buildReviewScoringReport(meeting);
+  assert(report.includes('총점'), 'report should include total score field');
+  assert(report.includes('1순위 추천'), 'report should include recommendation section');
+  assert(!!decisionPacket?.recommendation?.name, 'decision packet recommendation is required');
 });
 
 // Summary
