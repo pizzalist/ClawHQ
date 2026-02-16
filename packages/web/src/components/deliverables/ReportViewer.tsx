@@ -1,31 +1,10 @@
 import { useEffect } from 'react';
 import type { Deliverable } from '@ai-office/shared';
+import { MarkdownContent } from '../../lib/format/markdown';
 
 interface Props {
   deliverable: Deliverable;
   onClose: () => void;
-}
-
-/** Simple markdown-to-HTML renderer (no deps) */
-function renderMarkdown(md: string): string {
-  let html = md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Headers
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    // Bold/italic
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Code
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Lists
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
-    // Line breaks
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br/>');
-  return `<div class="report-content"><p>${html}</p></div>`;
 }
 
 export default function ReportViewer({ deliverable, onClose }: Props) {
@@ -34,8 +13,6 @@ export default function ReportViewer({ deliverable, onClose }: Props) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
-
-  const html = renderMarkdown(deliverable.content);
 
   return (
     <div className="fixed inset-0 bg-black/80 z-[80] flex flex-col">
@@ -47,14 +24,9 @@ export default function ReportViewer({ deliverable, onClose }: Props) {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto flex justify-center p-6">
-        <div
+        <MarkdownContent
+          text={deliverable.content}
           className="max-w-3xl w-full prose-custom"
-          dangerouslySetInnerHTML={{ __html: html }}
-          style={{
-            color: '#e2e8f0',
-            lineHeight: '1.8',
-            fontSize: '15px',
-          }}
         />
       </div>
       <style>{`

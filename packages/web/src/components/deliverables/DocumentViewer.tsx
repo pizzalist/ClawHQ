@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { Deliverable } from '@ai-office/shared';
+import { MarkdownContent } from '../../lib/format/markdown';
 
 interface Props {
   deliverable: Deliverable;
@@ -34,9 +35,7 @@ export default function DocumentViewer({ deliverable, onClose }: Props) {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto flex justify-center p-6">
-        <div className="max-w-3xl w-full text-gray-200 text-sm leading-relaxed whitespace-pre-wrap font-sans">
-          {deliverable.content}
-        </div>
+        <MarkdownContent text={deliverable.content} className="max-w-3xl w-full text-gray-200 text-sm leading-relaxed font-sans" />
       </div>
     </div>
   );

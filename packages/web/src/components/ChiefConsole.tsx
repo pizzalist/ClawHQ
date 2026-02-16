@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage } from '@ai-office/shared';
+import { MarkdownContent } from '../lib/format/markdown';
 
 const ROLE_LABELS: Record<string, string> = {
   pm: 'PM', developer: '개발', reviewer: '리뷰어',
@@ -98,6 +99,8 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
 
   return (
     <div className={`rounded-xl border ${style.border} ${style.bg} p-3 space-y-2`}>
+      <div className="text-sm font-semibold text-gray-200">{notification.title}</div>
+      <MarkdownContent text={notification.summary} className="text-xs text-gray-300" />
       <div className="flex flex-wrap gap-2 mt-1">
         {notification.actions.map((act) => (
           <button
@@ -134,6 +137,9 @@ function CheckInCard({ checkIn }: { checkIn: ChiefCheckIn }) {
         <span>총괄자 확인 요청</span>
         <button onClick={() => dismissCheckIn(checkIn.id)} className="ml-auto text-gray-500 hover:text-gray-300 text-xs">✕</button>
       </div>
+      {checkIn.message && (
+        <MarkdownContent text={checkIn.message} className="text-sm text-gray-200" />
+      )}
       {checkIn.options && checkIn.options.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {checkIn.options.map((opt) => (
@@ -199,7 +205,7 @@ function ChatMessage({ m, checkIn }: { m: ChiefChatMessage; checkIn?: ChiefCheck
         <div className="text-[11px] mb-1 opacity-70">
           {isUser ? '나' : hasNotification ? `${notifStyle!.icon} 총괄자` : '총괄자'}
         </div>
-        {m.content}
+        <MarkdownContent text={m.content} className="text-sm" />
       </div>
       {/* Inline action buttons for notifications */}
       {hasNotification && m.notification!.actions.length > 0 && (

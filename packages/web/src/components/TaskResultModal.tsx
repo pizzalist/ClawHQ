@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import type { Task } from '@ai-office/shared';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 import DeliverableList from './deliverables/DeliverableList';
+import { MarkdownContent } from '../lib/format/markdown';
 
 const STATUS_BADGE: Record<string, { bg: string; label: string }> = {
   pending: { bg: 'bg-gray-500/20 text-gray-400', label: '⏳ Pending' },
@@ -146,7 +147,7 @@ export default function TaskResultModal() {
           {task.description && (
             <div>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Description</h3>
-              <p className="text-sm text-gray-300 whitespace-pre-wrap">{task.description}</p>
+              <MarkdownContent text={task.description} className="text-sm text-gray-300" />
             </div>
           )}
 
@@ -216,8 +217,8 @@ export default function TaskResultModal() {
                       </button>
                       {isExpanded && step.task.result && (
                         <div className="px-4 pb-3 border-t border-gray-700/20">
-                          <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-3 mt-2 text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed max-h-[30vh] overflow-y-auto">
-                            {step.task.result}
+                          <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-3 mt-2 text-xs text-gray-300 leading-relaxed max-h-[30vh] overflow-y-auto">
+                            <MarkdownContent text={step.task.result} className="text-xs" />
                           </div>
                         </div>
                       )}
@@ -238,8 +239,8 @@ export default function TaskResultModal() {
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
                 {hasChain ? 'Final Deliverable' : 'Raw Output'}
               </h3>
-              <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 whitespace-pre-wrap font-mono leading-relaxed max-h-[40vh] overflow-y-auto">
-                {task.result}
+              <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 leading-relaxed max-h-[40vh] overflow-y-auto">
+                <MarkdownContent text={task.result} className="text-sm" />
               </div>
             </div>
           )}
