@@ -237,20 +237,13 @@ export const useStore = create<Store>((set, get) => ({
         body: JSON.stringify({ notificationId, actionId, params, sessionId: currentSession }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-      const data = await res.json();
-      if (data.reply) {
-        const replyMsg: ChiefChatMessage = {
-          id: `action-reply-${Date.now()}`,
-          role: 'chief',
-          content: data.reply,
-          createdAt: new Date().toISOString(),
-        };
-        set((s) => ({
-          chiefMessages: [...s.chiefMessages, replyMsg],
-          chiefNotifications: s.chiefNotifications.filter(n => n.id !== notificationId),
-          chiefPendingDecisions: Math.max(0, s.chiefPendingDecisions - 1),
-        }));
-      }
+      await res.json();
+      // chief/action 응답 메시지는 서버 WS(chief_response)로 단일 반영한다.
+      // 여기서도 push하면 동일 "확정되었습니다" 메시지가 중복 출력될 수 있음.
+      set((s) => ({
+        chiefNotifications: s.chiefNotifications.filter(n => n.id !== notificationId),
+        chiefPendingDecisions: Math.max(0, s.chiefPendingDecisions - 1),
+      }));
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : 'Failed to handle action', 'error');
     }

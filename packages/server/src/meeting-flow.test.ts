@@ -209,9 +209,13 @@ test('T15: review scoring report has >=3 candidate rows', () => {
     updatedAt: new Date().toISOString(),
   } as any;
 
-  const { report } = buildReviewScoringReport(meeting);
-  const rowCount = (report.match(/^\| 후보[ABC] \|/gm) || []).length;
-  assert(rowCount >= 3, 'score table should include at least 3 candidate rows');
+  const { report, decisionPacket } = buildReviewScoringReport(meeting);
+  // Report is now text-based summary; candidate scores are in decisionPacket
+  assert(report.includes('후보 수: 3'), 'report should mention 3 candidates');
+  assert(!!decisionPacket, 'decisionPacket should exist');
+  assert(decisionPacket!.reviewerScoreCards.length >= 1, 'should have at least 1 reviewer scorecard');
+  const scoredCandidates = decisionPacket!.reviewerScoreCards[0].scores.length;
+  assert(scoredCandidates >= 3, `decisionPacket should score at least 3 candidates, got ${scoredCandidates}`);
 });
 
 test('T16: review scoring report contains total and recommendation', () => {

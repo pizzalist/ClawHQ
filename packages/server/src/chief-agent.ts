@@ -318,6 +318,12 @@ export function notifyChief(notification: ChiefNotification) {
 export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string): { reply: string; sessionId: string } {
   const scopedSessionId = (notificationSessionById.get(notificationId) || sessionId || 'chief-default').trim() || 'chief-default';
 
+  const actionKey = makeInlineActionIdempotencyKey(notificationId, actionId);
+  if (handledInlineActionKeys.has(actionKey)) {
+    return { reply: '이미 처리된 요청입니다. (중복 클릭 방지)', sessionId: scopedSessionId };
+  }
+  handledInlineActionKeys.add(actionKey);
+
   const extractIdFromAction = (raw: string, prefix: string): string | null => {
     const m = raw.match(new RegExp(`^${prefix}-(.+)$`));
     return m?.[1] || null;
@@ -461,6 +467,10 @@ const reportedMeetingCompletions = new Set<string>();
 // Session-scoped notification dedup: tracks notificationId hashes to prevent duplicate cards
 const emittedNotificationKeys = new Set<string>();
 
+// Idempotency guards for user actions/check-ins (double-click / duplicate UI entry points)
+const handledInlineActionKeys = new Set<string>();
+const handledCheckInResponseKeys = new Set<string>();
+
 function dedupeNotificationKey(type: string, entityId: string): string {
   return `${type}::${entityId}`;
 }
@@ -477,6 +487,14 @@ function isEntityFullyReported(entityType: 'task' | 'meeting', entityId: string)
   const notifKey = `${entityType}_complete::${entityId}`;
   const checkinKey = `checkin_${entityType}::${entityId}`;
   return emittedNotificationKeys.has(notifKey) && emittedNotificationKeys.has(checkinKey);
+}
+
+function makeInlineActionIdempotencyKey(notificationId: string, actionId: string): string {
+  return `${notificationId}::${actionId}`;
+}
+
+function makeCheckInIdempotencyKey(checkInId: string, optionId: string): string {
+  return `${checkInId}::${optionId}`;
 }
 
 /**
@@ -551,42 +569,19 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     const completedCount = tasks.filter(t => t.status === 'completed').length;
 
     if (pendingCount === 0 && completedCount > 0) {
-      // All tasks done → completion stage check-in
-      emitCheckIn({
-        id: `checkin-completion-${Date.now()}`,
-        stage: 'completion',
-        message: `모든 작업이 완료되었습니다! 🎉\n\n` +
-          `완료된 작업 ${completedCount}건의 최종 결과를 확인해주세요.\n\n` +
-          `마지막 완료: "${task.title}" (${assignee?.name || '미배정'})\n` +
-          `결과 미리보기:\n${resultPreview}\n\n` +
-          `최종 결과를 확정할까요? 추가 수정이 필요하면 말씀해주세요.`,
-        options: [
-          { id: 'confirm', label: '✅ 확정', description: '현재 결과로 확정합니다' },
-          { id: 'revise', label: '🔄 수정 요청', description: '수정사항을 지시합니다' },
-          { id: 'add-task', label: '➕ 추가 작업', description: '후속 작업을 만듭니다' },
-        ],
-        taskId: task.id,
-        resultSummary: resultPreview,
-        createdAt: new Date().toISOString(),
-      });
-    } else {
-      // Mid-progress check-in
-      emitCheckIn({
-        id: `checkin-progress-${Date.now()}`,
-        stage: 'progress',
-        message: `작업 완료 보고: "${task.title}" ✅\n\n` +
-          `담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n` +
-          `결과 미리보기:\n${resultPreview}\n\n` +
-          `남은 작업 ${pendingCount}건이 있습니다. 이 결과 괜찮으세요? 수정이 필요하면 알려주세요.`,
-        options: [
-          { id: 'ok', label: '👍 괜찮아요', description: '계속 진행합니다' },
-          { id: 'revise', label: '🔄 수정해줘', description: '이 작업을 재작업합니다' },
-          { id: 'pause', label: '⏸️ 잠깐 멈춰', description: '전체 진행을 잠시 멈춥니다' },
-        ],
-        taskId: task.id,
-        resultSummary: resultPreview,
-        createdAt: new Date().toISOString(),
-      });
+      // Informational only: keep a single confirmation entry point on notification card
+      if (!isNotificationDuplicate('checkin_task_completion_info', task.id)) {
+        emitCheckIn({
+          id: `checkin-completion-${Date.now()}`,
+          stage: 'completion',
+          message: `모든 작업이 완료되었습니다! 🎉\n\n` +
+            `완료된 작업 ${completedCount}건의 최종 결과를 확인해주세요.\n` +
+            `확정/수정은 상단 완료 알림 카드의 버튼에서 한 번만 진행해 주세요.`,
+          taskId: task.id,
+          resultSummary: resultPreview,
+          createdAt: new Date().toISOString(),
+        });
+      }
     }
   }
 
@@ -739,6 +734,12 @@ export function chiefHandleMeetingChange() {
  * Returns a chief message with follow-up or action.
  */
 export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string): { reply: string; actions?: ChiefAction[] } {
+  const dedupeKey = makeCheckInIdempotencyKey(checkInId, optionId);
+  if (handledCheckInResponseKeys.has(dedupeKey)) {
+    return { reply: '이미 처리된 응답입니다. (중복 클릭 방지)' };
+  }
+  handledCheckInResponseKeys.add(dedupeKey);
+
   // We generate contextual responses based on the option chosen
   const now = new Date().toISOString();
   const msgId = `chief-checkin-reply-${Date.now()}`;
@@ -968,6 +969,32 @@ function parseActions(text: string): { actions: ChiefAction[]; cleanText: string
   return { actions, cleanText };
 }
 
+const TASK_ID_PLACEHOLDER_RE = /^(\(?.*생성된\s*task\s*id.*\)?|\(?.*task\s*id.*\)?|\{?taskid\}?|<taskid>|new[-_ ]?task)$/i;
+
+function isTaskIdPlaceholder(value?: string): boolean {
+  const v = (value || '').trim();
+  if (!v) return false;
+  return TASK_ID_PLACEHOLDER_RE.test(v);
+}
+
+function bindActionWithRuntimeContext(action: ChiefAction, runtime: { lastCreatedTaskId?: string | null }): ChiefAction {
+  if (action.type !== 'assign_task' && action.type !== 'cancel_task') return action;
+
+  const rawTaskId = action.params.taskId;
+  if (!isTaskIdPlaceholder(rawTaskId)) return action;
+
+  const boundTaskId = runtime.lastCreatedTaskId || undefined;
+  if (!boundTaskId) return action;
+
+  return {
+    ...action,
+    params: {
+      ...action.params,
+      taskId: boundTaskId,
+    },
+  };
+}
+
 function hasQaToDevIntent(text: string): boolean {
   const msg = (text || '').toLowerCase();
   const qaLike = /(qc|qa|리뷰|검토|테스트|품질)/i.test(msg);
@@ -1157,10 +1184,12 @@ function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { par
     for (let i = 0; i < needed; i++) pushExistingOrCreate(role);
   }
 
-  // Hard minimum guarantee: at least 2 participants
+  // Hard minimum guarantee: at least requested total, minimum 2
+  const requestedTotal = Object.values(roleCounts).reduce((a, b) => a + b, 0);
+  const hardMinimum = Math.max(2, requestedTotal);
   const orderedRequested = ALL_AGENT_ROLES.filter(r => (roleCounts[r] || 0) > 0);
   const fallbackRole = orderedRequested[0] || 'developer';
-  while (participantIds.length < 2) {
+  while (participantIds.length < hardMinimum) {
     pushExistingOrCreate(fallbackRole);
   }
 
@@ -1244,6 +1273,9 @@ function executeAction(action: ChiefAction): ChiefAction {
         const { taskId, agentId } = action.params;
         if (!taskId || !agentId) {
           return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
+        }
+        if (isTaskIdPlaceholder(taskId)) {
+          return { ...action, result: { ok: false, message: 'taskId placeholder는 실행할 수 없습니다. create_task의 실제 id를 사용하세요.' } };
         }
 
         const task = stmts.getTask.get(taskId) as any;
@@ -1342,9 +1374,10 @@ export function approveProposal(
   const executedActions: ChiefAction[] = [];
   let stoppedReason: string | undefined;
   let stopIndex = -1;
+  const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
 
   for (let i = 0; i < toExecute.length; i++) {
-    const action = toExecute[i];
+    const action = bindActionWithRuntimeContext(toExecute[i], runtimeBinding);
     const stepLabel = `[${i + 1}/${totalCount}]`;
 
     // Feedback: execution start
@@ -1357,6 +1390,10 @@ export function approveProposal(
 
     const executed = executeAction(action);
     executedActions.push(executed);
+
+    if (executed.result?.ok && executed.type === 'create_task' && executed.result?.id) {
+      runtimeBinding.lastCreatedTaskId = executed.result.id;
+    }
 
     // Feedback: execution result
     const ok = executed.result?.ok;
@@ -1622,12 +1659,16 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
 
       const results: string[] = [];
+      const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
       results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
       for (let i = 0; i < toExecute.length; i++) {
-        const action = toExecute[i];
+        const action = bindActionWithRuntimeContext(toExecute[i], runtimeBinding);
         const stepLabel = toExecute.length > 1 ? `[${i + 1}/${toExecute.length}] ` : '';
         const executed = executeAction(action);
         const ok = executed.result?.ok;
+        if (ok && executed.type === 'create_task' && executed.result?.id) {
+          runtimeBinding.lastCreatedTaskId = executed.result.id;
+        }
         results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
         if (ok && action.type === 'create_task') {
           results.push(`${stepLabel}↪ 추천 체인이 생성되었습니다. 필요 시 체인 미리보기에서 단계를 편집할 수 있습니다.`);
@@ -1695,7 +1736,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       sessionId: `chief-llm-${messageId}`,
       agentName: 'Chief',
       role: 'chief',
-      model: 'openai-codex/gpt-5.3-codex',
+      model: 'claude-opus-4-6',
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         try {

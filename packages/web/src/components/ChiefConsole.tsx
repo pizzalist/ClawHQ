@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
-import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage } from '@ai-office/shared';
+import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, ChiefInlineAction, Meeting } from '@ai-office/shared';
 import { MarkdownContent } from '../lib/format/markdown';
 import ChainPlanEditor from './ChainPlanEditor';
 
@@ -29,6 +29,57 @@ const NOTIF_STYLES: Record<string, { icon: string; border: string; bg: string }>
   meeting_review_complete: { icon: '🔍', border: 'border-purple-500/40', bg: 'bg-purple-500/10' },
   info: { icon: 'ℹ️', border: 'border-gray-500/40', bg: 'bg-gray-500/10' },
 };
+
+function getInlineActionCopy(action: ChiefInlineAction): { label: string; title?: string } {
+  if (action.action === 'view_result') {
+    if (action.params?.meetingId) {
+      return {
+        label: '👁 미리보기 (모달)',
+        title: '회의 결과를 모달에서 미리 봅니다. 대화 본문에는 추가되지 않습니다.',
+      };
+    }
+    return {
+      label: '👁 결과 미리보기',
+      title: '결과를 미리 확인합니다. 확정을 누르기 전에는 실행되지 않습니다.',
+    };
+  }
+  if (action.action === 'approve' || action.id.startsWith('approve')) {
+    return {
+      label: '✅ 확정 · 다음 단계 실행',
+      title: '미리보기 내용을 승인하고 다음 단계를 실제로 진행합니다.',
+    };
+  }
+  return { label: action.label, title: undefined };
+}
+
+function formatMeetingPreview(meeting: Meeting): string {
+  const report = (meeting.report || '').trim();
+  if (report) return report;
+
+  const header = `# ${meeting.title}`;
+  const desc = meeting.description ? `\n${meeting.description}` : '';
+  const proposals = meeting.proposals
+    .map((p, i) => `## ${i + 1}. ${p.agentName}\n\n${p.content || '(내용 없음)'}`)
+    .join('\n\n');
+  return `${header}${desc}\n\n${proposals || '_아직 수집된 의견이 없습니다._'}`;
+}
+
+function MeetingResultModal({ meeting, onClose }: { meeting: Meeting; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[1px] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-xl border border-indigo-500/40 bg-surface shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-gray-700/40 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-indigo-200">📝 회의 결과 미리보기</h3>
+          <span className="text-xs text-gray-400">(대화 스트림에 추가되지 않음)</span>
+          <button onClick={onClose} className="ml-auto text-sm text-gray-400 hover:text-gray-200">닫기 ✕</button>
+        </div>
+        <div className="p-4 overflow-y-auto max-h-[calc(85vh-56px)]">
+          <MarkdownContent text={formatMeetingPreview(meeting)} className="text-sm" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ActionCard({ action, index, selectable, selected, onToggle }: {
   action: ChiefAction; index: number;
@@ -67,7 +118,7 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
   );
 }
 
-function InlineNotification({ notification }: { notification: ChiefNotification }) {
+function InlineNotification({ notification, onPreviewMeeting }: { notification: ChiefNotification; onPreviewMeeting: (meetingId: string) => void }) {
   const handleAction = useStore((s) => s.handleChiefInlineAction);
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const [acting, setActing] = useState<string | null>(null);
@@ -86,13 +137,18 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
 
   const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
     setActing(actionId);
-    // Special: view_result opens the task result modal (client-side only for tasks)
+    // Special: view_result opens preview modals client-side (no chat pollution)
     if (action === 'view_result' && params.taskId && !params.meetingId) {
       setSelectedTask(params.taskId);
       setActing(null);
       return;
     }
-    // All other actions (including view-meeting, approve, revise, start-review) go to server
+    if (action === 'view_result' && params.meetingId) {
+      onPreviewMeeting(params.meetingId);
+      setActing(null);
+      return;
+    }
+    // All other actions (approve/revise/start-review etc.) go to server
     await handleAction(notification.id, actionId, params);
     setActing(null);
     // Dismiss after handling (except view actions) with contextual reason
@@ -113,16 +169,20 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
       <div className="text-sm font-semibold text-gray-200">{notification.title}</div>
       <MarkdownContent text={notification.summary} className="text-xs text-gray-300" />
       <div className="flex flex-wrap gap-2 mt-1">
-        {notification.actions.map((act) => (
-          <button
-            key={act.id}
-            onClick={() => onAction(act.id, act.action, act.params)}
-            disabled={acting !== null}
-            className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
-          >
-            {acting === act.id ? '처리 중...' : act.label}
-          </button>
-        ))}
+        {notification.actions.map((act) => {
+          const copy = getInlineActionCopy(act);
+          return (
+            <button
+              key={act.id}
+              onClick={() => onAction(act.id, act.action, act.params)}
+              disabled={acting !== null}
+              title={copy.title}
+              className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
+            >
+              {acting === act.id ? '처리 중...' : copy.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -199,7 +259,7 @@ function ThinkingIndicator() {
   );
 }
 
-function ChatMessage({ m, checkIn }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn }) {
+function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn; onPreviewMeeting: (meetingId: string) => void }) {
   const isUser = m.role === 'user';
   const hasNotification = m.notification != null;
   const notifStyle = hasNotification ? NOTIF_STYLES[m.notification!.type] || NOTIF_STYLES.info : null;
@@ -224,7 +284,7 @@ function ChatMessage({ m, checkIn }: { m: ChiefChatMessage; checkIn?: ChiefCheck
       {/* Inline action buttons for notifications */}
       {hasNotification && m.notification!.actions.length > 0 && (
         <div className="max-w-[85%]">
-          <InlineNotification notification={m.notification!} />
+          <InlineNotification notification={m.notification!} onPreviewMeeting={onPreviewMeeting} />
         </div>
       )}
       {/* Check-in options */}
@@ -246,6 +306,7 @@ export default function ChiefConsole() {
   const chiefExecutedActions = useStore((s) => s.chiefExecutedActions);
   const chiefPendingMessageId = useStore((s) => s.chiefPendingMessageId);
   const chiefCheckIns = useStore((s) => s.chiefCheckIns);
+  const meetings = useStore((s) => s.meetings);
   const chiefChat = useStore((s) => s.chiefChat);
   const approveProposal = useStore((s) => s.approveProposal);
   const rejectProposal = useStore((s) => s.rejectProposal);
@@ -258,7 +319,10 @@ export default function ChiefConsole() {
 
   const [input, setInput] = useState('');
   const [selectedActionIndices, setSelectedActionIndices] = useState<Set<number>>(new Set());
+  const [previewMeetingId, setPreviewMeetingId] = useState<string | null>(null);
+  const [savedScrollTop, setSavedScrollTop] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
   const chainPlans = useStore((s) => s.chainPlans);
@@ -282,8 +346,10 @@ export default function ChiefConsole() {
   }, [chiefProposedActions]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chiefMessages, chiefThinking, chiefCheckIns]);
+    if (!previewMeetingId) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chiefMessages, chiefThinking, chiefCheckIns, previewMeetingId]);
 
   // Build check-in map for inline rendering
   const checkInByMsgId = useMemo(() => {
@@ -291,6 +357,36 @@ export default function ChiefConsole() {
     for (const ci of chiefCheckIns) map.set(ci.id, ci);
     return map;
   }, [chiefCheckIns]);
+
+  const previewMeeting = useMemo(
+    () => (previewMeetingId ? meetings.find((m) => m.id === previewMeetingId) || null : null),
+    [meetings, previewMeetingId],
+  );
+
+  const openMeetingPreview = (meetingId: string) => {
+    const currentTop = chatScrollRef.current?.scrollTop ?? 0;
+    setSavedScrollTop(currentTop);
+    setPreviewMeetingId(meetingId);
+  };
+
+  const closeMeetingPreview = () => {
+    setPreviewMeetingId(null);
+    requestAnimationFrame(() => {
+      if (chatScrollRef.current && savedScrollTop != null) {
+        chatScrollRef.current.scrollTop = savedScrollTop;
+      }
+      setSavedScrollTop(null);
+    });
+  };
+
+  useEffect(() => {
+    if (!previewMeetingId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeMeetingPreview();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [previewMeetingId, savedScrollTop]);
 
   const send = async () => {
     const msg = input.trim();
@@ -334,7 +430,7 @@ export default function ChiefConsole() {
           {chiefThinking && <span className="text-xs text-accent animate-pulse">처리 중...</span>}
           {hasCheckIns && <span className="text-xs text-yellow-400">🔔 {chiefCheckIns.length}</span>}
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
           {chiefMessages.length === 0 && (
             <div className="text-sm text-gray-500">
               총괄자에게 자연스럽게 말해보세요. 모든 업무 지시, 결과 확인, 의사결정이 여기서 이루어집니다.
@@ -346,7 +442,7 @@ export default function ChiefConsole() {
             </div>
           )}
           {chiefMessages.map((m) => (
-            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} />
+            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} onPreviewMeeting={openMeetingPreview} />
           ))}
           {chiefThinking && <ThinkingIndicator />}
           <div ref={messagesEndRef} />
@@ -462,6 +558,8 @@ export default function ChiefConsole() {
           </div>
         )}
       </div>
+
+      {previewMeeting && <MeetingResultModal meeting={previewMeeting} onClose={closeMeetingPreview} />}
     </div>
   );
 }

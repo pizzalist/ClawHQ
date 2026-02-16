@@ -10,6 +10,7 @@
     "test:ux-hotfix": "tsx src/ux-hotfix.regression.test.ts",
     "test:meeting-transaction": "tsx src/chief-agent.meeting-transaction.regression.test.ts",
     "test:adapter-sanitize": "tsx src/openclaw-adapter.sanitize.regression.test.ts",
+    "test:hotfix-c": "tsx src/hotfix-c-result-view.regression.test.ts",
     "qa:post-deploy": "tsx src/post-deploy-qa.ts",
     "start": "node dist/index.js"
   },

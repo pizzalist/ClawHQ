@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../store';
 import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@ai-office/shared';
 import Spinner from './Spinner';
+import { MarkdownContent } from '../lib/format/markdown';
 
 const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
   brainstorm: '🧠 브레인스토밍 (자유 토론)',
@@ -43,7 +44,7 @@ function MeetingReport({ report }: { report: string }) {
   return (
     <div className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/5">
       <h3 className="text-sm font-semibold text-indigo-300 mb-3">📝 회의 종합 결과</h3>
-      <div className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{report}</div>
+      <MarkdownContent text={report} className="text-sm text-gray-200" />
     </div>
   );
 }
