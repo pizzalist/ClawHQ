@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage } from '@ai-office/shared';
 import { MarkdownContent } from '../lib/format/markdown';
+import ChainPlanEditor from './ChainPlanEditor';
 
 const ROLE_LABELS: Record<string, string> = {
   pm: 'PM', developer: '개발', reviewer: '리뷰어',
@@ -247,10 +248,14 @@ export default function ChiefConsole() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
+  const chainPlans = useStore((s) => s.chainPlans);
+  const activeChainPlans = chainPlans.filter(p => p.status !== 'completed' && p.status !== 'cancelled');
+
   const hasSuggestions = chiefSuggestions.length > 0;
   const hasProposal = chiefProposedActions.length > 0 && chiefPendingMessageId != null;
   const hasExecuted = chiefExecutedActions.length > 0;
   const hasCheckIns = chiefCheckIns.length > 0;
+  const hasChainPlans = activeChainPlans.length > 0;
 
   const suggestionSummary = useMemo(
     () => chiefSuggestions.map((s) => `${ROLE_LABELS[s.role] || s.role} ${s.count}명`).join(', '),
@@ -419,7 +424,17 @@ export default function ChiefConsole() {
           </div>
         )}
 
-        {!hasSuggestions && !hasProposal && !hasExecuted && (
+        {/* Chain Plan Editors */}
+        {hasChainPlans && (
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-gray-200">🔗 체인 플랜</h3>
+            {activeChainPlans.map(plan => (
+              <ChainPlanEditor key={plan.id} plan={plan} />
+            ))}
+          </div>
+        )}
+
+        {!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && (
           <div>
             <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 가이드</h3>
             <div className="text-xs text-gray-400 space-y-2">

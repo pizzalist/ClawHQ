@@ -35,6 +35,27 @@ export interface Task {
   updatedAt: string;
 }
 
+// Chain plan types — user-editable pipeline before execution
+export interface ChainStep {
+  role: AgentRole;
+  label: string;
+  reason: string;
+  /** If set, prefer this agent. Otherwise auto-assign by role. */
+  agentId?: string;
+}
+
+export interface ChainPlan {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  steps: ChainStep[];
+  /** Currently completed step index (-1 = not started) */
+  currentStep: number;
+  status: 'proposed' | 'confirmed' | 'running' | 'completed' | 'cancelled';
+  autoExecute: boolean;
+  createdAt: string;
+}
+
 // Chief Action types
 export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent';
 
@@ -264,7 +285,7 @@ export interface TeamPlanSuggestion {
 }
 
 // WebSocket message types
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin' | 'chief_notification';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin' | 'chief_notification' | 'chain_plan_update';
 
 export interface WSMessage {
   type: WSMessageType;

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefNotification, TeamPlanSuggestion } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefNotification, TeamPlanSuggestion, ChainPlan, ChainStep } from '@ai-office/shared';
 import { toast } from './components/Toast';
 
 const API = '';
@@ -19,6 +19,7 @@ interface Store {
   chiefCheckIns: ChiefCheckIn[];         // proactive check-ins from Chief
   chiefNotifications: ChiefNotification[]; // notifications with inline actions
   chiefPendingDecisions: number;         // count of pending decisions for badge
+  chainPlans: ChainPlan[];               // active chain plans
   connected: boolean;
   initialized: boolean;
   selectedAgentId: string | null;
@@ -36,8 +37,15 @@ interface Store {
   handleChiefInlineAction: (notificationId: string, actionId: string, params?: Record<string, string>) => Promise<void>;
   respondToCheckIn: (checkInId: string, optionId: string, comment?: string) => Promise<void>;
   dismissCheckIn: (checkInId: string) => void;
-  approveProposal: (messageId: string, selectedIndices?: number[]) => Promise<void>;
+  approveProposal: (messageId: string, selectedIndices?: number[], overrideActions?: ChiefAction[]) => Promise<void>;
   rejectProposal: (messageId: string) => Promise<void>;
+  // Chain plan actions
+  updateChainPlan: (plan: ChainPlan) => void;
+  editChainSteps: (planId: string, steps: ChainStep[]) => Promise<void>;
+  setChainAutoExecute: (planId: string, autoExecute: boolean) => Promise<void>;
+  confirmChainPlan: (planId: string) => Promise<void>;
+  advanceChainPlan: (planId: string) => Promise<void>;
+  cancelChainPlan: (planId: string) => Promise<void>;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -75,6 +83,7 @@ export const useStore = create<Store>((set, get) => ({
   chiefCheckIns: [],
   chiefNotifications: [],
   chiefPendingDecisions: 0,
+  chainPlans: [],
   connected: false,
   initialized: false,
   selectedAgentId: null,
@@ -197,14 +206,14 @@ export const useStore = create<Store>((set, get) => ({
   dismissCheckIn: (checkInId) => {
     set((s) => ({ chiefCheckIns: s.chiefCheckIns.filter(c => c.id !== checkInId) }));
   },
-  approveProposal: async (messageId, selectedIndices) => {
+  approveProposal: async (messageId, selectedIndices, overrideActions) => {
     const { setLoading } = get();
     setLoading('chiefApprove', true);
     try {
       const res = await fetch(`${API}/api/chief/proposal/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId, selectedIndices }),
+        body: JSON.stringify({ messageId, selectedIndices, overrideActions }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
       const data = await res.json();
@@ -236,6 +245,81 @@ export const useStore = create<Store>((set, get) => ({
       toast('제안을 거절했습니다', 'info');
     } catch {
       // silent
+    }
+  },
+  // Chain plan actions
+  updateChainPlan: (plan) => {
+    set((s) => {
+      const existing = s.chainPlans.findIndex(p => p.id === plan.id);
+      const plans = [...s.chainPlans];
+      if (existing >= 0) plans[existing] = plan;
+      else plans.unshift(plan);
+      return { chainPlans: plans };
+    });
+  },
+  editChainSteps: async (planId, steps) => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/${planId}/steps`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const plan = await res.json();
+      get().updateChainPlan(plan);
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '체인 수정 실패', 'error');
+    }
+  },
+  setChainAutoExecute: async (planId, autoExecute) => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/${planId}/auto-execute`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoExecute }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const plan = await res.json();
+      get().updateChainPlan(plan);
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '설정 실패', 'error');
+    }
+  },
+  confirmChainPlan: async (planId) => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/${planId}/confirm`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const plan = await res.json();
+      get().updateChainPlan(plan);
+      toast('체인 확정 — 실행을 시작합니다', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '체인 확정 실패', 'error');
+    }
+  },
+  advanceChainPlan: async (planId) => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/${planId}/advance`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const { plan } = await res.json();
+      get().updateChainPlan(plan);
+      toast('다음 단계로 진행합니다', 'success');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '진행 실패', 'error');
+    }
+  },
+  cancelChainPlan: async (planId) => {
+    try {
+      const res = await fetch(`${API}/api/chain-plans/${planId}/cancel`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).error);
+      const plan = await res.json();
+      get().updateChainPlan(plan);
+      toast('체인 취소됨', 'info');
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : '취소 실패', 'error');
     }
   },
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
@@ -532,6 +616,10 @@ export function connectWS() {
       }
       case 'chief_notification': {
         store.handleChiefNotification(msg.payload as ChiefNotification);
+        break;
+      }
+      case 'chain_plan_update': {
+        store.updateChainPlan(msg.payload as ChainPlan);
         break;
       }
       case 'event': {

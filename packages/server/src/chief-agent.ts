@@ -4,6 +4,7 @@ import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './a
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
+import { suggestChainPlan } from './chain-plan.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
@@ -571,6 +572,22 @@ function hasQaToDevIntent(text: string): boolean {
   return qaLike && devLike;
 }
 
+function recommendStartRoleFromIntent(title: string, description: string, explicit?: string): AgentRole {
+  if (explicit && ['pm', 'developer', 'reviewer', 'designer', 'devops', 'qa'].includes(explicit)) {
+    return explicit as AgentRole;
+  }
+  const text = `${title}\n${description}`.toLowerCase();
+  const reportLike = /(리포트|보고서|요약|분석)/i.test(text);
+  const reviewOnly = /(리뷰|검토)/i.test(text) && !/(구현|개발|수정|반영|fix|implement)/i.test(text);
+  const implementOnly = /(구현|개발|코딩|코드|fix|implement)/i.test(text) && !/(기획|플랜|요구사항)/i.test(text);
+  const qaFirst = hasQaToDevIntent(text) && /(검증|재현|버그|품질|qc|qa)/i.test(text);
+
+  if (qaFirst) return 'qa';
+  if (implementOnly) return 'developer';
+  if (reportLike && reviewOnly) return 'reviewer';
+  return 'pm';
+}
+
 function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
   const msg = (userMessage || '').toLowerCase();
   if (/(상태|현황|지금\s*상태|현재\s*상태|status|몇\s*명|몇\s*건)/i.test(msg) && !/(추가|생성|create|리셋|reset|취소|cancel)/i.test(msg)) {
@@ -621,9 +638,11 @@ function executeAction(action: ChiefAction): ChiefAction {
         const { title, description, assignRole } = action.params;
         const taskTitle = title || 'Untitled';
         const taskDescription = description || '';
-        const mergedIntentText = `${taskTitle}\n${taskDescription}`;
-        const preferredRole = assignRole || (hasQaToDevIntent(mergedIntentText) ? 'qa' : '');
 
+        // 1) Dynamic start-role recommendation (intent/output/complexity hints)
+        const preferredRole = recommendStartRoleFromIntent(taskTitle, taskDescription, assignRole);
+
+        // 2) Resolve initial assignee from recommended first step
         let assigneeId: string | null = null;
         if (preferredRole) {
           const agents = listAgents();
@@ -631,8 +650,18 @@ function executeAction(action: ChiefAction): ChiefAction {
             || agents.find(a => a.role === preferredRole);
           if (candidate) assigneeId = candidate.id;
         }
+
         const task = createTask(taskTitle, taskDescription, assigneeId);
-        return { ...action, result: { ok: true, message: `작업 "${task.title}" 생성됨`, id: task.id } };
+
+        // 3) Persist a real editable plan for the task
+        const plan = suggestChainPlan(task.id, task.title, task.description, preferredRole || 'pm', task.expectedDeliverables);
+        const planSummary = plan.steps.map((s, i) => `${i + 1}. ${s.label} — ${s.reason}`).join('\n');
+
+        return { ...action, result: {
+          ok: true,
+          message: `작업 "${task.title}" 생성됨\n\n📋 추천 체인 (${plan.steps.length}단계):\n${planSummary}\n\n필요하면 단계 추가/삭제/순서 변경 후 확정하세요.`,
+          id: task.id,
+        }};
       }
       case 'create_agent': {
         const { name, role, model } = action.params;
@@ -710,16 +739,16 @@ function executeAction(action: ChiefAction): ChiefAction {
  * `selectedIndices` allows partial approval (execute only some actions).
  * If null/undefined, all actions are executed.
  */
-export function approveProposal(messageId: string, selectedIndices?: number[]): { executedActions: ChiefAction[]; state: { agents: any[]; tasks: any[]; meetings: any[] } } {
+export function approveProposal(messageId: string, selectedIndices?: number[], overrideActions?: ChiefAction[]): { executedActions: ChiefAction[]; state: { agents: any[]; tasks: any[]; meetings: any[] } } {
   const actions = pendingProposals.get(messageId);
   if (!actions || actions.length === 0) {
     throw new Error(`No pending proposal found for messageId: ${messageId}`);
   }
 
-  const selected = selectedIndices
-    ? selectedIndices.filter(i => i >= 0 && i < actions.length).map(i => actions[i])
-    : actions;
-  const toExecute = normalizeChainedTaskActions(selected);
+  const base = overrideActions && overrideActions.length > 0 ? overrideActions : actions;
+  const toExecute = selectedIndices
+    ? selectedIndices.filter(i => i >= 0 && i < base.length).map(i => base[i])
+    : base;
 
   const totalCount = toExecute.length;
 
@@ -791,37 +820,7 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
   };
 }
 
-function normalizeChainedTaskActions(actions: ChiefAction[]): ChiefAction[] {
-  if (!actions || actions.length < 2) return actions;
-
-  const normalized: ChiefAction[] = [];
-  let i = 0;
-  while (i < actions.length) {
-    const current = actions[i];
-    const next = actions[i + 1];
-
-    const isQaTask = current?.type === 'create_task' && /(qc|qa|리뷰|검토|테스트)/i.test(`${current.params.title || ''}\n${current.params.description || ''}\n${current.params.assignRole || ''}`);
-    const isDevTask = next?.type === 'create_task' && /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(`${next.params.title || ''}\n${next.params.description || ''}\n${next.params.assignRole || ''}`);
-
-    if (isQaTask && isDevTask) {
-      normalized.push({
-        ...current,
-        params: {
-          ...current.params,
-          assignRole: 'qa',
-          description: `${current.params.description || ''}\n\n[체인 정책] QA 리뷰 후 개발자 반영 단계를 자동으로 이어서 진행하세요.`.trim(),
-        },
-      });
-      i += 2;
-      continue;
-    }
-
-    normalized.push(current);
-    i += 1;
-  }
-
-  return normalized;
-}
+// Dynamic chain recommendation mode: no forced QA->Dev normalization.
 
 const ACTION_LABEL_MAP: Record<string, string> = {
   create_task: '작업 생성',
@@ -1009,8 +1008,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
     if (selected && selected.length > 0) {
       // If user says generic approval ("응", "승인"), execute ALL pending actions sequentially
       const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase());
-      const selectedActions = isGenericApproval ? [...pending] : [pending[selected[0]]];
-      const toExecute = normalizeChainedTaskActions(selectedActions);
+      const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
 
       const results: string[] = [];
       results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
@@ -1020,8 +1018,8 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
         const executed = executeAction(action);
         const ok = executed.result?.ok;
         results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
-        if (ok && action.type === 'create_task' && hasQaToDevIntent(`${action.params.title || ''}\n${action.params.description || ''}`)) {
-          results.push(`${stepLabel}↪ QA 단계 완료 후 Developer 단계가 자동으로 이어집니다.`);
+        if (ok && action.type === 'create_task') {
+          results.push(`${stepLabel}↪ 추천 체인이 생성되었습니다. 필요 시 체인 미리보기에서 단계를 편집할 수 있습니다.`);
         }
       }
 
