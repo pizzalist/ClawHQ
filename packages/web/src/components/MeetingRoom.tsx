@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import type { Meeting, MeetingProposal, MeetingCharacter } from '@ai-office/shared';
+import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@ai-office/shared';
 import Spinner from './Spinner';
 
 const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
@@ -48,6 +48,76 @@ function MeetingReport({ report }: { report: string }) {
   );
 }
 
+function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: DecisionPacket }) {
+  const candidateNames = meeting.sourceCandidates?.map(c => c.name) || [];
+  const rows = candidateNames.map((name) => {
+    const scores = packet.reviewerScoreCards
+      .map(card => card.scores.find(s => s.candidateName === name)?.score)
+      .filter((v): v is number => typeof v === 'number');
+    const total = scores.reduce((a, b) => a + b, 0);
+    const avg = scores.length > 0 ? total / scores.length : 0;
+    return { name, scores, total, avg };
+  }).sort((a, b) => b.avg - a.avg);
+
+  return (
+    <div className="p-4 rounded-xl border border-purple-500/30 bg-purple-500/5 space-y-4">
+      <h3 className="text-sm font-semibold text-purple-300">📊 점수화 결과 (구조화 렌더)</h3>
+
+      <div>
+        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">후보별 점수표</h4>
+        <div className="overflow-x-auto rounded-lg border border-gray-700/50">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-800/70 text-gray-300">
+              <tr>
+                <th className="text-left px-3 py-2">후보</th>
+                <th className="text-left px-3 py-2">리뷰어 점수</th>
+                <th className="text-right px-3 py-2">총점</th>
+                <th className="text-right px-3 py-2">평균</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.name} className="border-t border-gray-700/40 text-gray-200">
+                  <td className="px-3 py-2 font-medium">{r.name}</td>
+                  <td className="px-3 py-2">{r.scores.length > 0 ? r.scores.map((s) => s.toFixed(1)).join(' / ') : '-'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.total.toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.avg.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+          <h4 className="text-xs font-semibold text-emerald-300 uppercase tracking-wider mb-1">1순위 추천</h4>
+          <div className="text-sm font-semibold text-emerald-200">{packet.recommendation?.name || '-'}</div>
+          <div className="text-xs text-emerald-100/80 mt-1">평균 {Number(packet.recommendation?.score || 0).toFixed(2)}</div>
+          {packet.recommendation?.summary && (
+            <p className="text-xs text-emerald-100/80 mt-2 whitespace-pre-wrap">{packet.recommendation.summary}</p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+          <h4 className="text-xs font-semibold text-amber-300 uppercase tracking-wider mb-1">대안</h4>
+          {packet.alternatives.length > 0 ? (
+            <ul className="space-y-1 text-xs text-amber-100/90">
+              {packet.alternatives.map((a, i) => (
+                <li key={`${a.name}-${i}`}>
+                  {i + 1}. {a.name} <span className="opacity-80">(평균 {Number(a.score || 0).toFixed(2)})</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-xs text-amber-100/80">없음</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MeetingDetail({ meeting }: { meeting: Meeting }) {
   const agents = useStore(s => s.agents);
   const agentMap = new Map(agents.map(a => [a.id, a]));
@@ -82,6 +152,11 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
             전문가 의견 수집 중... {meeting.proposals.length}/{meeting.participants.length}
           </span>
         </div>
+      )}
+
+      {/* Structured review scoring UI (no markdown table) */}
+      {meeting.decisionPacket && meeting.sourceCandidates && meeting.sourceCandidates.length > 0 && (
+        <ReviewScoringPanel meeting={meeting} packet={meeting.decisionPacket} />
       )}
 
       {/* Show consolidated report first if available */}

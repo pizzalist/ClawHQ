@@ -250,7 +250,7 @@ export default function TaskResultModal() {
                       </button>
                       {isExpanded && step.task.result && (
                         <div className="px-4 pb-3 border-t border-gray-700/20">
-                          <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-3 mt-2 text-xs text-gray-300 leading-relaxed max-h-[30vh] overflow-y-auto">
+                          <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-3 mt-2 text-xs text-gray-300 leading-relaxed">
                             <MarkdownContent text={step.task.result} className="text-xs" />
                           </div>
                         </div>
@@ -298,7 +298,7 @@ export default function TaskResultModal() {
                   연결: finalDeliverableId={threadSummary?.finalDeliverableId || '-'} · latestDeliverableByThread={threadSummary?.latestDeliverableByThread || '-'}
                 </div>
               )}
-              <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 leading-relaxed max-h-[40vh] overflow-y-auto">
+              <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 leading-relaxed">
                 <MarkdownContent text={finalOutputText} className="text-sm" />
               </div>
             </div>

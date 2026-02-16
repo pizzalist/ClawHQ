@@ -309,53 +309,30 @@ export function buildReviewScoringReport(meeting: Meeting): { report: string; de
     };
   }
 
-  const criteria = [
-    { name: '시장성', weight: 0.3 },
-    { name: '구현 난이도(역점수)', weight: 0.2 },
-    { name: '실행 속도', weight: 0.2 },
-    { name: '차별성/확장성', weight: 0.3 },
-  ];
-
-  const candidateAverages = new Map<string, number>();
-  for (const candidate of meeting.sourceCandidates) {
-    const vals: number[] = [];
-    for (const card of packet.reviewerScoreCards) {
-      const found = card.scores.find(s => s.candidateName === candidate.name);
-      if (found) vals.push(found.score);
-    }
-    candidateAverages.set(candidate.name, vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0);
-  }
-
-  const rows: string[] = [];
-  for (const candidate of meeting.sourceCandidates) {
-    const avg = candidateAverages.get(candidate.name) || 0;
-    const total = criteria.reduce((sum, c) => sum + (avg * c.weight), 0);
-    rows.push(`| ${candidate.name} | ${criteria.map(c => `${c.name}:${Math.round(c.weight * 100)}% / ${avg.toFixed(1)}`).join('<br>')} | ${total.toFixed(2)} |`);
-  }
-
+  // NOTE: 점수표는 markdown table 대신 decisionPacket(JSON) 기반 UI 컴포넌트에서 렌더한다.
+  // report는 의사결정 요약 텍스트만 유지한다.
   const rec = packet.recommendation;
   const alts = packet.alternatives;
-  const altLines = alts.length > 0
-    ? alts.map((a, i) => `${i + 1}. ${a.name} (평균 ${Number(a.score || 0).toFixed(2)}) — 보류 이유: 1순위 대비 우선순위 낮음/추가 검증 필요`).join('\n')
-    : '- 없음';
 
   const report = [
     `# ${meeting.title} 점수화 결과`,
     '',
-    '## 후보별 점수표',
-    '| 후보 | 항목/가중치/점수 | 총점 |',
-    '|---|---|---:|',
-    ...rows,
+    '## 결과 요약',
+    `- 후보 수: ${meeting.sourceCandidates.length}`,
+    `- 리뷰어 수: ${packet.reviewerScoreCards.length}`,
+    '- 후보별 점수표/총점/추천안/대안은 구조화 데이터 기반 UI에서 제공합니다.',
     '',
     '## 1순위 추천',
-    `- **${rec.name}** (평균 ${Number(rec.score || 0).toFixed(2)})`,
+    `- ${rec.name} (평균 ${Number(rec.score || 0).toFixed(2)})`,
     `- 이유: 다수 리뷰어 점수 기준 총점이 가장 높고, 실행 가능성과 임팩트 균형이 우수합니다.`,
     '',
     '## 대안 1~2',
-    altLines,
+    ...(alts.length > 0
+      ? alts.map((a, i) => `${i + 1}. ${a.name} (평균 ${Number(a.score || 0).toFixed(2)})`)
+      : ['- 없음']),
     '',
     '## 의사결정 요청',
-    '- 이 추천안으로 **확정**할까요, 아니면 기준/가중치를 **수정**할까요?',
+    '- 이 추천안으로 확정할까요, 아니면 기준/가중치를 수정할까요?',
   ].join('\n');
 
   return { report, decisionPacket: packet };

@@ -246,7 +246,7 @@ function formatMeetingResult(meetingId: string): string {
 
   const proposalCount = meeting.proposals?.length || 0;
   const report = meeting.report?.trim();
-  const preview = compactText(report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n'), 1200);
+  const preview = (report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')).trim();
 
   const participantTotal = meeting.participants?.length || proposalCount;
   const lines = [
@@ -292,7 +292,7 @@ function formatTaskResult(taskId: string): string {
   const task = listTasks().find(t => t.id === taskId);
   if (!task) return '해당 작업을 찾을 수 없습니다. 목록에서 다시 선택해주세요.';
   const status = task.status;
-  const preview = compactText(task.result || '(결과 없음)', 1200);
+  const preview = (task.result || '(결과 없음)').trim();
   return `📄 **작업 결과**: "${task.title}"\n상태: ${status}\n\n${preview}`;
 }
 
@@ -327,9 +327,53 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
   // Normalize: actionId may be compound like "approve-meeting-xxx" or "revise-meeting-xxx"
   if (actionId === 'approve' || actionId.startsWith('approve-') || actionId.startsWith('approve_')) {
-    reply = '✅ 확정되었습니다. 다음 단계로 진행합니다.';
+    // Generate context-aware next-step guidance
+    const meetingId = params?.meetingId;
+    const taskId = params?.taskId;
+    const nextStepLines: string[] = ['✅ 확정되었습니다.'];
+
+    if (meetingId) {
+      const meeting = getMeeting(meetingId);
+      if (meeting) {
+        // Check for child review meetings or suggest next actions
+        const children = getChildMeetings(meetingId);
+        const hasReview = children.some(c => c.type === 'review' || c.sourceMeetingId === meetingId);
+        if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
+          if (!hasReview) {
+            nextStepLines.push('\n\n📌 **다음 단계 옵션:**');
+            nextStepLines.push('• 리뷰어 점수화를 시작하여 후보를 평가할 수 있습니다');
+            nextStepLines.push('• 또는 바로 실행 작업을 생성할 수 있습니다');
+            nextStepLines.push('\n무엇을 진행할까요?');
+          } else {
+            nextStepLines.push('\n\n📌 **다음 단계:** 리뷰 미팅 결과를 바탕으로 실행 작업을 생성할 수 있습니다. 어떤 작업이 필요한가요?');
+          }
+        } else if (meeting.sourceMeetingId) {
+          // Review meeting confirmed
+          const rec = meeting.decisionPacket?.recommendation;
+          if (rec) {
+            nextStepLines.push(`\n\n📌 **다음 단계:** 추천안 "${rec.name}"을 기반으로 실행 작업을 생성하겠습니다. 구체적인 작업 지시를 해주세요.`);
+          } else {
+            nextStepLines.push('\n\n📌 **다음 단계:** 확정된 결과를 바탕으로 실행 작업을 생성할 수 있습니다. 어떤 작업이 필요한가요?');
+          }
+        } else {
+          nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
+        }
+      }
+    } else if (taskId) {
+      const tasks = listTasks();
+      const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in-progress').length;
+      if (pendingCount > 0) {
+        nextStepLines.push(`\n\n📌 **다음 단계:** 남은 작업 ${pendingCount}건이 진행/대기 중입니다. 완료 시 자동으로 보고드립니다.`);
+      } else {
+        nextStepLines.push('\n\n📌 **다음 단계:** 모든 작업이 완료되었습니다. 추가 작업이 필요하면 말씀해주세요.');
+      }
+    } else {
+      nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
+    }
+
+    reply = nextStepLines.join('');
   } else if (actionId === 'request_revision' || actionId.startsWith('revise-') || actionId.startsWith('revision-') || actionId.startsWith('request_revision')) {
-    reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?';
+    reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?\n\n💡 구체적인 수정 방향을 알려주시면 더 빠르게 처리할 수 있습니다.';
   } else if (actionId === 'view_result' || actionId.startsWith('view-')) {
     const meetingId = extractIdFromAction(actionId, 'view-meeting') || params?.meetingId;
     const taskId = extractIdFromAction(actionId, 'view') || params?.taskId;
@@ -424,6 +468,13 @@ function isNotificationDuplicate(type: string, entityId: string): boolean {
   if (emittedNotificationKeys.has(key)) return true;
   emittedNotificationKeys.add(key);
   return false;
+}
+
+// Unified dedup guard: covers notification + checkin + confirm for same entity
+function isEntityFullyReported(entityType: 'task' | 'meeting', entityId: string): boolean {
+  const notifKey = `${entityType}_complete::${entityId}`;
+  const checkinKey = `checkin_${entityType}::${entityId}`;
+  return emittedNotificationKeys.has(notifKey) && emittedNotificationKeys.has(checkinKey);
 }
 
 /**
@@ -763,6 +814,15 @@ function getSessionMessages(sessionId: string): ChiefChatMessage[] {
 }
 
 function pushMessage(sessionId: string, message: ChiefChatMessage) {
+  // Guard: never push empty chief messages (causes blank bubbles in sidebar)
+  if (message.role === 'chief') {
+    const hasContent = (message.content || '').trim().length > 0;
+    const hasNotification = message.notification != null;
+    if (!hasContent && !hasNotification) {
+      console.warn(`[chief] Dropped empty chief message id=${message.id} session=${sessionId}`);
+      return;
+    }
+  }
   const list = getSessionMessages(sessionId);
   list.push(message);
   if (list.length > MAX_HISTORY) {
