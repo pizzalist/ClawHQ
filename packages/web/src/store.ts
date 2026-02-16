@@ -698,20 +698,8 @@ export function connectWS() {
         break;
       case 'meetings_update': {
         const newMeetings = msg.payload as Meeting[];
-        const prevMeetings = store.meetings;
         store.setMeetings(newMeetings);
-        // Check for newly completed meetings
-        for (const m of newMeetings) {
-          if (m.status === 'completed' && !m.decision) {
-            const prev = prevMeetings.find((pm) => pm.id === m.id);
-            if (!prev || prev.status !== 'completed') {
-              toast(`Meeting complete! ${m.proposals?.length || 0} proposals ready for your review`, 'info', {
-                label: '🗳️ Review',
-                onClick: () => { /* handled by UI */ },
-              });
-            }
-          }
-        }
+        // Toast removed: meeting completion is reported via chief_notification to avoid duplicate messages.
         break;
       }
       case 'chief_response': {

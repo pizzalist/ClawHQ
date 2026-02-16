@@ -343,51 +343,14 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         nextStepLines.push('\n\n완료.');
       } else {
         if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
-          // Auto-start review meeting for planning/brainstorm results
+          // Do NOT auto-start review. Show candidates and let user decide.
           const candidates = extractCandidatesFromMeeting(meetingId);
           if (candidates && candidates.length > 0) {
-            // Find or create 3 reviewers
-            const agents = listAgents();
-            const reviewerIds: string[] = [];
-            for (const r of agents.filter(a => a.role === 'reviewer')) {
-              if (reviewerIds.length < 3) reviewerIds.push(r.id);
-            }
-            while (reviewerIds.length < 3) {
-              const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', DEFAULT_MODEL_BY_ROLE.reviewer);
-              reviewerIds.push(created.id);
-            }
-            const reviewMeeting = startReviewMeetingFromSource(
-              `[리뷰] ${meeting.title}`,
-              meetingId,
-              reviewerIds,
-            );
-            if (reviewMeeting) {
-              nextStepLines.push(`\n\n🚀 **자동 실행:** 리뷰 미팅 "${reviewMeeting.title}" 자동 시작`);
-              nextStepLines.push(`🔍 ${reviewerIds.length}명의 리뷰어가 후보를 평가 중입니다.`);
-              nextStepLines.push(`완료 시 점수표와 최종 추천안을 자동 보고드리겠습니다.`);
-            } else {
-              // No candidates extractable — create spec task directly
-              const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
-              const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
-              const allAgents = listAgents();
-              let pmAgent = allAgents.find(a => a.role === 'pm' && a.state === 'idle') || allAgents.find(a => a.role === 'pm');
-              if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
-              const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
-              setTimeout(() => processQueue(), 200);
-              nextStepLines.push(`\n\n🚀 **자동 실행:** 기획/명세서 작성 태스크를 ${pmAgent.name}에게 배정했습니다.`);
-              nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
-            }
+            const candidateList = candidates.map((c, i) => `${i + 1}. **${c.name}**: ${c.summary.slice(0, 120)}`).join('\n');
+            nextStepLines.push(`\n\n📋 **도출된 후보 ${candidates.length}건:**\n${candidateList}`);
+            nextStepLines.push(`\n리뷰어 점수화를 원하시면 회의 완료 알림의 "🔍 리뷰어 점수화 시작" 버튼을 눌러주세요.`);
           } else {
-            // No structured candidates — create spec task from meeting content
-            const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
-            const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
-            const allAgents = listAgents();
-            let pmAgent = allAgents.find(a => a.role === 'pm' && a.state === 'idle') || allAgents.find(a => a.role === 'pm');
-            if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
-            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
-            setTimeout(() => processQueue(), 200);
-            nextStepLines.push(`\n\n🚀 **자동 실행:** 기획/명세서 작성 태스크를 ${pmAgent.name}에게 배정했습니다.`);
-            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+            nextStepLines.push(`\n\n📋 구조화된 후보가 없습니다. 회의 결과를 확인해주세요.`);
           }
         } else if (meeting.sourceMeetingId) {
           // Review meeting confirmed → auto-create spec task from recommendation
@@ -1289,10 +1252,12 @@ function parseMeetingParticipantRoleCounts(raw: string | undefined): Record<Agen
     counts.pm = 1;
     counts.developer = 1;
   }
+  console.log(`[chief] parseMeetingParticipantRoleCounts("${input}") => total=${Object.values(counts).reduce((a,b)=>a+b,0)}`, JSON.stringify(counts));
   return counts;
 }
 
 function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { participantIds: string[]; createdAgentNames: string[] } {
+  console.log(`[chief] ensureMeetingParticipants roleCounts:`, JSON.stringify(roleCounts));
   const participantIds: string[] = [];
   const createdAgentNames: string[] = [];
 
@@ -1327,6 +1292,7 @@ function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { par
     pushExistingOrCreate(fallbackRole);
   }
 
+  console.log(`[chief] ensureMeetingParticipants result: ${participantIds.length} participants, created: [${createdAgentNames.join(', ')}]`);
   return { participantIds, createdAgentNames };
 }
 

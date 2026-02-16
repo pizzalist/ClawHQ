@@ -123,12 +123,15 @@ const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
  * When all contributions are in, a consolidated report is generated.
  */
 export function startPlanningMeeting(title: string, description: string, participantIds: string[], character?: MeetingCharacter): Meeting {
+  console.log(`[meeting] startPlanningMeeting: requested ${participantIds.length} participants:`, participantIds);
   // === Hard participant count check: validate ALL agents exist before starting ===
   const validatedIds: string[] = [];
   for (const agentId of participantIds) {
     const agent = getAgent(agentId);
     if (agent) {
       validatedIds.push(agentId);
+    } else {
+      console.warn(`[meeting] Agent not found, skipping: ${agentId}`);
     }
   }
   // Auto-reinforce: if validated < requested, create missing agents to fill the gap
@@ -151,6 +154,7 @@ export function startPlanningMeeting(title: string, description: string, partici
     }
   }
 
+  console.log(`[meeting] After validation+reinforcement: ${validatedIds.length} participants:`, validatedIds);
   const meeting = createMeeting(title, description, 'planning', validatedIds, character);
   let startedContributions = 0;
 
