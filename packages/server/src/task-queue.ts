@@ -38,17 +38,31 @@ function rowToTask(row: Record<string, unknown>): Task {
     status: row.status as TaskStatus,
     result: (row.result as string) ?? null,
     parentTaskId: (row.parent_task_id as string) ?? null,
+    isTest: !!(row.is_test as number),
     expectedDeliverables: row.expected_deliverables ? JSON.parse(row.expected_deliverables as string) : undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
 }
 
-export function listTasks(): Task[] {
-  return (stmts.listTasks.all() as Record<string, unknown>[]).map(rowToTask);
+export function listTasks(includeTest = false): Task[] {
+  const rows = includeTest ? stmts.listTasksIncludeTest.all() : stmts.listTasks.all();
+  return (rows as Record<string, unknown>[]).map(rowToTask);
 }
 
-export function createTask(title: string, description: string, assigneeId?: string | null, parentTaskId?: string | null, expectedDeliverables?: string[]): Task {
+function shouldForceTestTask(title: string, description: string): boolean {
+  const text = `${title}\n${description}`.toLowerCase();
+  return /(\bqc\b|\bqa\b|자동\s*검증|auto\s*validation|내부\s*핫픽스|internal\s*hotfix|테스트|test\s*flow)/i.test(text);
+}
+
+export function createTask(
+  title: string,
+  description: string,
+  assigneeId?: string | null,
+  parentTaskId?: string | null,
+  expectedDeliverables?: string[],
+  opts?: { isTest?: boolean }
+): Task {
   // Auto-detect deliverable type if not explicitly provided
   if (!expectedDeliverables || expectedDeliverables.length === 0) {
     // If assigneeId is provided, use role-aware detection
@@ -66,7 +80,15 @@ export function createTask(title: string, description: string, assigneeId?: stri
     }
   }
   const id = uuid();
-  stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
+  const isTest = opts?.isTest === true || shouldForceTestTask(title, description);
+  stmts.insertTask.run(
+    id,
+    title,
+    description,
+    parentTaskId || null,
+    expectedDeliverables ? JSON.stringify(expectedDeliverables) : null,
+    isTest ? 1 : 0,
+  );
 
   // Default owner policy: root tasks go to PM first (unless explicitly assigned)
   let resolvedAssigneeId = assigneeId || null;
@@ -529,7 +551,8 @@ function spawnChainFollowUp(agentId: string, taskId: string, title: string, resu
       }
     }
 
-    const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables);
+    const sourceTask = rowToTask(stmts.getTask.get(taskId) as Record<string, unknown>);
+    const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables, { isTest: sourceTask.isTest });
     emitTaskEvent('chain_spawned', nextAgentId, newTask.id,
       `🔗 Chain: ${agent.name} (${prevStepLabel}) → ${nextAgentName} (${stepLabel})`);
 

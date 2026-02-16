@@ -356,12 +356,54 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             nextStepLines.push('\n\n📌 **다음 단계:** 리뷰 미팅 결과를 바탕으로 실행 작업을 생성할 수 있습니다. 어떤 작업이 필요한가요?');
           }
         } else if (meeting.sourceMeetingId) {
-          // Review meeting confirmed
+          // Review meeting confirmed → auto-create spec task
           const rec = meeting.decisionPacket?.recommendation;
           if (rec) {
-            nextStepLines.push(`\n\n📌 **다음 단계:** 추천안 "${rec.name}"을 기반으로 실행 작업을 생성하겠습니다. 구체적인 작업 지시를 해주세요.`);
+            const taskTitle = `[기획/명세서] ${rec.name}`;
+            const taskDesc = [
+              `회의 "${meeting.title}" 확정 결과 기반 자동 생성 태스크입니다.`,
+              ``,
+              `## 추천안`,
+              `- 이름: ${rec.name}`,
+              rec.summary ? `- 요약: ${rec.summary}` : '',
+              rec.score != null ? `- 점수: ${Number(rec.score).toFixed(2)}` : '',
+              ``,
+              `## 요구사항`,
+              `위 추천안을 기반으로 상세 기획서 및 개발 명세서를 작성하세요.`,
+              `- 기능 요구사항 정의`,
+              `- 기술 스택 및 아키텍처 제안`,
+              `- MVP 범위 및 마일스톤`,
+              `- 리스크 및 대응 방안`,
+            ].filter(Boolean).join('\n');
+
+            // Find or create a PM agent for assignment
+            const agents = listAgents();
+            let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle');
+            if (!pmAgent) pmAgent = agents.find(a => a.role === 'pm');
+            if (!pmAgent) {
+              pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+            }
+
+            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+            setTimeout(() => processQueue(), 200);
+
+            nextStepLines.push(`\n\n🚀 **자동 실행:** 추천안 "${rec.name}" 기반 기획/명세서 작성 태스크를 생성하여 ${pmAgent.name}에게 배정했습니다.`);
+            nextStepLines.push(`📋 태스크: "${taskTitle}"`);
+            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
           } else {
-            nextStepLines.push('\n\n📌 **다음 단계:** 확정된 결과를 바탕으로 실행 작업을 생성할 수 있습니다. 어떤 작업이 필요한가요?');
+            // No recommendation — still auto-create a generic spec task
+            const taskTitle = `[기획/명세서] ${meeting.title} 확정안`;
+            const taskDesc = `회의 "${meeting.title}" 확정 결과를 기반으로 상세 기획서 및 개발 명세서를 작성하세요.`;
+            const agents = listAgents();
+            let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
+            if (!pmAgent) {
+              pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+            }
+            const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
+            setTimeout(() => processQueue(), 200);
+
+            nextStepLines.push(`\n\n🚀 **자동 실행:** 확정 결과 기반 기획/명세서 작성 태스크를 생성하여 ${pmAgent.name}에게 배정했습니다.`);
+            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
           }
         } else {
           nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
@@ -706,25 +748,8 @@ export function chiefHandleMeetingChange() {
         }
       }
 
-      const isReviewMeeting = !!(meeting.sourceMeetingId);
-      const checkInMessage = isReviewMeeting
-        ? `리뷰 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 리뷰어가 후보 점수화를 완료했습니다.\n최종 추천안을 확인하고 확정 또는 수정 요청해주세요.`
-        : `회의 완료: "${meeting.title}" 🏛️\n${contributionCount}명의 전문가가 각자 관점에서 분석을 완료했습니다. 결과를 확인해주세요.`;
-
-      // Dedup: skip checkin if already emitted for this meeting
-      if (!isNotificationDuplicate('checkin_meeting', meeting.id)) {
-        emitCheckIn({
-          id: `checkin-meeting-${meeting.id}-${Date.now()}`,
-          stage: 'decision',
-          message: checkInMessage,
-          options: [
-            { id: 'approve', label: '✅ 확정', description: isReviewMeeting ? '최종 추천안을 확정합니다' : '회의 결과를 확정합니다' },
-            { id: 'revise', label: '🔄 수정 요청', description: '추가 논의가 필요합니다' },
-          ],
-          meetingId: meeting.id,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      // Check-in removed: notification card above already provides 확정/수정요청 buttons.
+      // Emitting both caused duplicate cards and duplicate meeting result content (Bug #2 & #3).
     }
   }
 }
@@ -977,13 +1002,19 @@ function isTaskIdPlaceholder(value?: string): boolean {
   return TASK_ID_PLACEHOLDER_RE.test(v);
 }
 
+function normalizeTaskId(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function bindActionWithRuntimeContext(action: ChiefAction, runtime: { lastCreatedTaskId?: string | null }): ChiefAction {
   if (action.type !== 'assign_task' && action.type !== 'cancel_task') return action;
 
-  const rawTaskId = action.params.taskId;
+  const rawTaskId = normalizeTaskId(action.params.taskId);
   if (!isTaskIdPlaceholder(rawTaskId)) return action;
 
-  const boundTaskId = runtime.lastCreatedTaskId || undefined;
+  const boundTaskId = runtime.lastCreatedTaskId ?? undefined;
   if (!boundTaskId) return action;
 
   return {
@@ -1270,7 +1301,8 @@ function executeAction(action: ChiefAction): ChiefAction {
         return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨${createdMsg}`, id: meeting.id } };
       }
       case 'assign_task': {
-        const { taskId, agentId } = action.params;
+        const taskId = normalizeTaskId(action.params.taskId);
+        const agentId = String(action.params.agentId ?? '').trim();
         if (!taskId || !agentId) {
           return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
         }
@@ -1297,7 +1329,7 @@ function executeAction(action: ChiefAction): ChiefAction {
         return { ...action, result: { ok: true, message: `작업 "${task.title}"를 ${agent.name}에게 배정했습니다.` } };
       }
       case 'cancel_task': {
-        const { taskId } = action.params;
+        const taskId = normalizeTaskId(action.params.taskId);
         if (!taskId) {
           return { ...action, result: { ok: false, message: 'taskId가 필요합니다' } };
         }

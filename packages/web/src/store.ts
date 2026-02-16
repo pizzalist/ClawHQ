@@ -56,6 +56,10 @@ function persistChiefState(state: PersistedChiefState) {
 
 const persistedChiefState = loadPersistedChiefState();
 
+function filterVisibleTasks(tasks: Task[]): Task[] {
+  return (tasks || []).filter((task) => !task.isTest);
+}
+
 interface Store {
   agents: Agent[];
   tasks: Task[];
@@ -149,7 +153,7 @@ export const useStore = create<Store>((set, get) => ({
     agents,
     selectedAgentId: s.selectedAgentId && agents.some((a) => a.id === s.selectedAgentId) ? s.selectedAgentId : s.selectedAgentId,
   })),
-  setTasks: (tasks) => set({ tasks }),
+  setTasks: (tasks) => set({ tasks: filterVisibleTasks(tasks) }),
   setMeetings: (meetings) => set({ meetings }),
   setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({
     chiefMessages: Array.isArray(chiefMessages) ? chiefMessages : [],
@@ -296,7 +300,7 @@ export const useStore = create<Store>((set, get) => ({
         chiefProposedActions: [],
         chiefPendingMessageId: null,
         agents: data.state?.agents || get().agents,
-        tasks: data.state?.tasks || get().tasks,
+        tasks: filterVisibleTasks(data.state?.tasks || get().tasks),
         meetings: data.state?.meetings || get().meetings,
       }));
     } catch (e: unknown) {
@@ -418,7 +422,7 @@ export const useStore = create<Store>((set, get) => ({
   setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   init: (state) => {
-    set({ agents: state.agents, tasks: state.tasks, events: state.events, meetings: state.meetings || [], selectedAgentId: null, initialized: true });
+    set({ agents: state.agents, tasks: filterVisibleTasks(state.tasks), events: state.events, meetings: state.meetings || [], selectedAgentId: null, initialized: true });
     setTimeout(() => { get().refreshActiveChainPlans(); }, 0);
   },
   setLoading: (key, v) => set((s) => ({ loading: { ...s.loading, [key]: v } })),

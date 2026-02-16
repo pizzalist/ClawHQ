@@ -348,6 +348,7 @@ app.get('/api/tasks/:id', (req, res) => {
     status: row.status as string,
     result: (row.result as string) ?? null,
     parentTaskId: (row.parent_task_id as string) ?? null,
+    isTest: !!(row.is_test as number),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -368,9 +369,17 @@ app.get('/api/tasks/:id/thread-summary', (req, res) => {
   }
 });
 
+function allowIncludeTestQuery(query: Record<string, unknown>): boolean {
+  const includeTest = query.includeTest === '1' || query.includeTest === 'true';
+  if (!includeTest) return false;
+  const isAdminOrDebug = query.admin === '1' || query.admin === 'true' || query.debug === '1' || query.debug === 'true';
+  return isAdminOrDebug;
+}
+
 app.get('/api/tasks', (req, res) => {
   const { assigneeId } = req.query;
-  const tasks = listTasks();
+  const includeTest = allowIncludeTestQuery(req.query as Record<string, unknown>);
+  const tasks = listTasks(includeTest);
   if (typeof assigneeId === 'string') {
     return res.json(tasks.filter((t) => t.assigneeId === assigneeId));
   }
@@ -383,7 +392,7 @@ app.post('/api/tasks', (req, res) => {
     return res.status(400).json({ error: 'title is required' });
   }
   try {
-    const task = createTask(title, description || '', assigneeId || null, null, expectedDeliverables || undefined);
+    const task = createTask(title, description || '', assigneeId || null, null, expectedDeliverables || undefined, { isTest: false });
     res.status(201).json(task);
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -798,6 +807,12 @@ app.post('/api/admin/cleanup-test-agents', (_req, res) => {
   const result = cleanupTestAgents();
   broadcast({ type: 'agents_update', payload: listAgents() });
   res.json({ ok: true, ...result });
+});
+
+app.post('/api/admin/cleanup-test-tasks', (_req, res) => {
+  const deleted = (stmts.deleteTestTasks.run() as { changes: number }).changes || 0;
+  broadcast({ type: 'tasks_update', payload: listTasks() });
+  res.json({ ok: true, deleted });
 });
 
 app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {

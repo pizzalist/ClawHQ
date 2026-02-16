@@ -10,6 +10,7 @@
     "dev:server": "npm run dev -w @ai-office/server",
     "dev:web": "npm run dev -w @ai-office/web",
     "qa:post-deploy": "npm run qa:post-deploy -w @ai-office/server",
+    "ops:cleanup-test-tasks": "node scripts/cleanup-test-tasks.mjs",
     "docker:build": "docker build -t ai-office .",
     "docker:run": "docker compose up -d"
   },

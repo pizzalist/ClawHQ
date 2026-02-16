@@ -33,15 +33,21 @@ function rowToTask(row) {
         status: row.status,
         result: row.result ?? null,
         parentTaskId: row.parent_task_id ?? null,
+        isTest: !!row.is_test,
         expectedDeliverables: row.expected_deliverables ? JSON.parse(row.expected_deliverables) : undefined,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
 }
-export function listTasks() {
-    return stmts.listTasks.all().map(rowToTask);
+export function listTasks(includeTest = false) {
+    const rows = includeTest ? stmts.listTasksIncludeTest.all() : stmts.listTasks.all();
+    return rows.map(rowToTask);
 }
-export function createTask(title, description, assigneeId, parentTaskId, expectedDeliverables) {
+function shouldForceTestTask(title, description) {
+    const text = `${title}\n${description}`.toLowerCase();
+    return /(\bqc\b|\bqa\b|자동\s*검증|auto\s*validation|내부\s*핫픽스|internal\s*hotfix|테스트|test\s*flow)/i.test(text);
+}
+export function createTask(title, description, assigneeId, parentTaskId, expectedDeliverables, opts) {
     // Auto-detect deliverable type if not explicitly provided
     if (!expectedDeliverables || expectedDeliverables.length === 0) {
         // If assigneeId is provided, use role-aware detection
@@ -61,7 +67,8 @@ export function createTask(title, description, assigneeId, parentTaskId, expecte
         }
     }
     const id = uuid();
-    stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null);
+    const isTest = opts?.isTest === true || shouldForceTestTask(title, description);
+    stmts.insertTask.run(id, title, description, parentTaskId || null, expectedDeliverables ? JSON.stringify(expectedDeliverables) : null, isTest ? 1 : 0);
     // Default owner policy: root tasks go to PM first (unless explicitly assigned)
     let resolvedAssigneeId = assigneeId || null;
     if (!resolvedAssigneeId && !parentTaskId) {
@@ -508,7 +515,8 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
                 chainedDeliverables = [detectDeliverableTypeForRole(originalExpected[0], nextAgent.role)];
             }
         }
-        const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables);
+        const sourceTask = rowToTask(stmts.getTask.get(taskId));
+        const newTask = createTask(chainTitle, chainDesc, nextAgentId, taskId, chainedDeliverables, { isTest: sourceTask.isTest });
         emitTaskEvent('chain_spawned', nextAgentId, newTask.id, `🔗 Chain: ${agent.name} (${prevStepLabel}) → ${nextAgentName} (${stepLabel})`);
         return { spawned: true, nextRole };
     }

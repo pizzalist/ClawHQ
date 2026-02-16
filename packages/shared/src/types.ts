@@ -28,6 +28,7 @@ export interface Task {
   status: TaskStatus;
   result: string | null;
   parentTaskId: string | null;
+  isTest: boolean;
   taskType?: TaskType;
   linkedMeetingId?: string | null;
   expectedDeliverables?: DeliverableType[];

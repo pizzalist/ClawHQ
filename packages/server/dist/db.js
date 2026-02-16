@@ -155,6 +155,11 @@ try {
     db.exec(`ALTER TABLE tasks ADD COLUMN expected_deliverables TEXT`);
 }
 catch { /* column already exists */ }
+// Migration: add is_test to tasks for production-board isolation
+try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+}
+catch { /* column already exists */ }
 // Prepared statements
 export const stmts = {
     listAgents: db.prepare('SELECT * FROM agents ORDER BY desk_index'),
@@ -173,11 +178,12 @@ export const stmts = {
     deleteAllAgents: db.prepare('DELETE FROM agents'),
     findAgentByRole: db.prepare('SELECT * FROM agents WHERE role = ? AND state = \'idle\' AND is_test = 0 LIMIT 1'),
     markAgentTest: db.prepare('UPDATE agents SET is_test = ? WHERE id = ?'),
-    listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
+    listTasks: db.prepare('SELECT * FROM tasks WHERE is_test = 0 ORDER BY created_at DESC LIMIT 100'),
+    listTasksIncludeTest: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 300'),
     getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),
     insertTask: db.prepare(`
-    INSERT INTO tasks (id, title, description, status, parent_task_id, expected_deliverables, created_at, updated_at)
-    VALUES (?, ?, ?, 'pending', ?, ?, datetime('now'), datetime('now'))
+    INSERT INTO tasks (id, title, description, status, parent_task_id, expected_deliverables, is_test, created_at, updated_at)
+    VALUES (?, ?, ?, 'pending', ?, ?, ?, datetime('now'), datetime('now'))
   `),
     updateTask: db.prepare(`
     UPDATE tasks SET assignee_id = ?, status = ?, result = ?, updated_at = datetime('now')
@@ -185,8 +191,8 @@ export const stmts = {
   `),
     cancelTask: db.prepare("UPDATE tasks SET status = 'cancelled', result = 'Cancelled by Chief', updated_at = datetime('now') WHERE id = ?"),
     cancelAllPending: db.prepare("UPDATE tasks SET status = 'cancelled', result = 'Cancelled by Chief', updated_at = datetime('now') WHERE status = 'pending'"),
-    pendingTasks: db.prepare("SELECT * FROM tasks WHERE status = 'pending' ORDER BY created_at LIMIT 10"),
-    activeTasks: db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'in-progress'"),
+    pendingTasks: db.prepare("SELECT * FROM tasks WHERE status = 'pending' AND is_test = 0 ORDER BY created_at LIMIT 10"),
+    activeTasks: db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = 'in-progress' AND is_test = 0"),
     // Stats queries
     taskCounts: db.prepare(`
     SELECT
@@ -196,12 +202,13 @@ export const stmts = {
       SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
       SUM(CASE WHEN status = 'in-progress' THEN 1 ELSE 0 END) as in_progress
     FROM tasks
+    WHERE is_test = 0
   `),
     avgCompletionTime: db.prepare(`
     SELECT AVG(
       (julianday(updated_at) - julianday(created_at)) * 86400000
     ) as avg_ms
-    FROM tasks WHERE status = 'completed'
+    FROM tasks WHERE status = 'completed' AND is_test = 0
   `),
     perAgentStats: db.prepare(`
     SELECT
@@ -215,7 +222,7 @@ export const stmts = {
         ELSE NULL END) as avg_time_ms
     FROM tasks t
     JOIN agents a ON a.id = t.assignee_id
-    WHERE t.assignee_id IS NOT NULL
+    WHERE t.assignee_id IS NOT NULL AND t.is_test = 0
     GROUP BY t.assignee_id
     ORDER BY completed DESC
   `),
@@ -225,7 +232,7 @@ export const stmts = {
            t.result as error, t.updated_at as failed_at
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.assignee_id
-    WHERE t.status = 'failed'
+    WHERE t.status = 'failed' AND t.is_test = 0
     ORDER BY t.updated_at DESC
     LIMIT 100
   `),
@@ -287,6 +294,9 @@ export const stmts = {
     deleteAllProposals: db.prepare('DELETE FROM proposals'),
     deleteAllDecisionItems: db.prepare('DELETE FROM decision_items'),
     deleteAllTasks: db.prepare('DELETE FROM tasks'),
+    listTestTasks: db.prepare('SELECT * FROM tasks WHERE is_test = 1 ORDER BY created_at DESC'),
+    markTaskTestById: db.prepare('UPDATE tasks SET is_test = 1, updated_at = datetime(\'now\') WHERE id = ?'),
+    deleteTestTasks: db.prepare('DELETE FROM tasks WHERE is_test = 1'),
     deleteAllMeetings: db.prepare('DELETE FROM meetings'),
     deleteAllEvents: db.prepare('DELETE FROM events'),
     listLegacyMeetings: db.prepare(`

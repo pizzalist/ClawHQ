@@ -50,14 +50,17 @@ function MeetingReport({ report }: { report: string }) {
 }
 
 function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: DecisionPacket }) {
+  const [expandedCandidate, setExpandedCandidate] = useState<string | null>(null);
   const candidateNames = meeting.sourceCandidates?.map(c => c.name) || [];
+  const candidateMap = new Map((meeting.sourceCandidates || []).map(c => [c.name, c]));
   const rows = candidateNames.map((name) => {
     const scores = packet.reviewerScoreCards
       .map(card => card.scores.find(s => s.candidateName === name)?.score)
       .filter((v): v is number => typeof v === 'number');
     const total = scores.reduce((a, b) => a + b, 0);
     const avg = scores.length > 0 ? total / scores.length : 0;
-    return { name, scores, total, avg };
+    const candidate = candidateMap.get(name);
+    return { name, summary: candidate?.summary || '', scores, total, avg };
   }).sort((a, b) => b.avg - a.avg);
 
   return (
@@ -71,6 +74,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
             <thead className="bg-gray-800/70 text-gray-300">
               <tr>
                 <th className="text-left px-3 py-2">후보</th>
+                <th className="text-left px-3 py-2">설명</th>
                 <th className="text-left px-3 py-2">리뷰어 점수</th>
                 <th className="text-right px-3 py-2">총점</th>
                 <th className="text-right px-3 py-2">평균</th>
@@ -78,12 +82,32 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.name} className="border-t border-gray-700/40 text-gray-200">
-                  <td className="px-3 py-2 font-medium">{r.name}</td>
-                  <td className="px-3 py-2">{r.scores.length > 0 ? r.scores.map((s) => s.toFixed(1)).join(' / ') : '-'}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{r.total.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{r.avg.toFixed(2)}</td>
-                </tr>
+                <>
+                  <tr key={r.name} className="border-t border-gray-700/40 text-gray-200">
+                    <td className="px-3 py-2 font-medium">
+                      <button
+                        onClick={() => setExpandedCandidate(expandedCandidate === r.name ? null : r.name)}
+                        className="text-left hover:text-accent transition-colors"
+                        title="클릭하여 상세 보기"
+                      >
+                        {r.name} {r.summary ? (expandedCandidate === r.name ? '▾' : '▸') : ''}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 max-w-[200px] truncate" title={r.summary}>
+                      {r.summary ? r.summary.slice(0, 60) + (r.summary.length > 60 ? '...' : '') : '-'}
+                    </td>
+                    <td className="px-3 py-2">{r.scores.length > 0 ? r.scores.map((s) => s.toFixed(1)).join(' / ') : '-'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.total.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.avg.toFixed(2)}</td>
+                  </tr>
+                  {expandedCandidate === r.name && r.summary && (
+                    <tr key={`${r.name}-detail`} className="bg-gray-800/30">
+                      <td colSpan={5} className="px-4 py-3 text-xs text-gray-300 whitespace-pre-wrap">
+                        <span className="text-gray-500 font-semibold">📝 상세:</span> {r.summary}
+                      </td>
+                    </tr>
+                  )}
+                </>
               ))}
             </tbody>
           </table>
