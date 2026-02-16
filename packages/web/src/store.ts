@@ -293,14 +293,22 @@ export const useStore = create<Store>((set, get) => ({
       const executedCount = data.executedActions?.filter((a: ChiefAction) => a.result?.ok).length ?? 0;
       toast(`총괄자 제안 승인: ${executedCount}건 실행 완료`, 'success');
 
-      set((s) => ({
-        chiefExecutedActions: data.executedActions || [],
-        chiefProposedActions: [],
-        chiefPendingMessageId: null,
-        agents: data.state?.agents || get().agents,
-        tasks: filterVisibleTasks(data.state?.tasks || get().tasks),
-        meetings: data.state?.meetings || get().meetings,
-      }));
+      set((s) => {
+        // Sync chief messages from server to ensure console shows execution feedback
+        const serverMessages = data.messages as ChiefChatMessage[] | undefined;
+        const mergedMessages = serverMessages && serverMessages.length > 0
+          ? serverMessages  // Server is authoritative — replace local messages
+          : s.chiefMessages;
+        return {
+          chiefMessages: mergedMessages,
+          chiefExecutedActions: data.executedActions || [],
+          chiefProposedActions: [],
+          chiefPendingMessageId: null,
+          agents: data.state?.agents || get().agents,
+          tasks: filterVisibleTasks(data.state?.tasks || get().tasks),
+          meetings: data.state?.meetings || get().meetings,
+        };
+      });
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : '제안 승인에 실패했어요', 'error');
     } finally {

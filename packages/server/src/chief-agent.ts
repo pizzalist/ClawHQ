@@ -1514,6 +1514,7 @@ export function approveProposal(
   executedActions: ChiefAction[];
   skippedActions: ChiefAction[];
   stoppedReason?: string;
+  messages: ChiefChatMessage[];
   state: { agents: any[]; tasks: any[]; meetings: any[] };
 } {
   const actions = pendingProposals.get(messageId);
@@ -1633,6 +1634,7 @@ export function approveProposal(
     executedActions,
     skippedActions,
     stoppedReason,
+    messages: getChiefMessages(lastActiveChiefSessionId || 'chief-default'),
     state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
   };
 }
