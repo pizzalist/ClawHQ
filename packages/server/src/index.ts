@@ -199,7 +199,7 @@ app.post('/api/chief/action', (req, res) => {
       state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
       sessionId: result.sessionId,
     }});
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, ...result, state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() } });
   } catch {
     res.status(400).json({ error: '요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.' });
   }

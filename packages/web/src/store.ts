@@ -239,13 +239,31 @@ export const useStore = create<Store>((set, get) => ({
         body: JSON.stringify({ notificationId, actionId, params, sessionId: currentSession }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-      await res.json();
-      // chief/action 응답 메시지는 서버 WS(chief_response)로 단일 반영한다.
-      // 여기서도 push하면 동일 "확정되었습니다" 메시지가 중복 출력될 수 있음.
-      set((s) => ({
-        chiefNotifications: s.chiefNotifications.filter(n => n.id !== notificationId),
-        chiefPendingDecisions: Math.max(0, s.chiefPendingDecisions - 1),
-      }));
+      const data = await res.json();
+      // Add reply directly from HTTP response (WS broadcast may be missed/delayed)
+      const replyText = (data.reply || '').trim();
+      set((s) => {
+        const newMessages = replyText
+          ? (() => {
+              const msgId = `action-reply-${notificationId}-${Date.now()}`;
+              // Skip if WS already delivered a message with same content recently
+              const isDup = s.chiefMessages.some(m => m.role === 'chief' && m.content === replyText
+                && Date.now() - new Date(m.createdAt).getTime() < 5000);
+              if (isDup) return s.chiefMessages;
+              const chiefMsg: ChiefChatMessage = { id: msgId, role: 'chief', content: replyText, createdAt: new Date().toISOString() };
+              return [...s.chiefMessages, chiefMsg];
+            })()
+          : s.chiefMessages;
+        return {
+          chiefMessages: newMessages,
+          chiefNotifications: s.chiefNotifications.filter(n => n.id !== notificationId),
+          chiefPendingDecisions: Math.max(0, s.chiefPendingDecisions - 1),
+          // Update state from server if available
+          agents: data.state?.agents || s.agents,
+          tasks: data.state?.tasks ? filterVisibleTasks(data.state.tasks) : s.tasks,
+          meetings: data.state?.meetings || s.meetings,
+        };
+      });
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : 'Failed to handle action', 'error');
     }

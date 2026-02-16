@@ -246,6 +246,11 @@ export function shouldAutoChain(taskId: string): { nextRole: AgentRole; planId: 
  * Check if a task has a pending chain plan awaiting user confirmation.
  * Used by handleRunComplete to decide whether to pause and notify user.
  */
+/** Register a sub-task ID so it maps to the same chain plan as the root task. */
+export function linkTaskToChainPlan(taskId: string, planId: string): void {
+  taskPlanIndex.set(taskId, planId);
+}
+
 export function hasPendingChainPlan(taskId: string): boolean {
   const plan = getChainPlanForTask(taskId);
   if (!plan) return false;

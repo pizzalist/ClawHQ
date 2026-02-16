@@ -4,7 +4,7 @@ import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './a
 import { listTasks, createTask, processQueue, isBatchComplete, getBatchResults, getTasksByBatchId } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings, deleteMeeting, deleteAllMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
-import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan } from './chain-plan.js';
+import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan, linkTaskToChainPlan } from './chain-plan.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
@@ -423,8 +423,11 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
             const nextTitle = `[${nextStep.label}] ${task?.title || ''}`.trim();
             const nextDesc = `이전 단계 결과를 기반으로 ${nextStep.label}을(를) 수행하세요.\n\n${nextStep.reason}\n\n## 이전 결과\n${(task?.result || '').slice(0, 2000)}`;
-            const newTask = createTask(nextTitle, nextDesc, nextAgent.id);
-            setTimeout(() => processQueue(), 200);
+            const newTask = createTask(nextTitle, nextDesc, nextAgent.id, taskId);
+            // Link new task to same chain plan so handleRunComplete can find it
+            linkTaskToChainPlan(newTask.id, chainPlan.id);
+            // Delay processQueue enough for agent to transition to idle (2s idle delay + buffer)
+            setTimeout(() => processQueue(), 3000);
 
             nextStepLines.push(`\n\n🚀 **자동 실행:** 다음 단계 "${nextStep.label}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
             nextStepLines.push(`📋 태스크: "${nextTitle}"`);
@@ -479,8 +482,8 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
         const nextTaskTitle = `[${nextLabel}] ${task.title}`;
         const nextTaskDesc = `이전 태스크 "${task.title}" 결과를 기반으로 ${nextLabel}을(를) 수행하세요.\n\n## 이전 결과\n${(task.result || '').slice(0, 2000)}`;
-        const newTask = createTask(nextTaskTitle, nextTaskDesc, nextAgent.id);
-        setTimeout(() => processQueue(), 200);
+        const newTask = createTask(nextTaskTitle, nextTaskDesc, nextAgent.id, taskId);
+        setTimeout(() => processQueue(), 3000);
 
         nextStepLines.push(`\n\n🚀 **자동 실행:** "${nextLabel}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
         nextStepLines.push(`📋 태스크: "${nextTaskTitle}"`);
