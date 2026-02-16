@@ -8,6 +8,7 @@
     "test:chain": "tsx src/task-queue.chain.test.ts",
     "test:chief-intent": "tsx src/chief-agent.intent-regression.test.ts",
     "test:ux-hotfix": "tsx src/ux-hotfix.regression.test.ts",
+    "test:meeting-transaction": "tsx src/chief-agent.meeting-transaction.regression.test.ts",
     "qa:post-deploy": "tsx src/post-deploy-qa.ts",
     "start": "node dist/index.js"
   },

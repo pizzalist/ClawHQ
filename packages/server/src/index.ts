@@ -141,12 +141,14 @@ app.post('/api/chief/chat', (req, res) => {
 });
 
 app.post('/api/chief/proposal/approve', (req, res) => {
-  const { messageId, selectedIndices, overrideActions } = req.body || {};
+  const { messageId, selectedIndices, overrideActions, continueOnError } = req.body || {};
   if (!messageId || typeof messageId !== 'string') {
     return res.status(400).json({ error: 'messageId is required' });
   }
   try {
-    const result = approveProposal(messageId, selectedIndices, overrideActions);
+    const result = approveProposal(messageId, selectedIndices, overrideActions, {
+      continueOnError: continueOnError === true,
+    });
     // Broadcast all updated state + chief messages so chat feedback appears
     broadcast({ type: 'agents_update', payload: listAgents() });
     broadcast({ type: 'tasks_update', payload: listTasks() });

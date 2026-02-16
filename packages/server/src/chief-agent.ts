@@ -681,6 +681,95 @@ function shouldSuppressActionsByIntent(intent: 'status' | 'simple_action' | 'def
   return intent === 'status' || intent === 'definition';
 }
 
+const ALL_AGENT_ROLES: AgentRole[] = ['pm', 'developer', 'reviewer', 'designer', 'devops', 'qa'];
+
+function isAgentRole(value: string): value is AgentRole {
+  return (ALL_AGENT_ROLES as string[]).includes(value);
+}
+
+function parseMeetingParticipantRoleCounts(raw: string | undefined): Record<AgentRole, number> {
+  const counts: Record<AgentRole, number> = { pm: 0, developer: 0, reviewer: 0, designer: 0, devops: 0, qa: 0 };
+  const input = (raw || 'pm,developer').trim().toLowerCase();
+  if (!input) {
+    counts.pm = 1;
+    counts.developer = 1;
+    return counts;
+  }
+
+  const parts = input.split(',').map(s => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    // Examples:
+    // - "pm"
+    // - "pm 2"
+    // - "pm 2명"
+    // - "2 pm"
+    // - "2명 pm"
+    const m = part.match(/^(?:([a-z가-힣]+)\s*(\d+|한|하나|일|두|둘|이|세|셋|삼|네|넷|사|다섯|오|여섯|육|일곱|칠|여덟|팔|아홉|구|열|십)\s*명?|(?:\d+|한|하나|일|두|둘|이|세|셋|삼|네|넷|사|다섯|오|여섯|육|일곱|칠|여덟|팔|아홉|구|열|십)\s*명?\s*([a-z가-힣]+))$/i);
+
+    let roleToken: string | null = null;
+    let countToken: string | null = null;
+
+    if (m) {
+      roleToken = (m[1] || m[3] || '').trim().toLowerCase();
+      countToken = (m[2] || (m[1] ? null : part.match(/(\d+|한|하나|일|두|둘|이|세|셋|삼|네|넷|사|다섯|오|여섯|육|일곱|칠|여덟|팔|아홉|구|열|십)/i)?.[1]) || '').trim();
+    } else {
+      // Fallback: role only
+      roleToken = part;
+    }
+
+    const resolvedRole = roleToken ? ROLE_ALIASES[roleToken] || (isAgentRole(roleToken) ? roleToken : null) : null;
+    if (!resolvedRole) continue;
+
+    const parsedCount = countToken ? parseKoreanOrArabicNum(countToken) : null;
+    const count = Math.max(1, Math.min(MAX_COUNT_PER_ROLE, parsedCount ?? 1));
+    counts[resolvedRole] += count;
+  }
+
+  // If parser failed to detect all tokens, keep safe default
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (total === 0) {
+    counts.pm = 1;
+    counts.developer = 1;
+  }
+  return counts;
+}
+
+function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { participantIds: string[]; createdAgentNames: string[] } {
+  const participantIds: string[] = [];
+  const createdAgentNames: string[] = [];
+
+  const pushExistingOrCreate = (role: AgentRole) => {
+    const currentIds = new Set(participantIds);
+    const agents = listAgents();
+    const idle = agents.find(a => a.role === role && a.state === 'idle' && !currentIds.has(a.id));
+    const any = agents.find(a => a.role === role && !currentIds.has(a.id));
+    const selected = idle || any;
+
+    if (selected) {
+      participantIds.push(selected.id);
+      return;
+    }
+
+    const created = createAgent(suggestFriendlyAgentName(role), role, DEFAULT_MODEL_BY_ROLE[role]);
+    participantIds.push(created.id);
+    createdAgentNames.push(created.name);
+  };
+
+  for (const role of ALL_AGENT_ROLES) {
+    const needed = Math.max(0, roleCounts[role] || 0);
+    for (let i = 0; i < needed; i++) pushExistingOrCreate(role);
+  }
+
+  // Hard minimum guarantee: at least 2 participants
+  const orderedRequested = ALL_AGENT_ROLES.filter(r => (roleCounts[r] || 0) > 0);
+  const fallbackRole = orderedRequested[0] || 'developer';
+  while (participantIds.length < 2) {
+    pushExistingOrCreate(fallbackRole);
+  }
+
+  return { participantIds, createdAgentNames };
+}
+
 /** Execute a single parsed action. Called only after user approval. */
 function executeAction(action: ChiefAction): ChiefAction {
   try {
@@ -724,22 +813,25 @@ function executeAction(action: ChiefAction): ChiefAction {
       }
       case 'start_meeting': {
         const { title, participants, character } = action.params;
-        const roles = (participants || 'pm,developer').split(',').map(r => r.trim());
-        const agents = listAgents();
-        const participantIds = roles
-          .map(role => agents.find(a => a.role === role && a.state === 'idle'))
-          .filter(Boolean)
-          .map(a => a!.id);
+        const roleCounts = parseMeetingParticipantRoleCounts(participants);
+        const { participantIds, createdAgentNames } = ensureMeetingParticipants(roleCounts);
+
         if (participantIds.length < 2) {
-          return { ...action, result: { ok: false, message: '미팅 참여자가 부족합니다 (최소 2명 필요)' } };
+          return { ...action, result: { ok: false, message: '미팅 참여자 자동 구성 실패 (최소 2명 필요)' } };
         }
+
         const meeting = startPlanningMeeting(
           title || '총괄자 미팅',
           `총괄자가 시작한 미팅`,
           participantIds,
           (character as any) || 'planning',
         );
-        return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨`, id: meeting.id } };
+
+        const createdMsg = createdAgentNames.length > 0
+          ? ` (부족 인원 자동 생성: ${createdAgentNames.join(', ')})`
+          : '';
+
+        return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨${createdMsg}`, id: meeting.id } };
       }
       case 'assign_task': {
         const { taskId, agentId } = action.params;
@@ -807,12 +899,23 @@ function executeAction(action: ChiefAction): ChiefAction {
  * `selectedIndices` allows partial approval (execute only some actions).
  * If null/undefined, all actions are executed.
  */
-export function approveProposal(messageId: string, selectedIndices?: number[], overrideActions?: ChiefAction[]): { executedActions: ChiefAction[]; state: { agents: any[]; tasks: any[]; meetings: any[] } } {
+export function approveProposal(
+  messageId: string,
+  selectedIndices?: number[],
+  overrideActions?: ChiefAction[],
+  options?: { continueOnError?: boolean },
+): {
+  executedActions: ChiefAction[];
+  skippedActions: ChiefAction[];
+  stoppedReason?: string;
+  state: { agents: any[]; tasks: any[]; meetings: any[] };
+} {
   const actions = pendingProposals.get(messageId);
   if (!actions || actions.length === 0) {
     throw new Error(`No pending proposal found for messageId: ${messageId}`);
   }
 
+  const continueOnError = options?.continueOnError === true;
   const base = overrideActions && overrideActions.length > 0 ? overrideActions : actions;
   const toExecute = selectedIndices
     ? selectedIndices.filter(i => i >= 0 && i < base.length).map(i => base[i])
@@ -824,12 +927,15 @@ export function approveProposal(messageId: string, selectedIndices?: number[], o
   pushMessage('chief-default', {
     id: `approval-ack-${Date.now()}`,
     role: 'chief',
-    content: `✅ **승인됨** — ${totalCount}건의 액션을 실행합니다.`,
+    content: `✅ **승인됨** — ${totalCount}건의 액션을 실행합니다. (정책: ${continueOnError ? 'continue-on-error' : 'fail-fast'})`,
     createdAt: new Date().toISOString(),
   });
 
   // Execute each action with individual feedback
   const executedActions: ChiefAction[] = [];
+  let stoppedReason: string | undefined;
+  let stopIndex = -1;
+
   for (let i = 0; i < toExecute.length; i++) {
     const action = toExecute[i];
     const stepLabel = `[${i + 1}/${totalCount}]`;
@@ -855,6 +961,23 @@ export function approveProposal(messageId: string, selectedIndices?: number[], o
         : `❌ ${stepLabel} 실패: ${executed.result?.message || '알 수 없는 오류'}`,
       createdAt: new Date().toISOString(),
     });
+
+    if (!ok && !continueOnError) {
+      stoppedReason = `${stepLabel} 실패로 인해 후속 액션 중단 (${executed.result?.message || '알 수 없는 오류'})`;
+      stopIndex = i;
+      break;
+    }
+  }
+
+  const skippedActions = stopIndex >= 0 ? toExecute.slice(stopIndex + 1) : [];
+  if (stoppedReason && skippedActions.length > 0) {
+    const skippedList = skippedActions.map((a, idx) => `${stopIndex + 2 + idx}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join(', ');
+    pushMessage('chief-default', {
+      id: `exec-abort-${Date.now()}`,
+      role: 'chief',
+      content: `⛔ 실행 중단: ${stoppedReason}\n미실행 액션: ${skippedList}`,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   // Feedback: all done summary + next step guide
@@ -864,6 +987,10 @@ export function approveProposal(messageId: string, selectedIndices?: number[], o
 
   let summaryMsg = `🎯 **실행 완료** — 성공 ${successCount}건`;
   if (failCount > 0) summaryMsg += `, 실패 ${failCount}건`;
+  if (stoppedReason) summaryMsg += `\n\n⛔ **중단 사유:** ${stoppedReason}`;
+  if (skippedActions.length > 0) {
+    summaryMsg += `\n🧾 **미실행 액션:** ${skippedActions.map(a => ACTION_LABEL_MAP[a.type] || a.type).join(', ')}`;
+  }
   if (pendingTasks.length > 0) {
     summaryMsg += `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• "진행중이야?"로 상태 확인 가능\n• 완료 시 자동으로 보고드립니다`;
   } else {
@@ -884,6 +1011,8 @@ export function approveProposal(messageId: string, selectedIndices?: number[], o
 
   return {
     executedActions,
+    skippedActions,
+    stoppedReason,
     state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
   };
 }
@@ -911,6 +1040,12 @@ export function rejectProposal(messageId: string): void {
 /** Get pending proposal actions for a messageId */
 export function getPendingProposal(messageId: string): ChiefAction[] | undefined {
   return pendingProposals.get(messageId);
+}
+
+// Test helper: inject pending proposal without going through LLM flow.
+export function __unsafeSetPendingProposalForTest(messageId: string, actions: ChiefAction[], sessionId = 'chief-default'): void {
+  pendingProposals.set(messageId, actions);
+  pendingProposalBySession.set(sessionId, messageId);
 }
 
 // ---- Legacy keyword-based fallback (for demo mode) ----
