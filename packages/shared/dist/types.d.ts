@@ -12,6 +12,7 @@ export interface Agent {
     currentTaskId: string | null;
     sessionId: string | null;
     deskIndex: number;
+    isTest: boolean;
     createdAt: string;
     updatedAt: string;
 }

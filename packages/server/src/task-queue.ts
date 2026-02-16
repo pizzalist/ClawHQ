@@ -5,7 +5,7 @@ import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
-import { createDeliverablesFromResult } from './deliverables.js';
+import { createDeliverablesFromResult, validateWebDeliverable } from './deliverables.js';
 
 type Listener = (event: AppEvent) => void;
 const listeners: Listener[] = [];

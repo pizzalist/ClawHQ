@@ -29,6 +29,13 @@ function emitEvent(type: AppEvent['type'], agentId: string | null, taskId: strin
   return event;
 }
 
+/** Well-known QC/test agent name patterns */
+const TEST_AGENT_PATTERN = /^(pm|dev|developer|reviewer|designer|devops|qa)[-_]?(qc|test|debug)/i;
+
+function isTestAgentName(name: string): boolean {
+  return TEST_AGENT_PATTERN.test(name);
+}
+
 function rowToAgent(row: Record<string, unknown>): Agent {
   return {
     id: row.id as string,
@@ -39,13 +46,40 @@ function rowToAgent(row: Record<string, unknown>): Agent {
     currentTaskId: (row.current_task_id as string) ?? null,
     sessionId: (row.session_id as string) ?? null,
     deskIndex: row.desk_index as number,
+    isTest: !!(row.is_test as number) || isTestAgentName(row.name as string),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
 }
 
-export function listAgents(): Agent[] {
-  return (stmts.listAgents.all() as Record<string, unknown>[]).map(rowToAgent);
+export function listAgents(includeTest = false): Agent[] {
+  const all = (stmts.listAgents.all() as Record<string, unknown>[]).map(rowToAgent);
+  if (includeTest) return all;
+  return all.filter(a => !a.isTest);
+}
+
+/** List only test/QC agents */
+export function listTestAgents(): Agent[] {
+  return (stmts.listAgents.all() as Record<string, unknown>[]).map(rowToAgent).filter(a => a.isTest);
+}
+
+/** Delete all test/QC agents that are not currently working */
+export function cleanupTestAgents(): { deleted: number; skipped: number } {
+  const testAgents = listTestAgents();
+  let deleted = 0;
+  let skipped = 0;
+  for (const a of testAgents) {
+    if (a.state === 'working') { skipped++; continue; }
+    try {
+      stmts.unlinkAgentTasks.run(a.id);
+      stmts.deleteAgent.run(a.id);
+      deleted++;
+    } catch { skipped++; }
+  }
+  if (deleted > 0) {
+    emitEvent('agent_created', null, null, `테스트 에이전트 ${deleted}개 정리됨`);
+  }
+  return { deleted, skipped };
 }
 
 export function getAgent(id: string): Agent | null {
@@ -53,10 +87,14 @@ export function getAgent(id: string): Agent | null {
   return row ? rowToAgent(row) : null;
 }
 
-export function createAgent(name: string, role: AgentRole, model: AgentModel): Agent {
+export function createAgent(name: string, role: AgentRole, model: AgentModel, isTest?: boolean): Agent {
   const id = uuid();
   const count = (stmts.countAgents.get() as { count: number }).count;
   stmts.insertAgent.run(id, name, role, model, count);
+  // Mark as test if explicitly flagged or name matches QC pattern
+  if (isTest || isTestAgentName(name)) {
+    stmts.markAgentTest.run(1, id);
+  }
   const agent = getAgent(id)!;
   emitEvent('agent_created', id, null, `Agent "${name}" created as ${role}`);
   return agent;

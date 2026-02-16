@@ -189,6 +189,16 @@ export function createDeliverablesFromResult(taskId: string, result: string, age
 
   for (const artifact of artifacts) {
     const id = uuid();
+    // Validate web deliverables for blank-screen issues
+    let metadata: Record<string, any> = {};
+    if (artifact.type === 'web') {
+      const validation = validateWebDeliverable(artifact.content);
+      metadata = { validation };
+      if (!validation.valid) {
+        console.warn(`[deliverables] Web deliverable has issues: ${validation.issues.join('; ')}`);
+      }
+    }
+
     stmts.insertDeliverable.run(
       id,
       taskId,
@@ -197,7 +207,7 @@ export function createDeliverablesFromResult(taskId: string, result: string, age
       artifact.content,
       artifact.language || null,
       artifact.format || null,
-      JSON.stringify({}),
+      JSON.stringify(metadata),
     );
     deliverables.push({
       id,
@@ -207,7 +217,7 @@ export function createDeliverablesFromResult(taskId: string, result: string, age
       content: artifact.content,
       language: artifact.language,
       format: artifact.format,
-      metadata: {},
+      metadata,
       createdAt: new Date().toISOString(),
     });
   }
@@ -238,6 +248,50 @@ function rowToDeliverable(row: Record<string, unknown>): Deliverable {
     metadata: JSON.parse((row.metadata as string) || '{}'),
     createdAt: row.created_at as string,
   };
+}
+
+/**
+ * Validate a web deliverable for basic runnability.
+ * Returns { valid, issues } where issues describe potential blank-screen causes.
+ */
+export function validateWebDeliverable(html: string): { valid: boolean; issues: string[] } {
+  const issues: string[] = [];
+
+  // Check for minimal content
+  if (!html || html.trim().length < 50) {
+    issues.push('HTML content is nearly empty');
+  }
+
+  // Check for <body> with actual content
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    const bodyContent = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').trim();
+    if (bodyContent.length < 10 && !/<canvas/i.test(html)) {
+      issues.push('Body has no visible content (and no canvas element)');
+    }
+  } else if (!/<html/i.test(html)) {
+    // No body tag and no html tag — might be a fragment
+    if (html.trim().length < 100 && !/<canvas|<div|<svg/i.test(html)) {
+      issues.push('No <body> tag found and content appears minimal');
+    }
+  }
+
+  // Check for common JS errors that would cause blank screen
+  if (/<script/i.test(html)) {
+    // Unclosed script tags
+    const scriptOpens = (html.match(/<script/gi) || []).length;
+    const scriptCloses = (html.match(/<\/script>/gi) || []).length;
+    if (scriptOpens !== scriptCloses) {
+      issues.push('Unclosed <script> tag detected — may prevent rendering');
+    }
+  }
+
+  // Check for canvas-based apps without initialization
+  if (/<canvas/i.test(html) && !/(getContext|pixi|three|phaser|createjs)/i.test(html)) {
+    issues.push('Canvas element found but no rendering library/context initialization detected');
+  }
+
+  return { valid: issues.length === 0, issues };
 }
 
 /**

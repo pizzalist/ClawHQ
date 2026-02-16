@@ -23,6 +23,11 @@ function emitEvent(type, agentId, taskId, message, metadata = {}) {
     emit(event);
     return event;
 }
+/** Well-known QC/test agent name patterns */
+const TEST_AGENT_PATTERN = /^(pm|dev|developer|reviewer|designer|devops|qa)[-_]?(qc|test|debug)/i;
+function isTestAgentName(name) {
+    return TEST_AGENT_PATTERN.test(name);
+}
 function rowToAgent(row) {
     return {
         id: row.id,
@@ -33,21 +38,57 @@ function rowToAgent(row) {
         currentTaskId: row.current_task_id ?? null,
         sessionId: row.session_id ?? null,
         deskIndex: row.desk_index,
+        isTest: !!row.is_test || isTestAgentName(row.name),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
 }
-export function listAgents() {
-    return stmts.listAgents.all().map(rowToAgent);
+export function listAgents(includeTest = false) {
+    const all = stmts.listAgents.all().map(rowToAgent);
+    if (includeTest)
+        return all;
+    return all.filter(a => !a.isTest);
+}
+/** List only test/QC agents */
+export function listTestAgents() {
+    return stmts.listAgents.all().map(rowToAgent).filter(a => a.isTest);
+}
+/** Delete all test/QC agents that are not currently working */
+export function cleanupTestAgents() {
+    const testAgents = listTestAgents();
+    let deleted = 0;
+    let skipped = 0;
+    for (const a of testAgents) {
+        if (a.state === 'working') {
+            skipped++;
+            continue;
+        }
+        try {
+            stmts.unlinkAgentTasks.run(a.id);
+            stmts.deleteAgent.run(a.id);
+            deleted++;
+        }
+        catch {
+            skipped++;
+        }
+    }
+    if (deleted > 0) {
+        emitEvent('agent_created', null, null, `테스트 에이전트 ${deleted}개 정리됨`);
+    }
+    return { deleted, skipped };
 }
 export function getAgent(id) {
     const row = stmts.getAgent.get(id);
     return row ? rowToAgent(row) : null;
 }
-export function createAgent(name, role, model) {
+export function createAgent(name, role, model, isTest) {
     const id = uuid();
     const count = stmts.countAgents.get().count;
     stmts.insertAgent.run(id, name, role, model, count);
+    // Mark as test if explicitly flagged or name matches QC pattern
+    if (isTest || isTestAgentName(name)) {
+        stmts.markAgentTest.run(1, id);
+    }
     const agent = getAgent(id);
     emitEvent('agent_created', id, null, `Agent "${name}" created as ${role}`);
     return agent;

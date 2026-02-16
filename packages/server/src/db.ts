@@ -128,6 +128,11 @@ try {
   db.exec(`ALTER TABLE meetings ADD COLUMN report TEXT`);
 } catch { /* column already exists */ }
 
+// Migration: add is_test flag to agents
+try {
+  db.exec(`ALTER TABLE agents ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`);
+} catch { /* column already exists */ }
+
 // Migration: add parent_task_id if missing
 try {
   db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id)`);
@@ -154,7 +159,8 @@ export const stmts = {
   deleteAgent: db.prepare('DELETE FROM agents WHERE id = ?'),
   unlinkAgentTasks: db.prepare('UPDATE tasks SET assignee_id = NULL WHERE assignee_id = ?'),
   deleteAllAgents: db.prepare('DELETE FROM agents'),
-  findAgentByRole: db.prepare('SELECT * FROM agents WHERE role = ? AND state = \'idle\' LIMIT 1'),
+  findAgentByRole: db.prepare('SELECT * FROM agents WHERE role = ? AND state = \'idle\' AND is_test = 0 LIMIT 1'),
+  markAgentTest: db.prepare('UPDATE agents SET is_test = ? WHERE id = ?'),
 
   listTasks: db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100'),
   getTask: db.prepare('SELECT * FROM tasks WHERE id = ?'),

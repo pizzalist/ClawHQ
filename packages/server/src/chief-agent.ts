@@ -3,6 +3,7 @@ import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefRespons
 import { listAgents, createAgent, getAgent } from './agent-manager.js';
 import { listTasks, createTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting } from './meetings.js';
+import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
@@ -169,12 +170,24 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     const elapsedMs = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime();
     const elapsedSec = Math.round(elapsedMs / 1000);
 
+    // Check web deliverables for validation issues
+    const deliverables = listDeliverablesByTask(event.taskId);
+    const webDeliverables = deliverables.filter(d => d.type === 'web');
+    let validationWarning = '';
+    for (const wd of webDeliverables) {
+      const validation = wd.metadata?.validation || validateWebDeliverable(wd.content);
+      if (!validation.valid) {
+        validationWarning = `\n\n⚠️ **실행 검증 경고**: ${validation.issues.join('; ')}\n브라우저에서 빈 화면이 될 수 있습니다. 수정 요청을 권장합니다.`;
+        break;
+      }
+    }
+
     // Emit notification with inline actions
     notifyChief({
       id: `notif-task-${event.taskId}-${Date.now()}`,
-      type: 'task_complete',
+      type: webDeliverables.length > 0 && validationWarning ? 'task_failed' : 'task_complete',
       title: task.title,
-      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초`,
+      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}`,
       actions: [
         { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
         { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
@@ -678,7 +691,64 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
     ? selectedIndices.filter(i => i >= 0 && i < actions.length).map(i => actions[i])
     : actions;
 
-  const executedActions = toExecute.map(a => executeAction(a));
+  const totalCount = toExecute.length;
+
+  // Feedback: approval received
+  pushMessage('chief-default', {
+    id: `approval-ack-${Date.now()}`,
+    role: 'chief',
+    content: `✅ **승인됨** — ${totalCount}건의 액션을 실행합니다.`,
+    createdAt: new Date().toISOString(),
+  });
+
+  // Execute each action with individual feedback
+  const executedActions: ChiefAction[] = [];
+  for (let i = 0; i < toExecute.length; i++) {
+    const action = toExecute[i];
+    const stepLabel = `[${i + 1}/${totalCount}]`;
+
+    // Feedback: execution start
+    pushMessage('chief-default', {
+      id: `exec-start-${Date.now()}-${i}`,
+      role: 'chief',
+      content: `⏳ ${stepLabel} 실행 중: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`,
+      createdAt: new Date().toISOString(),
+    });
+
+    const executed = executeAction(action);
+    executedActions.push(executed);
+
+    // Feedback: execution result
+    const ok = executed.result?.ok;
+    pushMessage('chief-default', {
+      id: `exec-result-${Date.now()}-${i}`,
+      role: 'chief',
+      content: ok
+        ? `✅ ${stepLabel} 완료: ${executed.result!.message}`
+        : `❌ ${stepLabel} 실패: ${executed.result?.message || '알 수 없는 오류'}`,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Feedback: all done summary + next step guide
+  const successCount = executedActions.filter(a => a.result?.ok).length;
+  const failCount = executedActions.length - successCount;
+  const pendingTasks = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress');
+
+  let summaryMsg = `🎯 **실행 완료** — 성공 ${successCount}건`;
+  if (failCount > 0) summaryMsg += `, 실패 ${failCount}건`;
+  if (pendingTasks.length > 0) {
+    summaryMsg += `\n\n📋 현재 진행/대기 중인 작업 ${pendingTasks.length}건이 있습니다. 결과가 나오면 알려드리겠습니다.`;
+  } else {
+    summaryMsg += `\n\n추가 작업이 필요하시면 말씀해주세요.`;
+  }
+
+  pushMessage('chief-default', {
+    id: `exec-summary-${Date.now()}`,
+    role: 'chief',
+    content: summaryMsg,
+    createdAt: new Date().toISOString(),
+  });
 
   pendingProposals.delete(messageId);
   for (const [sid, mid] of pendingProposalBySession.entries()) {
@@ -690,6 +760,16 @@ export function approveProposal(messageId: string, selectedIndices?: number[]): 
     state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
   };
 }
+
+const ACTION_LABEL_MAP: Record<string, string> = {
+  create_task: '작업 생성',
+  create_agent: '에이전트 생성',
+  start_meeting: '미팅 시작',
+  assign_task: '작업 배정',
+  cancel_task: '작업 취소',
+  cancel_all_pending: '대기 작업 전체 취소',
+  reset_agent: '에이전트 초기화',
+};
 
 /** Reject / discard a pending proposal */
 export function rejectProposal(messageId: string): void {
@@ -865,20 +945,47 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
     const pending = pendingProposals.get(pendingMessageId) || [];
     const selected = parseApprovalSelection(userMessage, pending.length);
     if (selected && selected.length > 0) {
-      const selectedAction = pending[selected[0]];
-      const executed = executeAction(selectedAction);
-      pending.splice(selected[0], 1);
-      if (pending.length === 0) {
+      // If user says generic approval ("응", "승인"), execute ALL pending actions sequentially
+      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(userMessage.trim().toLowerCase());
+      const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
+
+      const results: string[] = [];
+      for (let i = 0; i < toExecute.length; i++) {
+        const action = toExecute[i];
+        const stepLabel = toExecute.length > 1 ? `[${i + 1}/${toExecute.length}] ` : '';
+        const executed = executeAction(action);
+        const ok = executed.result?.ok;
+        results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
+      }
+
+      // Remove executed actions from pending
+      if (isGenericApproval) {
         pendingProposals.delete(pendingMessageId);
         pendingProposalBySession.delete(sessionId);
       } else {
-        pendingProposals.set(pendingMessageId, pending);
+        pending.splice(selected[0], 1);
+        if (pending.length === 0) {
+          pendingProposals.delete(pendingMessageId);
+          pendingProposalBySession.delete(sessionId);
+        } else {
+          pendingProposals.set(pendingMessageId, pending);
+        }
       }
 
-      const summary = executed.result?.message || '실행 완료';
-      const reply = pending.length > 0
-        ? `선택한 액션을 실행했습니다.\n- 결과: ${summary}\n\n남은 액션 ${pending.length}건:\n${pending.map((a, i) => `${i + 1}. ${a.type}`).join('\n')}\n\n다음으로 어떤 액션을 실행할까요?`
-        : `선택한 액션을 실행했습니다.\n- 결과: ${summary}\n\n추가로 진행할 작업이 있나요?`;
+      const remainingPending = pendingProposals.get(pendingMessageId);
+      const remainingCount = remainingPending?.length || 0;
+
+      let reply = `실행 결과:\n${results.join('\n')}`;
+      if (remainingCount > 0) {
+        reply += `\n\n남은 액션 ${remainingCount}건:\n${remainingPending!.map((a, i) => `${i + 1}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join('\n')}\n\n'승인'이라고 하시면 나머지도 자동 실행합니다.`;
+      } else {
+        const pendingTasks = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress');
+        if (pendingTasks.length > 0) {
+          reply += `\n\n📋 현재 ${pendingTasks.length}건의 작업이 진행/대기 중입니다. 결과가 나오면 알려드리겠습니다.`;
+        } else {
+          reply += `\n\n추가로 진행할 작업이 있나요?`;
+        }
+      }
 
       pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
       return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };

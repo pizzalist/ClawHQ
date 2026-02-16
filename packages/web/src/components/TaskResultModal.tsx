@@ -230,7 +230,10 @@ export default function TaskResultModal() {
           )}
 
           {task.status === 'completed' && (
-            <DeliverableList taskId={task.id} />
+            <>
+              <DeliverableList taskId={task.id} />
+              <WebValidationWarning taskId={task.id} />
+            </>
           )}
 
           {/* Show raw output: for chain tasks show dev result, for single tasks show task result */}
@@ -279,6 +282,42 @@ export default function TaskResultModal() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function WebValidationWarning({ taskId }: { taskId: string }) {
+  const [issues, setIssues] = useState<string[]>([]);
+  useEffect(() => {
+    fetch(`/api/deliverables?taskId=${taskId}`)
+      .then(r => r.json())
+      .then((deliverables: any[]) => {
+        const webOnes = deliverables.filter((d: any) => d.type === 'web');
+        const allIssues: string[] = [];
+        for (const d of webOnes) {
+          const validation = d.metadata?.validation;
+          if (validation && !validation.valid) {
+            allIssues.push(...validation.issues);
+          }
+        }
+        setIssues(allIssues);
+      })
+      .catch(() => {});
+  }, [taskId]);
+
+  if (issues.length === 0) return null;
+
+  return (
+    <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-3">
+      <div className="flex items-center gap-2 text-orange-400 text-sm font-semibold mb-1">
+        ⚠️ 실행 검증 경고
+      </div>
+      <ul className="text-xs text-orange-300 space-y-0.5 list-disc list-inside">
+        {issues.map((issue, i) => <li key={i}>{issue}</li>)}
+      </ul>
+      <p className="text-xs text-orange-400/70 mt-2">
+        브라우저에서 빈 화면이 될 수 있습니다. '수정 요청' 또는 '다시 실행'을 권장합니다.
+      </p>
     </div>
   );
 }

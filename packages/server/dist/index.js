@@ -7,9 +7,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
-import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent } from './agent-manager.js';
+import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren } from './task-queue.js';
-import { listDeliverablesByTask, getDeliverable, renderDeliverable } from './deliverables.js';
+import { listDeliverablesByTask, getDeliverable, renderDeliverable, validateWebDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
@@ -121,9 +121,17 @@ app.post('/api/chief/proposal/approve', (req, res) => {
     }
     try {
         const result = approveProposal(messageId, selectedIndices);
+        // Broadcast all updated state + chief messages so chat feedback appears
         broadcast({ type: 'agents_update', payload: listAgents() });
         broadcast({ type: 'tasks_update', payload: listTasks() });
         broadcast({ type: 'meetings_update', payload: listMeetings() });
+        // Send updated chief messages so approval feedback shows in chat
+        broadcast({ type: 'chief_response', payload: {
+                messageId: `approval-feedback-${Date.now()}`,
+                reply: '',
+                actions: [],
+                state: result.state,
+            } });
         res.json({ ok: true, ...result });
     }
     catch (err) {
@@ -309,6 +317,15 @@ app.get('/api/deliverables/:id/render', (req, res) => {
     const { contentType, body } = renderDeliverable(d);
     res.setHeader('Content-Type', contentType);
     res.send(body);
+});
+app.get('/api/deliverables/:id/validate', (req, res) => {
+    const d = getDeliverable(req.params.id);
+    if (!d)
+        return res.status(404).json({ error: 'Deliverable not found' });
+    if (d.type !== 'web')
+        return res.json({ valid: true, issues: [], type: d.type });
+    const result = validateWebDeliverable(d.content);
+    res.json(result);
 });
 app.get('/api/deliverables/:id/download', (req, res) => {
     const d = getDeliverable(req.params.id);
@@ -618,6 +635,15 @@ app.post('/api/decisions/seed-from-tasks', (_req, res) => {
 app.get('/api/meetings', (req, res) => {
     const includeLegacy = req.query.includeLegacy === '1' || req.query.includeLegacy === 'true';
     res.json(listMeetings(includeLegacy));
+});
+// Test/QC agent management
+app.get('/api/admin/test-agents', (_req, res) => {
+    res.json(listTestAgents());
+});
+app.post('/api/admin/cleanup-test-agents', (_req, res) => {
+    const result = cleanupTestAgents();
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    res.json({ ok: true, ...result });
 });
 app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {
     const result = cleanupLegacyMeetings();
