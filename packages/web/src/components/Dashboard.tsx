@@ -172,6 +172,16 @@ export default function Dashboard() {
 
   const knownCriticalAlerts = useRef<Set<string>>(new Set());
 
+  const safeNotifyCriticalAlert = (title: string) => {
+    queueMicrotask(() => {
+      try {
+        toast(`🚨 Critical Alert: ${title || 'Unknown alert'}`, 'error');
+      } catch (error) {
+        console.error('[Dashboard] critical alert toast failed', error);
+      }
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -198,15 +208,22 @@ export default function Dashboard() {
 
         if (cancelled) return;
 
+        const safeAlerts: AlertsResponse = {
+          total: Number.isFinite(alertsData?.total) ? alertsData.total : 0,
+          active: Number.isFinite(alertsData?.active) ? alertsData.active : 0,
+          alerts: Array.isArray(alertsData?.alerts) ? alertsData.alerts : [],
+        };
+
         setMetrics(metricsData);
         setTimeseries(seriesData);
-        setAlerts(alertsData);
+        setAlerts(safeAlerts);
 
-        const newCriticalActive = alertsData.alerts.filter((a) => a.severity === 'critical' && a.status === 'active');
+        const newCriticalActive = safeAlerts.alerts.filter((a) => a?.severity === 'critical' && a?.status === 'active');
         for (const alert of newCriticalActive) {
+          if (!alert?.id) continue;
           if (!knownCriticalAlerts.current.has(alert.id)) {
             knownCriticalAlerts.current.add(alert.id);
-            toast(`🚨 Critical Alert: ${alert.title}`, 'error');
+            safeNotifyCriticalAlert(alert.title);
           }
         }
       } catch {

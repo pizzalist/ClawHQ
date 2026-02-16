@@ -2,8 +2,8 @@
   {
     "id": "R1-1",
     "name": "PM 2명 회의: 부족 인원 자동 생성",
-    "pass": true,
-    "detail": "ok=true, agents: 1→2, participants=2"
+    "pass": false,
+    "detail": "ok=true, agents: 1→5, participants=0"
   },
   {
     "id": "R1-2",
@@ -99,7 +99,7 @@
     "id": "R6-2",
     "name": "\"진행중이야?\" → 액션 미포함",
     "pass": true,
-    "detail": "hasAction=false, reply=\"현재 대기 0건 · 진행 0건 · 완료 0건이며, 에이전트는 1명입니다....\""
+    "detail": "hasAction=false, reply=\"현재 대기 0건 · 진행 0건 · 완료 0건이며, 에이전트는 2명입니다....\""
   },
   {
     "id": "R6-3",
@@ -123,13 +123,7 @@
     "id": "R7-2",
     "name": "parseAgentOutput: raw text에 tool log 포함 여부",
     "pass": true,
-    "detail": "containsToolLog=true — WARNING: raw tool log가 사용자에게 노출될 수 있음"
-  },
-  {
-    "id": "R7-2b",
-    "name": "BUG: parseAgentOutput이 tool raw log를 필터링하지 않음",
-    "pass": false,
-    "detail": "assistant to=functions 패턴이 사용자 결과에 그대로 전달됨"
+    "detail": "containsToolLog=false — clean"
   },
   {
     "id": "R7-3",
@@ -219,12 +213,12 @@
     "id": "S14",
     "name": "task 생성 → chain plan 자동 생성",
     "pass": true,
-    "detail": "taskId=b3e23b9e-e629-44b9-a1fe-c07e0c7f77c1, hasPlan=true"
+    "detail": "taskId=476d6117-36f6-43b5-853f-7ab71ac9248e, hasPlan=true"
   },
   {
     "id": "S15",
     "name": "다중 역할 미팅 (pm+dev+reviewer)",
-    "pass": true,
-    "detail": "participants=3"
+    "pass": false,
+    "detail": "participants=0"
   }
 ]

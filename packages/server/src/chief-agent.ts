@@ -334,7 +334,9 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
     if (meetingId) {
       const meeting = getMeeting(meetingId);
-      if (meeting) {
+      if (!meeting) {
+        nextStepLines.push('\n\n📌 **다음 단계:** 추가 작업이 필요하면 말씀해주세요.');
+      } else if (meeting) {
         // Check for child review meetings or suggest next actions
         const children = getChildMeetings(meetingId);
         const hasReview = children.some(c => c.type === 'review' || c.sourceMeetingId === meetingId);

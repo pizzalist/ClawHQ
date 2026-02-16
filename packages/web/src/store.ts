@@ -3,6 +3,58 @@ import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCh
 import { toast } from './components/Toast';
 
 const API = '';
+const CHIEF_STORAGE_KEY = 'ai-office-chief-state-v1';
+
+type PersistedChiefState = {
+  chiefMessages: ChiefChatMessage[];
+  chiefSuggestions: TeamPlanSuggestion[];
+  chiefMeetingDraft: { title: string; description: string; participantIds: string[]; character: MeetingCharacter } | null;
+  chiefSessionId: string;
+  chiefProposedActions: ChiefAction[];
+  chiefExecutedActions: ChiefAction[];
+  chiefPendingMessageId: string | null;
+  chiefCheckIns: ChiefCheckIn[];
+  chiefNotifications: ChiefNotification[];
+  chiefPendingDecisions: number;
+};
+
+function makeSessionId() {
+  return `chief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadPersistedChiefState(): PersistedChiefState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(CHIEF_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedChiefState>;
+    return {
+      chiefMessages: Array.isArray(parsed.chiefMessages) ? parsed.chiefMessages : [],
+      chiefSuggestions: Array.isArray(parsed.chiefSuggestions) ? parsed.chiefSuggestions : [],
+      chiefMeetingDraft: parsed.chiefMeetingDraft || null,
+      chiefSessionId: parsed.chiefSessionId || makeSessionId(),
+      chiefProposedActions: Array.isArray(parsed.chiefProposedActions) ? parsed.chiefProposedActions : [],
+      chiefExecutedActions: Array.isArray(parsed.chiefExecutedActions) ? parsed.chiefExecutedActions : [],
+      chiefPendingMessageId: parsed.chiefPendingMessageId || null,
+      chiefCheckIns: Array.isArray(parsed.chiefCheckIns) ? parsed.chiefCheckIns : [],
+      chiefNotifications: Array.isArray(parsed.chiefNotifications) ? parsed.chiefNotifications : [],
+      chiefPendingDecisions: Number.isFinite(parsed.chiefPendingDecisions) ? Number(parsed.chiefPendingDecisions) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistChiefState(state: PersistedChiefState) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(CHIEF_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // ignore quota/private mode failures
+  }
+}
+
+const persistedChiefState = loadPersistedChiefState();
 
 interface Store {
   agents: Agent[];
@@ -75,17 +127,17 @@ export const useStore = create<Store>((set, get) => ({
   tasks: [],
   events: [],
   meetings: [],
-  chiefMessages: [],
-  chiefSuggestions: [],
-  chiefMeetingDraft: null,
-  chiefSessionId: `chief-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  chiefMessages: persistedChiefState?.chiefMessages || [],
+  chiefSuggestions: persistedChiefState?.chiefSuggestions || [],
+  chiefMeetingDraft: persistedChiefState?.chiefMeetingDraft || null,
+  chiefSessionId: persistedChiefState?.chiefSessionId || makeSessionId(),
   chiefThinking: false,
-  chiefProposedActions: [],
-  chiefExecutedActions: [],
-  chiefPendingMessageId: null,
-  chiefCheckIns: [],
-  chiefNotifications: [],
-  chiefPendingDecisions: 0,
+  chiefProposedActions: persistedChiefState?.chiefProposedActions || [],
+  chiefExecutedActions: persistedChiefState?.chiefExecutedActions || [],
+  chiefPendingMessageId: persistedChiefState?.chiefPendingMessageId || null,
+  chiefCheckIns: persistedChiefState?.chiefCheckIns || [],
+  chiefNotifications: persistedChiefState?.chiefNotifications || [],
+  chiefPendingDecisions: persistedChiefState?.chiefPendingDecisions || 0,
   chainPlans: [],
   connected: false,
   initialized: false,
@@ -99,11 +151,24 @@ export const useStore = create<Store>((set, get) => ({
   })),
   setTasks: (tasks) => set({ tasks }),
   setMeetings: (meetings) => set({ meetings }),
-  setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({ chiefMessages, chiefSuggestions, chiefMeetingDraft }),
+  setChiefState: (chiefMessages, chiefSuggestions, chiefMeetingDraft = null) => set({
+    chiefMessages: Array.isArray(chiefMessages) ? chiefMessages : [],
+    chiefSuggestions: Array.isArray(chiefSuggestions) ? chiefSuggestions : [],
+    chiefMeetingDraft: chiefMeetingDraft || null,
+  }),
   setChiefThinking: (chiefThinking) => set({ chiefThinking }),
   handleChiefResponse: (response) => {
     const currentSession = get().chiefSessionId;
     if (response.sessionId && response.sessionId !== currentSession) return;
+
+    // Guard: skip empty replies (prevents blank bubbles)
+    const hasContent = (response.reply || '').trim().length > 0;
+    const hasActions = response.actions && response.actions.length > 0;
+    if (!hasContent && !hasActions) {
+      // Still clear thinking state
+      set({ chiefThinking: false });
+      return;
+    }
 
     const chiefMsg: ChiefChatMessage = {
       id: response.messageId,
@@ -114,11 +179,13 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       // Deduplicate: skip if message with same id already exists
       const exists = s.chiefMessages.some(m => m.id === response.messageId);
+      // Don't add message if content is empty (even if actions exist)
+      const shouldAddMsg = hasContent && !exists;
       return {
-        chiefMessages: exists ? s.chiefMessages : [...s.chiefMessages, chiefMsg],
-        chiefProposedActions: response.actions,
+        chiefMessages: shouldAddMsg ? [...s.chiefMessages, chiefMsg] : s.chiefMessages,
+        chiefProposedActions: Array.isArray(response.actions) ? response.actions : [],
         chiefExecutedActions: [],
-        chiefPendingMessageId: response.actions.length > 0 ? response.messageId : null,
+        chiefPendingMessageId: hasActions ? response.messageId : null,
         chiefThinking: false,
       };
     });
@@ -611,7 +678,14 @@ export function connectWS() {
   };
 
   ws.onmessage = (e) => {
-    const msg: WSMessage = JSON.parse(e.data);
+    let msg: WSMessage;
+    try {
+      msg = JSON.parse(e.data) as WSMessage;
+    } catch {
+      console.warn('[WS] invalid message payload');
+      return;
+    }
+
     const store = useStore.getState();
     switch (msg.type) {
       case 'initial_state':
@@ -697,3 +771,18 @@ export function connectWS() {
 
   ws.onerror = () => ws?.close();
 }
+
+useStore.subscribe((state) => {
+  persistChiefState({
+    chiefMessages: Array.isArray(state.chiefMessages) ? state.chiefMessages : [],
+    chiefSuggestions: Array.isArray(state.chiefSuggestions) ? state.chiefSuggestions : [],
+    chiefMeetingDraft: state.chiefMeetingDraft || null,
+    chiefSessionId: state.chiefSessionId || makeSessionId(),
+    chiefProposedActions: Array.isArray(state.chiefProposedActions) ? state.chiefProposedActions : [],
+    chiefExecutedActions: Array.isArray(state.chiefExecutedActions) ? state.chiefExecutedActions : [],
+    chiefPendingMessageId: state.chiefPendingMessageId || null,
+    chiefCheckIns: Array.isArray(state.chiefCheckIns) ? state.chiefCheckIns : [],
+    chiefNotifications: Array.isArray(state.chiefNotifications) ? state.chiefNotifications : [],
+    chiefPendingDecisions: Number.isFinite(state.chiefPendingDecisions) ? state.chiefPendingDecisions : 0,
+  });
+});

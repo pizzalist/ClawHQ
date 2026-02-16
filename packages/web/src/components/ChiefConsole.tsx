@@ -74,10 +74,12 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
   const [dismissed, setDismissed] = useState(false);
   const style = NOTIF_STYLES[notification.type] || NOTIF_STYLES.info;
 
+  const [dismissReason, setDismissReason] = useState<string | null>(null);
+
   if (dismissed) {
     return (
       <div className={`rounded-xl border ${style.border} ${style.bg} p-2 opacity-50`}>
-        <div className="text-xs text-gray-400">✓ 처리됨</div>
+        <div className="text-xs text-gray-400">{dismissReason || '✓ 처리됨'}</div>
       </div>
     );
   }
@@ -93,8 +95,15 @@ function InlineNotification({ notification }: { notification: ChiefNotification 
     // All other actions (including view-meeting, approve, revise, start-review) go to server
     await handleAction(notification.id, actionId, params);
     setActing(null);
-    // Dismiss after handling (except view actions)
+    // Dismiss after handling (except view actions) with contextual reason
     if (action !== 'view_result' && !actionId.startsWith('view-')) {
+      if (action === 'approve' || actionId.startsWith('approve')) {
+        setDismissReason('✅ 확정됨 — 다음 단계 안내가 아래에 표시됩니다');
+      } else if (action === 'request_revision' || actionId.startsWith('revise')) {
+        setDismissReason('🔄 수정 요청됨 — 수정 방향을 입력해주세요');
+      } else {
+        setDismissReason('✓ 처리됨');
+      }
       setDismissed(true);
     }
   };
@@ -194,6 +203,9 @@ function ChatMessage({ m, checkIn }: { m: ChiefChatMessage; checkIn?: ChiefCheck
   const isUser = m.role === 'user';
   const hasNotification = m.notification != null;
   const notifStyle = hasNotification ? NOTIF_STYLES[m.notification!.type] || NOTIF_STYLES.info : null;
+
+  // Guard: skip rendering empty chief messages (no content and no notification)
+  if (!isUser && !(m.content || '').trim() && !hasNotification) return null;
 
   return (
     <div className="space-y-2">

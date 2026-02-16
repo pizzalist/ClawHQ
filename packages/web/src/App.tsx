@@ -10,12 +10,13 @@ import HistoryReplay from './components/HistoryReplay';
 import WorkflowDAG from './components/WorkflowDAG';
 import AgentDetailPanel from './components/AgentDetailPanel';
 import CommandInput from './components/CommandInput';
-import ToastContainer from './components/Toast';
+import ToastContainer, { toast } from './components/Toast';
 import TaskListView from './components/TaskListView';
 import TaskResultModal from './components/TaskResultModal';
 import DecisionsView from './components/decisions/DecisionsView';
 import MeetingRoom from './components/MeetingRoom';
 import ChiefConsole from './components/ChiefConsole';
+import ErrorBoundary from './components/ErrorBoundary';
 
 type View = 'office' | 'chief' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
 
@@ -32,6 +33,23 @@ export default function App() {
     load();
     const iv = setInterval(load, 5000);
     return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => {
+    const onError = (e: ErrorEvent) => {
+      console.error('[RuntimeError]', e.error || e.message);
+      toast('런타임 오류를 감지했습니다. 자동 복구를 시도합니다.', 'error');
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      console.error('[UnhandledRejection]', e.reason);
+      toast('처리되지 않은 오류가 발생했습니다.', 'error');
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
   }, []);
 
   const tabs: [View, string][] = [
@@ -104,20 +122,22 @@ export default function App() {
           />
         )}
         <main className="flex-1 flex flex-col min-w-0">
-          {view === 'office' && (
-            <>
-              <OfficeView />
-              <ActivityLog />
-            </>
-          )}
-          {view === 'chief' && <ChiefConsole />}
-          {view === 'tasks' && <TaskListView />}
-          {view === 'dashboard' && <Dashboard />}
-          {view === 'decisions' && <DecisionsView />}
-          {view === 'meetings' && <MeetingRoom />}
-          {view === 'workflow' && <WorkflowDAG />}
-          {view === 'failures' && <FailureTimeline />}
-          {view === 'history' && <HistoryReplay />}
+          <ErrorBoundary scope={`view:${view}`} autoRecoverMs={1000}>
+            {view === 'office' && (
+              <>
+                <OfficeView />
+                <ActivityLog />
+              </>
+            )}
+            {view === 'chief' && <ChiefConsole />}
+            {view === 'tasks' && <TaskListView />}
+            {view === 'dashboard' && <Dashboard />}
+            {view === 'decisions' && <DecisionsView />}
+            {view === 'meetings' && <MeetingRoom />}
+            {view === 'workflow' && <WorkflowDAG />}
+            {view === 'failures' && <FailureTimeline />}
+            {view === 'history' && <HistoryReplay />}
+          </ErrorBoundary>
           <CommandInput />
         </main>
       </div>
