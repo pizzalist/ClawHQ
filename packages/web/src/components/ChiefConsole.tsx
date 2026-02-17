@@ -391,7 +391,7 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
 
   const send = async () => {
     const msg = input.trim();
-    if (!msg || chiefThinking) return;
+    if (!msg) return;
     setInput('');
     await chiefChat(msg);
   };
@@ -455,9 +455,8 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
             onChange={(e) => setInput(e.target.value)}
             placeholder="총괄자에게 지시하세요..."
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
-            disabled={chiefThinking}
           />
-          <button type="submit" disabled={!input.trim() || loadingChat || chiefThinking}
+          <button type="submit" disabled={!input.trim() || loadingChat}
             className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-semibold disabled:opacity-50">
             {loadingChat ? '...' : '전송'}
           </button>

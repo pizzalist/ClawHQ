@@ -326,6 +326,14 @@ export function handleChiefAction(notificationId: string, actionId: string, para
   }
   handledInlineActionKeys.add(actionKey);
 
+  // If user clicked an inline button, clear any pending proposal for this session
+  // to prevent duplicate execution when they also type "응/승인" in chat.
+  const pendingMessageId = pendingProposalBySession.get(scopedSessionId);
+  if (pendingMessageId) {
+    pendingProposals.delete(pendingMessageId);
+    pendingProposalBySession.delete(scopedSessionId);
+  }
+
   const extractIdFromAction = (raw: string, prefix: string): string | null => {
     const m = raw.match(new RegExp(`^${prefix}-(.+)$`));
     return m?.[1] || null;
@@ -1139,7 +1147,8 @@ function recommendStartRoleFromIntent(title: string, description: string, explic
 function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
   const msg = (userMessage || '').toLowerCase();
 
-  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|언제\s*줘|언제\s*돼|언제\s*끝|다\s*됐|아직(이야|인가|이냐|이에요)?|어떻게\s*되|되고\s*있|결과\s*나왔|끝났|완료\s*됐|다\s*했|했어\?|됐어\?|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
+  // Keep status detection strict to avoid misclassifying normal requests.
+  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|결과\s*나왔|끝났|완료\s*됐|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
   const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg);
 
   if (readOnlyStatusLike && !mutationLike) {
@@ -1248,6 +1257,37 @@ function buildMeetingSuggestionAction(userMessage: string): ChiefAction {
       character: 'planning',
     },
   };
+}
+
+function shouldBatchMultiStackTasks(userMessage: string, actions: ChiefAction[]): boolean {
+  const createTasks = actions.filter(a => a.type === 'create_task');
+  if (createTasks.length < 2) return false;
+
+  const msg = (userMessage || '').toLowerCase();
+  const splitIntent = /(분할|나눠|파트|스택|frontend|backend|프론트|백엔드|qa|테스트|대형|large|big)/i.test(msg);
+
+  const titles = createTasks.map(a => `${a.params?.title || ''} ${a.params?.description || ''}`.toLowerCase()).join(' ');
+  const roleSpread = /(frontend|프론트|ui|backend|백엔드|api|qa|테스트|검증)/i.test(titles);
+
+  return splitIntent || roleSpread;
+}
+
+function applyBatchToCreateTaskActions(userMessage: string, actions: ChiefAction[]): { actions: ChiefAction[]; batchId?: string } {
+  if (!shouldBatchMultiStackTasks(userMessage, actions)) return { actions };
+
+  const batchId = `batch-${Date.now()}-${uuid().slice(0, 8)}`;
+  const patched = actions.map((a) => {
+    if (a.type !== 'create_task') return a;
+    return {
+      ...a,
+      params: {
+        ...a.params,
+        batchId,
+      },
+    };
+  });
+
+  return { actions: patched, batchId };
 }
 
 const ALL_AGENT_ROLES: AgentRole[] = ['pm', 'developer', 'reviewer', 'designer', 'devops', 'qa'];
@@ -1972,7 +2012,8 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
         try {
           const rawOutput = parseAgentOutput(run.stdout);
           const { actions: parsedActions, cleanText } = parseActions(rawOutput);
-          const proposedActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
+          const intentActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
+          const { actions: proposedActions, batchId } = applyBatchToCreateTaskActions(userMessage, intentActions);
 
           // Emergency auto-execute: stop/cancel commands skip approval
           const isEmergencyStop = /^(멈춰|중지|스톱|stop|cancel|취소|다\s*멈춰|전부\s*중지|다\s*중지|그만)/i.test(userMessage.trim());
@@ -2006,7 +2047,10 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
           const compactActionList = intent === 'simple_action' && proposedActions.length > 2
             ? `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`
             : formatActionList(proposedActions);
-          const reply = `${conciseBaseReply}${compactActionList}`;
+          const batchHint = batchId
+            ? `\n\n🧩 멀티-스택 분할 작업으로 판단되어 batch(${batchId})로 묶었습니다. 각 파트 완료 후 종합 취합 태스크가 자동 생성됩니다.`
+            : '';
+          const reply = `${conciseBaseReply}${compactActionList}${batchHint}`;
           pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
 
           // Store proposed actions for approval — do NOT execute yet

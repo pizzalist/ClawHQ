@@ -327,21 +327,30 @@ export default function MeetingRoom() {
             </div>
           )}
           {meetings.map(m => (
-            <button
+            <div
               key={m.id}
-              onClick={() => setSelectedMeetingId(m.id)}
               className={`w-full text-left px-3 py-3 border-b border-gray-700/20 hover:bg-gray-700/20 transition-colors ${
                 selectedMeetingId === m.id ? 'bg-gray-700/30' : ''
               }`}
             >
-              <div className="flex items-center gap-2">
-                <span>{statusIcon[m.status] || '⚪'}</span>
-                <span className="text-sm font-medium text-gray-200 truncate">{m.title}</span>
-              </div>
-              <div className="text-xs text-gray-500 mt-0.5">
-                {m.proposals.length}명 참여 · {m.status === 'active' ? '진행 중' : m.status === 'completed' ? '완료' : m.status}
-              </div>
-            </button>
+              <button onClick={() => setSelectedMeetingId(m.id)} className="w-full text-left">
+                <div className="flex items-center gap-2">
+                  <span>{statusIcon[m.status] || '⚪'}</span>
+                  <span className="text-sm font-medium text-gray-200 truncate">{m.title}</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {m.proposals.length}명 참여 · {m.status === 'active' ? '진행 중' : m.status === 'completed' ? '완료' : m.status}
+                </div>
+              </button>
+              {m.status === 'completed' && (
+                <button
+                  onClick={() => setSelectedMeetingId(m.id)}
+                  className="mt-2 px-2 py-1 text-[11px] rounded border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
+                >
+                  결과 보기
+                </button>
+              )}
+            </div>
           ))}
         </div>
 
