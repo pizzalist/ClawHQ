@@ -10,6 +10,7 @@ const scenarios = [
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const RUN_TIMEOUT_SECONDS = Number(process.env.AI_OFFICE_SCENARIO_TIMEOUT_SEC || 120);
 
 async function call(path, method = 'GET', body) {
   const res = await fetch(`${baseUrl}${path}`, {
@@ -34,6 +35,14 @@ async function listTasks() {
   return call('/api/tasks');
 }
 
+async function nudgeQueue() {
+  try {
+    await call('/api/tasks/process', 'POST');
+  } catch {
+    // best-effort only
+  }
+}
+
 async function activeCount() {
   const tasks = await listTasks();
   return tasks.filter((t) => t.status === 'pending' || t.status === 'in-progress').length;
@@ -42,6 +51,7 @@ async function activeCount() {
 async function waitForIdle(maxSeconds = 240) {
   const maxLoops = Math.ceil(maxSeconds / 5);
   for (let i = 0; i < maxLoops; i += 1) {
+    await nudgeQueue();
     const active = await activeCount();
     if (active === 0) return true;
     if ((i + 1) % 6 === 0) log(`waiting... active=${active}`);
@@ -50,7 +60,26 @@ async function waitForIdle(maxSeconds = 240) {
   return false;
 }
 
-const RUN_TIMEOUT_SECONDS = Number(process.env.AI_OFFICE_SCENARIO_TIMEOUT_SEC || 120);
+async function waitForNewTasks(beforeIds, timeoutSeconds = 90, approveEverySeconds = 12) {
+  const loops = Math.ceil(timeoutSeconds / 3);
+  const approveEvery = Math.max(1, Math.floor(approveEverySeconds / 3));
+
+  for (let i = 0; i < loops; i += 1) {
+    await nudgeQueue();
+    const tasks = await listTasks();
+    const created = tasks.filter((t) => !beforeIds.has(t.id));
+    if (created.length > 0) return created;
+
+    // Re-send approval periodically because proposal generation can be delayed.
+    if ((i + 1) % approveEvery === 0) {
+      await chat('응');
+      log('re-sent approval (응) while waiting for task creation');
+    }
+
+    await sleep(3000);
+  }
+  return [];
+}
 
 async function runScenario(index, scenario) {
   const before = await listTasks();
@@ -58,28 +87,36 @@ async function runScenario(index, scenario) {
 
   log(`(${index + 1}/${scenarios.length}) ${scenario.name}`);
   log(`prompt: ${scenario.prompt}`);
-  await chat(scenario.prompt);
-  await sleep(12000);
 
+  await chat(scenario.prompt);
+  await sleep(3000);
   await chat('응');
+
+  let created = await waitForNewTasks(beforeIds, Math.max(60, RUN_TIMEOUT_SECONDS), 12);
+
+  if (created.length === 0) {
+    log('result: ⚠️ no new task detected after prompt+approval');
+    return { ok: false, scenario: scenario.name, detail: 'no task created' };
+  }
+
   const idle1 = await waitForIdle(RUN_TIMEOUT_SECONDS);
   if (!idle1) {
-    log(`result: ⚠️ timeout while waiting first phase`);
+    log('result: ⚠️ timeout while waiting first phase');
   }
 
   await chat('확정');
   const idle2 = await waitForIdle(RUN_TIMEOUT_SECONDS);
   if (!idle2) {
-    log(`result: ⚠️ timeout while waiting confirm phase`);
+    log('result: ⚠️ timeout while waiting confirm phase');
   }
 
   const after = await listTasks();
-  const created = after.filter((t) => !beforeIds.has(t.id));
+  created = after.filter((t) => !beforeIds.has(t.id));
   const latest = created.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
 
   if (!latest) {
-    log(`result: ⚠️ no new task detected`);
-    return { ok: false, scenario: scenario.name, detail: 'no task created' };
+    log('result: ⚠️ task list race condition (created vanished)');
+    return { ok: false, scenario: scenario.name, detail: 'task race' };
   }
 
   const len = (latest.result || '').length;

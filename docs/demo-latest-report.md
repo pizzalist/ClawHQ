@@ -1,6 +1,6 @@
 # Demo Latest Report
 
-- Generated: 2026-02-16T22:33:22.637Z
+- Generated: 2026-02-17T01:48:21.209Z
 - Base URL: http://localhost:3001
 - Health: OK
 
@@ -8,7 +8,7 @@
 
 - Agents: 5
 - Tasks: 3
-- Meetings: 0
+- Meetings: 1
 - Active Tasks: 0
 - Task Success Rate: 100%
 - Avg Task Duration: n/a sec
@@ -21,9 +21,9 @@
 
 | id | status | title | result chars |
 |---|---|---|---:|
-| ae954e32 | completed | 로그인 세션 만료 후 자동 로그아웃 버그 수정 | 6648 |
-| de2d04e3 | completed | 새 작업 제목 | 1297 |
-| 93ad20fa | completed | B2B SaaS MVP 기획서 작성 | 3133 |
+| cf2e07ab | completed | [Review] [검증] 관리자 대시보드 개선안 작성 | 2506 |
+| 40f3af5e | completed | [검증] 관리자 대시보드 개선안 작성 | 1044 |
+| 28cd4024 | completed | B2B SaaS MVP 기획서 작성 | 3020 |
 
 ## Go / No-Go (Demo Readiness)
 
