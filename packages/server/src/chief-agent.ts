@@ -1964,18 +1964,21 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
     }
   }
 
-  const intent = classifyIntent(userMessage);
+  const ruleIntent = classifyIntent(userMessage);
+  const inDemoMode = isDemoMode();
+  const intent: 'status' | 'simple_action' | 'definition' | 'other' = inDemoMode ? ruleIntent : 'other';
 
-  // Read-only monitoring/status requests should be answered immediately from internal state.
-  if (intent === 'status') {
+  // Demo mode only: use fast rule-based status reply.
+  // Full OpenClaw mode should be model-first for flexible intent handling.
+  if (inDemoMode && intent === 'status') {
     const reply = buildMonitoringReply(userMessage);
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
   }
 
-  // Auto-suggest meeting first for planning/decision-heavy requests.
-  // This asks user before execution, so operator keeps final control.
-  if (shouldAutoSuggestMeeting(userMessage)) {
+  // Demo mode only: auto-suggest meeting via rules.
+  // Full mode delegates meeting necessity judgment to the model.
+  if (inDemoMode && shouldAutoSuggestMeeting(userMessage)) {
     const action = buildMeetingSuggestionAction(userMessage);
     pendingProposals.set(messageId, [action]);
     pendingProposalBySession.set(sessionId, messageId);
