@@ -1223,6 +1223,33 @@ function shouldSuppressActionsByIntent(intent: 'status' | 'simple_action' | 'def
   return intent === 'status' || intent === 'definition';
 }
 
+function shouldAutoSuggestMeeting(userMessage: string): boolean {
+  const msg = (userMessage || '').toLowerCase();
+
+  // User explicitly wants to skip meeting
+  if (/(미팅\s*없이|회의\s*없이|바로\s*개발|바로\s*실행|skip\s*meeting)/i.test(msg)) return false;
+
+  const planningLike = /(기획|설계|아키텍처|전략|비교|분석|리스크|우선순위|로드맵|요구사항|의사결정)/i.test(msg);
+  const collaborativeLike = /(팀|역할|pm|개발자|리뷰어|합의|토론|검토)/i.test(msg);
+  const longRequest = msg.trim().length >= 16;
+
+  return planningLike && (collaborativeLike || longRequest);
+}
+
+function buildMeetingSuggestionAction(userMessage: string): ChiefAction {
+  const trimmed = (userMessage || '').trim();
+  const titleCore = trimmed.length > 50 ? `${trimmed.slice(0, 50)}...` : trimmed;
+  return {
+    type: 'start_meeting',
+    params: {
+      title: titleCore ? `${titleCore} 검토 미팅` : '요청사항 검토 미팅',
+      participants: 'pm,developer,reviewer',
+      participantCount: '3',
+      character: 'planning',
+    },
+  };
+}
+
 const ALL_AGENT_ROLES: AgentRole[] = ['pm', 'developer', 'reviewer', 'designer', 'devops', 'qa'];
 
 function isAgentRole(value: string): value is AgentRole {
@@ -1902,6 +1929,25 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
   // Read-only monitoring/status requests should be answered immediately from internal state.
   if (intent === 'status') {
     const reply = buildMonitoringReply(userMessage);
+    pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+    return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+  }
+
+  // Auto-suggest meeting first for planning/decision-heavy requests.
+  // This asks user before execution, so operator keeps final control.
+  if (shouldAutoSuggestMeeting(userMessage)) {
+    const action = buildMeetingSuggestionAction(userMessage);
+    pendingProposals.set(messageId, [action]);
+    pendingProposalBySession.set(sessionId, messageId);
+
+    const reply = [
+      '이 요청은 복잡도/의사결정 요소가 있어서 먼저 3인 미팅(PM·개발·리뷰어)으로 정렬하는 것을 권장합니다.',
+      '',
+      `제안: 미팅 시작 — "${action.params.title}"`,
+      '원하면 지금 바로 세팅할게요. `응` 또는 `승인`이라고 답하면 시작합니다.',
+      '(바로 태스크로 가려면 "미팅 없이 진행"이라고 말해줘.)',
+    ].join('\n');
+
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
   }
