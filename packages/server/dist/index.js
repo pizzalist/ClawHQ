@@ -8,15 +8,15 @@ import { SERVER_PORT } from '@ai-office/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
 import { TEAM_PRESETS } from '@ai-office/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
-import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp } from './task-queue.js';
-import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange } from './chain-plan.js';
+import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp, syncRootTaskStates } from './task-queue.js';
+import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange, resetChainPlanState } from './chain-plan.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, validateWebDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn, resetChiefState } from './chief-agent.js';
 import { stmts } from './db.js';
 import { commitDeliverable, commitTaskDeliverables, getCommitLog } from './git-commit.js';
-import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample } from './monitoring-mock.js';
+import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample, resetMonitoringState, unresetMonitoringState } from './monitoring-mock.js';
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -323,6 +323,7 @@ function getThreadSummary(taskId) {
     };
 }
 app.get('/api/tasks/:id', (req, res) => {
+    syncRootTaskStates();
     const row = stmts.getTask.get(req.params.id);
     if (!row)
         return res.status(404).json({ error: 'Task not found' });
@@ -361,6 +362,7 @@ function allowIncludeTestQuery(query) {
     return isAdminOrDebug;
 }
 app.get('/api/tasks', (req, res) => {
+    syncRootTaskStates();
     const { assigneeId } = req.query;
     const includeTest = allowIncludeTestQuery(req.query);
     const tasks = listTasks(includeTest);
@@ -370,6 +372,7 @@ app.get('/api/tasks', (req, res) => {
     res.json(tasks);
 });
 app.post('/api/tasks', (req, res) => {
+    unresetMonitoringState();
     const { title, description, assigneeId, expectedDeliverables } = req.body;
     if (!title) {
         return res.status(400).json({ error: 'title is required' });
@@ -796,11 +799,20 @@ app.post('/api/reset-all', (_req, res) => {
     stmts.deleteAllMeetings.run();
     stmts.deleteAllEvents.run();
     resetChiefState();
+    resetChainPlanState();
+    resetMonitoringState();
+    // Fix #5: Reset all agents to idle so they don't stay stuck in 'done'/'working' state
+    const agents = listAgents();
+    for (const agent of agents) {
+        if (agent.state !== 'idle') {
+            stmts.updateAgentState.run('idle', null, null, agent.id);
+        }
+    }
     broadcast({ type: 'tasks_update', payload: listTasks() });
     broadcast({ type: 'meetings_update', payload: listMeetings() });
     broadcast({ type: 'agents_update', payload: listAgents() });
     broadcast({ type: 'chief_update', payload: { messages: [] } });
-    res.json({ ok: true, reset: ['tasks', 'meetings', 'events', 'deliverables', 'decisions', 'chief'] });
+    res.json({ ok: true, reset: ['tasks', 'meetings', 'events', 'deliverables', 'decisions', 'chief', 'agents'] });
 });
 app.post('/api/admin/reset', (_req, res) => {
     // Order matters due to foreign-key references
@@ -947,8 +959,15 @@ app.put('/api/chain-plans/:id/auto-execute', (req, res) => {
 app.post('/api/chain-plans/:id/confirm', (req, res) => {
     try {
         const plan = confirmChainPlan(req.params.id);
-        // If autoExecute is on and first step's task is pending, trigger queue
         markChainRunning(plan.id);
+        // Fix: If the current step's task is already completed, advance immediately
+        const rootTask = listTasks().find(t => t.id === plan.taskId);
+        if (rootTask && rootTask.status === 'completed' && plan.autoExecute) {
+            const { nextStep } = advanceChainPlan(plan.id);
+            if (nextStep && rootTask.assigneeId) {
+                spawnChainFollowUp(rootTask.assigneeId, plan.taskId, plan.taskTitle, rootTask.result || '');
+            }
+        }
         processQueue();
         broadcast({ type: 'tasks_update', payload: listTasks() });
         res.json(plan);

@@ -67,12 +67,19 @@ export default function TopBar() {
           <ExportMenu />
           <button
             onClick={async () => {
-              if (!confirm('⚠️ 모든 데이터(회의, 태스크, 이벤트, 결정)를 삭제합니다. 계속하시겠습니까?')) return;
+              if (!confirm('⚠️ 모든 데이터(회의, 태스크, 이벤트, 결정)를 삭제합니다.\n\n정말 초기화하시겠습니까?')) return;
               try {
                 const r = await fetch('/api/reset-all', { method: 'POST' });
-                if (r.ok) { localStorage.removeItem('ai-office-chief-state-v1'); window.location.reload(); }
-                else { alert('초기화 실패'); }
-              } catch { alert('초기화 실패'); }
+                if (r.ok) {
+                  // Clear all app-related localStorage
+                  const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('ai-office'));
+                  keysToRemove.forEach(k => localStorage.removeItem(k));
+                  // Force hard reload to reset all in-memory state
+                  window.location.href = window.location.pathname;
+                } else {
+                  alert(`초기화 실패: ${r.status} ${r.statusText}`);
+                }
+              } catch (e) { alert(`초기화 실패: ${e instanceof Error ? e.message : '네트워크 오류'}`); }
             }}
             className="px-3 py-1.5 bg-red-700/50 hover:bg-red-600/60 text-red-200 text-sm rounded-lg font-medium transition-all"
           >🗑️ 데이터 초기화</button>

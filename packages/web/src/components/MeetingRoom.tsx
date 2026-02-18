@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@ai-office/shared';
 import Spinner from './Spinner';
@@ -310,8 +310,18 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
 export default function MeetingRoom() {
   const meetings = useStore(s => s.meetings);
   const [showNew, setShowNew] = useState(false);
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+  const [selectedMeetingId, setLocalSelectedMeetingId] = useState<string | null>(null);
+  const storeSelectedMeetingId = useStore(s => s.selectedMeetingId);
 
+  // Allow store to pre-select a meeting (e.g. from "결과 보기" button)
+  useEffect(() => {
+    if (storeSelectedMeetingId) {
+      setLocalSelectedMeetingId(storeSelectedMeetingId);
+      useStore.getState().setSelectedMeetingId(null);
+    }
+  }, [storeSelectedMeetingId]);
+
+  const setSelectedMeetingId = setLocalSelectedMeetingId;
   const selectedMeeting = selectedMeetingId ? meetings.find(m => m.id === selectedMeetingId) : null;
 
   const statusIcon: Record<string, string> = { active: '🔵', reviewing: '🟡', completed: '🟢' };

@@ -163,6 +163,13 @@ function wrapJS(js: string): string {
  * @param agentRole - optional role to enforce type constraints (e.g. PM always gets 'report')
  */
 export function createDeliverablesFromResult(taskId: string, result: string, agentRole?: string): Deliverable[] {
+  // Guard: verify taskId exists before inserting deliverables (prevents FK constraint failures)
+  const taskExists = stmts.getTask.get(taskId);
+  if (!taskExists) {
+    console.warn(`[deliverables] Skipping deliverable creation: taskId ${taskId} not found in DB`);
+    return [];
+  }
+
   // Delete existing deliverables for this task (in case of re-run)
   stmts.deleteDeliverablesByTask.run(taskId);
 
@@ -256,6 +263,12 @@ function rowToDeliverable(row: Record<string, unknown>): Deliverable {
  */
 export function validateWebDeliverable(html: string): { valid: boolean; issues: string[] } {
   const issues: string[] = [];
+
+  // Skip validation for non-HTML content (pure JS, JSON, CSS, etc.)
+  const trimmed = (html || '').trim();
+  if (trimmed && !/<(!DOCTYPE|html|head|body|div|canvas|svg)/i.test(trimmed)) {
+    return { valid: true, issues: [] };
+  }
 
   // Check for minimal content
   if (!html || html.trim().length < 50) {

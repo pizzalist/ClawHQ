@@ -79,7 +79,8 @@ export default function ActivityLog() {
           const cfg = TYPE_CONFIG[e.type] || { icon: '📎', color: 'text-gray-400' };
           const clickable = CLICKABLE_TYPES.has(e.type) && e.taskId;
           const task = clickable ? tasks.find((t) => t.id === e.taskId) : null;
-          const resultPreview = task?.result ? task.result.slice(0, 100) : null;
+          const rawPreview = task?.result ? task.result.slice(0, 100) : null;
+          const resultPreview = rawPreview && /^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(task!.result!) ? '🌐 HTML 결과물' : rawPreview;
 
           return (
             <div
@@ -99,7 +100,7 @@ export default function ActivityLog() {
                 </span>
                 {resultPreview && (
                   <div className="text-[10px] text-gray-600 truncate mt-0.5">
-                    💬 {resultPreview}{task!.result!.length > 100 ? '...' : ''}
+                    💬 {resultPreview.length > 80 ? `${resultPreview.slice(0, 80)}...` : resultPreview}
                   </div>
                 )}
               </div>

@@ -1,10 +1,10 @@
 import { v4 as uuid } from 'uuid';
 import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
-import { listTasks, createTask, processQueue, isBatchComplete, getBatchResults, getTasksByBatchId } from './task-queue.js';
+import { listTasks, createTask, processQueue, isBatchComplete, getBatchResults, getTasksByBatchId, findRootTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings, deleteMeeting, deleteAllMeetings } from './meetings.js';
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
-import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan, linkTaskToChainPlan } from './chain-plan.js';
+import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan, linkTaskToChainPlan, listActiveChainPlans } from './chain-plan.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
@@ -23,9 +23,18 @@ const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, AgentModel> = {
 
 const sessionMessages = new Map<string, ChiefChatMessage[]>();
 
+// Chain amendments: queued user messages to apply to next chain step
+export const chainAmendments = new Map<string, string[]>();
+
 // Pending proposals awaiting user approval, keyed by messageId
 const pendingProposals = new Map<string, ChiefAction[]>();
 const pendingProposalBySession = new Map<string, string>();
+// Sessions currently waiting for async LLM reply (prevents "응" racing before proposal is ready)
+const llmInFlightBySession = new Map<string, string>();
+const queuedApprovalBySession = new Set<string>();
+
+// Track agents assigned within a single batch to prevent duplicate assignment
+const batchAssignedAgentIds = new Set<string>();
 
 // Session-aware routing context for inline notifications/actions
 const notificationSessionById = new Map<string, string>();
@@ -36,6 +45,8 @@ export function resetChiefState() {
   sessionMessages.clear();
   pendingProposals.clear();
   pendingProposalBySession.clear();
+  llmInFlightBySession.clear();
+  queuedApprovalBySession.clear();
   notificationSessionById.clear();
   lastActiveChiefSessionId = 'chief-default';
   reportedTaskCompletions.clear();
@@ -57,6 +68,52 @@ function summarizeTaskResult(result: string | null | undefined): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return compactText(cleaned, 500);
+}
+
+function buildFixSummaryReply(userMessage: string): string | null {
+  if (!/(수정\s*결과\s*요약|수정본\s*요약|수정\s*요약|fix\s*summary|변경\s*요약)/i.test(userMessage)) {
+    return null;
+  }
+
+  const tasks = listTasks(true);
+  const completed = tasks.filter(t => t.status === 'completed');
+  const latestFix = completed
+    .filter(t => /^\[fix\]/i.test(t.title) || /(수정|fix|피드백.*반영)/i.test(t.title))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+
+  if (!latestFix) {
+    return '아직 완료된 수정 작업이 없습니다. 먼저 "리뷰 피드백 반영해줘"로 수정 태스크를 실행해 주세요.';
+  }
+
+  let latestReview: Task | undefined;
+  try {
+    const root = findRootTask(latestFix.id);
+    latestReview = completed
+      .filter(t => t.parentTaskId === root.id && /review|리뷰|검토|qa|qc/i.test(t.title))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+  } catch {
+    latestReview = completed
+      .filter(t => /review|리뷰|검토|qa|qc/i.test(t.title))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+  }
+
+  const fixPreview = summarizeTaskResult(latestFix.result).slice(0, 320);
+  const reviewPreview = latestReview?.result ? summarizeTaskResult(latestReview.result).slice(0, 220) : null;
+
+  const lines = [
+    `🛠️ 수정 결과 요약: "${latestFix.title}"`,
+    `완료 시각: ${new Date(latestFix.updatedAt).toLocaleString('ko-KR')}`,
+    '',
+    '핵심 변경사항:',
+    fixPreview,
+  ];
+
+  if (reviewPreview) {
+    lines.push('', '검증/리뷰 요약:', reviewPreview);
+  }
+
+  lines.push('', `상세 결과가 필요하면 "결과 보기" 또는 "${latestFix.title} 전체 보여줘"라고 말해줘.`);
+  return lines.join('\n');
 }
 
 /** Parse structured [SCORE] lines from reviewer output */
@@ -197,12 +254,68 @@ function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').D
 // Exported for testing
 export { parseStructuredScores as _parseStructuredScores, parseRecommendation as _parseRecommendation };
 
+const ACTION_EMOJI_MAP: Record<string, string> = {
+  create_task: '📋',
+  create_agent: '🤖',
+  start_meeting: '🤝',
+  assign_task: '📌',
+  cancel_task: '🗑️',
+  cancel_all_pending: '🗑️',
+  reset_agent: '🔄',
+  cancel_meeting: '❌',
+  delete_meeting: '❌',
+  delete_all_meetings: '❌',
+};
+
+const ACTION_FRIENDLY_LABEL: Record<string, string> = {
+  create_task: '태스크 생성',
+  create_agent: '에이전트 생성',
+  start_meeting: '회의 소집',
+  assign_task: '태스크 배정',
+  cancel_task: '태스크 취소',
+  cancel_all_pending: '대기 작업 전체 취소',
+  reset_agent: '에이전트 리셋',
+  cancel_meeting: '미팅 취소',
+  delete_meeting: '미팅 삭제',
+  delete_all_meetings: '전체 미팅 삭제',
+};
+
+function formatActionForDisplay(action: ChiefAction): string {
+  const emoji = ACTION_EMOJI_MAP[action.type] || '▶️';
+  const label = ACTION_FRIENDLY_LABEL[action.type] || action.type;
+  const p = action.params;
+
+  // Resolve human-readable descriptions based on action type
+  if (action.type === 'cancel_task' && p.taskId) {
+    const row = stmts.getTask.get(p.taskId) as any;
+    const title = row?.title || '알 수 없는 태스크';
+    return `${emoji} ${label}: "${title}"`;
+  }
+  if (action.type === 'reset_agent' && p.agentId) {
+    const row = stmts.getAgent.get(p.agentId) as any;
+    const name = row?.name || '알 수 없는 에이전트';
+    return `${emoji} ${label}: "${name}"`;
+  }
+  if (action.type === 'assign_task' && p.taskId) {
+    const taskRow = stmts.getTask.get(p.taskId) as any;
+    const agentRow = p.agentId ? stmts.getAgent.get(p.agentId) as any : null;
+    const taskTitle = taskRow?.title || '알 수 없는 태스크';
+    const agentName = agentRow?.name || p.agentId || '';
+    return `${emoji} ${label}: "${taskTitle}"${agentName ? ` → ${agentName}` : ''}`;
+  }
+  if (p.title) {
+    return `${emoji} ${label}: "${p.title}"`;
+  }
+  if (p.name) {
+    return `${emoji} ${label}: "${p.name}"`;
+  }
+  // Fallback: show label only, hide raw IDs
+  return `${emoji} ${label}`;
+}
+
 function formatActionList(actions: ChiefAction[]): string {
   if (actions.length === 0) return '';
-  const lines = actions.map((a, i) => {
-    const kv = Object.entries(a.params).map(([k, v]) => `${k}: ${v}`).join(', ');
-    return `${i + 1}. ${a.type}${kv ? ` (${kv})` : ''}`;
-  });
+  const lines = actions.map((a, i) => `${i + 1}. ${formatActionForDisplay(a)}`);
   return `\n\n실행 후보 액션:\n${lines.join('\n')}\n\n원하는 번호(예: 1번)를 말해 주세요. '응/승인'이면 1번부터 순서대로 진행합니다.`;
 }
 
@@ -381,7 +494,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
           if (candidates && candidates.length > 0) {
             const candidateList = candidates.map((c, i) => `${i + 1}. **${c.name}**: ${c.summary.slice(0, 120)}`).join('\n');
             nextStepLines.push(`\n\n📋 **도출된 후보 ${candidates.length}건:**\n${candidateList}`);
-            nextStepLines.push(`\n리뷰어 점수화를 원하시면 회의 완료 알림의 "🔍 리뷰어 점수화 시작" 버튼을 눌러주세요.`);
+            nextStepLines.push(`\n후보 순위 평가를 원하시면 회의 완료 알림의 "🏆 후보 순위 평가" 버튼을 눌러주세요.`);
           } else {
             nextStepLines.push(`\n\n📋 구조화된 후보가 없습니다. 회의 결과를 확인해주세요.`);
           }
@@ -449,10 +562,16 @@ export function handleChiefAction(notificationId: string, actionId: string, para
           if (nextStep) {
             // Find or create agent for next step
             const agents = listAgents();
-            let nextAgent = agents.find(a => a.role === nextStep.role && a.state === 'idle') || agents.find(a => a.role === nextStep.role);
+            const idleCandidates = agents.filter(a => a.role === nextStep.role && a.state === 'idle')
+              .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+            const anyCandidates = agents.filter(a => a.role === nextStep.role)
+              .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+            let nextAgent = idleCandidates[0] || anyCandidates[0];
             if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextStep.role), nextStep.role, DEFAULT_MODEL_BY_ROLE[nextStep.role]);
 
-            const nextTitle = `[${nextStep.label}] ${task?.title || ''}`.trim();
+            // Bug 4 fix: 기존 prefix 제거 후 현재 단계 prefix만 붙임
+            const strippedTaskTitle = (task?.title || '').replace(/^(\[[^\]]*\]\s*)+/, '');
+            const nextTitle = `[${nextStep.label}] ${strippedTaskTitle}`.trim();
             const nextDesc = `이전 단계 결과를 기반으로 ${nextStep.label}을(를) 수행하세요.\n\n${nextStep.reason}\n\n## 이전 결과\n${(task?.result || '').slice(0, 4000)}`;
             const newTask = createTask(nextTitle, nextDesc, nextAgent.id, taskId);
             // Link new task to same chain plan so handleRunComplete can find it
@@ -508,11 +627,16 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         }
 
         const agents = listAgents();
-        let nextAgent = agents.find(a => a.role === nextRole && a.state === 'idle') || agents.find(a => a.role === nextRole);
+        const idleOfRole = agents.filter(a => a.role === nextRole && a.state === 'idle')
+          .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+        const anyOfRole = agents.filter(a => a.role === nextRole)
+          .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+        let nextAgent = idleOfRole[0] || anyOfRole[0];
         if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextRole), nextRole, DEFAULT_MODEL_BY_ROLE[nextRole]);
 
-        const nextTaskTitle = `[${nextLabel}] ${task.title}`;
-        const nextTaskDesc = `이전 태스크 "${task.title}" 결과를 기반으로 ${nextLabel}을(를) 수행하세요.\n\n## 이전 결과\n${(task.result || '').slice(0, 2000)}`;
+        // Bug 4 fix: 기존 prefix 제거
+        const nextTaskTitle = `[${nextLabel}] ${task.title.replace(/^(\[[^\]]*\]\s*)+/, '')}`;
+        const nextTaskDesc = `이전 태스크 "${task.title}" 결과를 기반으로 ${nextLabel}을(를) 수행하세요.\n\n⚠️ 주의: 코드/결과물은 아래 텍스트에 포함되어 있습니다. 파일 시스템이 아닌 아래 내용을 직접 검토하세요.\n\n## 이전 결과\n${(task.result || '').slice(0, 4000)}`;
         const newTask = createTask(nextTaskTitle, nextTaskDesc, nextAgent.id, taskId);
         setTimeout(() => processQueue(), 3000);
 
@@ -520,15 +644,45 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         nextStepLines.push(`📋 태스크: "${nextTaskTitle}"`);
         nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
       } else {
-        nextStepLines.push(`\n\n✅ 확정 완료.`);
+        nextStepLines.push(`\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`);
       }
     } else {
-      nextStepLines.push(`\n\n✅ 확정 완료.`);
+      nextStepLines.push(`\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`);
     }
 
     reply = nextStepLines.join('');
   } else if (actionId === 'request_revision' || actionId.startsWith('revise-') || actionId.startsWith('revision-') || actionId.startsWith('request_revision')) {
-    reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?\n\n💡 구체적인 수정 방향을 알려주시면 더 빠르게 처리할 수 있습니다.';
+    const taskId = params?.taskId;
+    const task = taskId ? listTasks(true).find(t => t.id === taskId) : null;
+    const reviewLike = !!task && /(review|리뷰|검토|qa|qc)/i.test(task.title);
+
+    if (task && reviewLike) {
+      const rootTask = findRootTask(task.id);
+      const fixAction: ChiefAction = {
+        type: 'create_task',
+        params: {
+          title: `[Fix] ${rootTask.title.replace(/^\[.*?\]\s*/, '')}`,
+          description: [
+            `리뷰 태스크 "${task.title}"의 피드백을 반영합니다.`,
+            '',
+            '---',
+            '## 원본 코드/결과',
+            (rootTask.result || '(원본 없음)').slice(0, 5000),
+            '',
+            '---',
+            '## 리뷰 피드백',
+            (task.result || '(리뷰 피드백 없음)').slice(0, 3000),
+          ].join('\n'),
+          assignRole: 'developer',
+        },
+      };
+      const pendingId = `fix-from-action-${Date.now()}`;
+      pendingProposals.set(pendingId, [fixAction]);
+      pendingProposalBySession.set(scopedSessionId, pendingId);
+      reply = `✅ 수정 반영 작업을 준비했습니다.\n\n${formatActionForDisplay(fixAction)}\n\n승인하면 즉시 실행됩니다.`;
+    } else {
+      reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?\n\n💡 구체적인 수정 방향을 알려주시면 더 빠르게 처리할 수 있습니다.';
+    }
   } else if (actionId === 'view_result' || actionId.startsWith('view-')) {
     const meetingId = extractIdFromAction(actionId, 'view-meeting') || params?.meetingId;
     const taskId = extractIdFromAction(actionId, 'view') || params?.taskId;
@@ -571,7 +725,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         if (reviewMeeting) {
           reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
         } else {
-          reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보(sourceCandidates)가 없습니다. 먼저 기획/브레인스토밍 회의를 완료하여 후보를 도출한 뒤 "리뷰어 점수화 시작"을 눌러주세요.';
+          reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보(sourceCandidates)가 없습니다. 먼저 기획/브레인스토밍 회의를 완료하여 후보를 도출한 뒤 "후보 순위 평가" 버튼을 눌러주세요.';
         }
       } else {
         reply = '리뷰 대상 회의를 찾을 수 없습니다.';
@@ -649,7 +803,88 @@ function makeCheckInIdempotencyKey(checkInId: string, optionId: string): string 
  * Chief monitors progress and proactively communicates with the user.
  */
 export function chiefHandleTaskEvent(event: AppEvent) {
+  // Issue 2: Chain completion notification in chat
+  if (event.type === 'chain_completed' && event.taskId) {
+    const tasks = listTasks();
+    const rootTask = tasks.find(t => t.id === event.taskId);
+    if (rootTask && !isNotificationDuplicate('chain_complete', event.taskId)) {
+      const plan = getChainPlanForTask(event.taskId);
+      const agents = listAgents();
+      let stepLine = '';
+      if (plan) {
+        stepLine = plan.steps.map(s => {
+          const agent = s.agentId ? agents.find(a => a.id === s.agentId) : null;
+          return `${s.label}${agent ? ` (${agent.name})` : ''} ✅`;
+        }).join(' → ');
+      }
+
+      // Check if last step was review and extract verdict
+      let reviewInfo = '';
+      if (rootTask.result) {
+        const passMatch = rootTask.result.match(/PASS|FAIL|합격|불합격/i);
+        const findingsMatch = rootTask.result.match(/(\d+)\s*건?\s*(issue|finding|문제|지적)/i);
+        if (passMatch) {
+          const verdict = /PASS|합격/i.test(passMatch[0]) ? '✅ PASS' : '❌ FAIL';
+          const findings = findingsMatch ? ` (${findingsMatch[1]}건 issues)` : '';
+          reviewInfo = `\n📋 리뷰 결과: ${verdict}${findings}`;
+          if (/FAIL|불합격/i.test(passMatch[0])) {
+            reviewInfo += `\n💡 "리뷰 피드백 반영해줘"라고 하면 수정 작업을 시작합니다.`;
+          }
+        } else {
+          // No explicit PASS/FAIL — check if review has critical/major issues
+          const hasCriticalIssues = /\b(critical|major|심각|중대|필수\s*수정)\b/i.test(rootTask.result);
+          const isCleanPass = /\b(PASS|통과|합격)\b/i.test(rootTask.result) && !hasCriticalIssues;
+          if (hasCriticalIssues && !isCleanPass) {
+            reviewInfo = `\n📋 리뷰 결과: ❌ 수정 필요`;
+            reviewInfo += `\n💡 "리뷰 피드백 반영해줘"라고 하면 수정 작업을 시작합니다.`;
+          }
+        }
+      }
+
+      // Auto-show result preview (Issue 5)
+      const resultPreview = rootTask.result
+        ? '\n\n📄 **결과 미리보기:**\n' + rootTask.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (rootTask.result.length > 300 ? '...' : '')
+        : '';
+
+      const summary = `🎉 [체인 완료] "${rootTask.title}" 전체 파이프라인이 완료되었습니다.\n${stepLine ? `• ${stepLine}` : ''}${reviewInfo}${resultPreview}\n\n📊 결과 보기 버튼으로 최종 결과를 확인하세요.`;
+
+      notifyChief({
+        id: `notif-chain-complete-${event.taskId}-${Date.now()}`,
+        type: 'task_complete',
+        title: `🎉 체인 완료: ${rootTask.title}`,
+        summary,
+        actions: [
+          { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
+          { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
+        ],
+        taskId: event.taskId,
+        createdAt: new Date().toISOString(),
+      });
+
+      // notifyChief already injects into chief chat stream; avoid duplicate completion messages.
+    }
+    return;
+  }
+
   if (event.type === 'chain_spawned' && event.taskId) {
+    // Bug 3 fix: autoAdvance가 켜져 있으면 확인 요청 메시지를 보내지 않음
+    // event.taskId가 자식 태스크일 수 있으므로 모든 활성 플랜에서 autoExecute 확인
+    const chainPlanForSpawn = getChainPlanForTask(event.taskId);
+    const allActivePlans = listActiveChainPlans();
+    const anyAutoExec = chainPlanForSpawn?.autoExecute || allActivePlans.some(p => p.autoExecute);
+    if (anyAutoExec) {
+      return; // 자동실행 모드에서는 확인 요청 스킵
+    }
+
+    // Bug 5 fix: 체인이 완료 상태거나 다음 단계가 없으면 check-in 스킵
+    if (chainPlanForSpawn) {
+      const isChainDone = chainPlanForSpawn.status === 'completed' || chainPlanForSpawn.status === 'cancelled';
+      const noMoreSteps = chainPlanForSpawn.currentStep >= chainPlanForSpawn.steps.length - 1;
+      if (isChainDone || noMoreSteps) {
+        return; // 체인 종료 — "다음 단계 추천" 팝업 불필요
+      }
+    }
+
     emitCheckIn({
       id: `checkin-chain-${event.taskId}-${Date.now()}`,
       stage: 'progress',
@@ -701,7 +936,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
       id: `notif-task-${event.taskId}-${Date.now()}`,
       type: webDeliverables.length > 0 && validationWarning ? 'task_failed' : 'task_complete',
       title: task.title,
-      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}`,
+      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}${task.result ? '\n\n📄 **결과 미리보기:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`,
       actions: [
         { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
         { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
@@ -741,6 +976,12 @@ export function chiefHandleTaskEvent(event: AppEvent) {
         ].join('\n');
 
         const consolidationTask = createTask(consolidationTitle, consolidationDesc, pmAgent.id);
+        // Auto-execute chain for consolidation tasks — no user check-in needed
+        const consolidationPlan = getChainPlanForTask(consolidationTask.id);
+        if (consolidationPlan) {
+          setChainAutoExecute(consolidationPlan.id, true);
+          confirmChainPlan(consolidationPlan.id);
+        }
         setTimeout(() => processQueue(), 200);
 
         notifyChief({
@@ -815,7 +1056,7 @@ export function chiefHandleMeetingChange() {
       // If planning/brainstorm meeting, offer to start review scoring
       if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
         meetingActions.push(
-          { id: `start-review-${meeting.id}`, label: '🔍 리뷰어 점수화 시작', action: 'start_review', params: { meetingId: meeting.id } },
+          { id: `start-review-${meeting.id}`, label: '🏆 후보 순위 평가 (리뷰어가 점수 매김)', action: 'start_review', params: { meetingId: meeting.id } },
         );
       }
 
@@ -975,12 +1216,29 @@ function pushMessage(sessionId: string, message: ChiefChatMessage) {
 
 export function summarizeOfficeState(): string {
   const agents = listAgents();
+  // Re-read tasks from DB at call time for freshest status
   const tasks = listTasks();
   const meetings = listMeetings();
 
-  const pendingTasks = tasks.filter((t) => t.status === 'pending');
-  const activeTasks = tasks.filter((t) => t.status === 'in-progress');
-  const completedTasks = tasks.filter((t) => t.status === 'completed');
+  // Bug 1 fix: 체인 플랜 완료된 태스크는 DB가 in-progress여도 completed로 표시
+  // + DB에서 실시간 재조회하여 stale 캐시 문제 해결
+  const correctedTasks = tasks.map(t => {
+    if (t.status === 'in-progress') {
+      // Re-check actual DB status to catch race with completion
+      const freshRow = stmts.getTask.get(t.id) as Record<string, unknown> | undefined;
+      if (freshRow && (freshRow.status as string) === 'completed') {
+        return { ...t, status: 'completed' as import('@ai-office/shared').TaskStatus, result: (freshRow.result as string) ?? t.result };
+      }
+      const plan = getChainPlanForTask(t.id);
+      if (plan && (plan.status === 'completed' || plan.currentStep >= plan.steps.length - 1)) {
+        return { ...t, status: 'completed' as import('@ai-office/shared').TaskStatus };
+      }
+    }
+    return t;
+  });
+  const pendingTasks = correctedTasks.filter((t) => t.status === 'pending');
+  const activeTasks = correctedTasks.filter((t) => t.status === 'in-progress');
+  const completedTasks = correctedTasks.filter((t) => t.status === 'completed');
   const activeMeetings = meetings.filter((m: Meeting) => m.status !== 'completed');
   const completedMeetings = meetings.filter((m: Meeting) => m.status === 'completed');
 
@@ -1011,7 +1269,7 @@ export function summarizeOfficeState(): string {
     ? activeMeetings.map(m => `- "${m.title}" (${m.status}) id=${m.id}`).join('\n')
     : '없음';
 
-  return [
+  const lines = [
     `## 현재 에이전트 (${agents.length}명)`,
     agentLines,
     ``,
@@ -1026,7 +1284,36 @@ export function summarizeOfficeState(): string {
     ``,
     `## 활성 미팅 (${activeMeetings.length}건)`,
     activeMeetingLines,
-  ].join('\n');
+  ];
+
+  // Include recent completed task results for Chief context
+  const recentWithResults = completedTasks.filter(t => t.result).slice(0, 3);
+  if (recentWithResults.length > 0) {
+    lines.push('');
+    lines.push(`## 최근 완료 태스크 결과 (상위 ${recentWithResults.length}건)`);
+    for (const task of recentWithResults) {
+      lines.push(`\n📋 완료된 태스크 "${task.title}" 결과 (요약):`);
+      lines.push(task.result!.slice(0, 500));
+    }
+  }
+
+  // Include recent review results for fix-request context
+  const recentReviews = completedTasks
+    .filter(t => t.title.startsWith('[Review]') || t.title.startsWith('[리뷰]') || t.title.startsWith('[코드 리뷰]'))
+    .slice(0, 2);
+  if (recentReviews.length > 0) {
+    lines.push('');
+    lines.push(`## 최근 리뷰 결과`);
+    for (const rv of recentReviews) {
+      const isPass = /\b(PASS|통과|합격)\b/i.test(rv.result || '') && !/\b(FAIL|실패|불합격|critical|major)\b/i.test(rv.result || '');
+      lines.push(`\n🔍 "${rv.title}" — ${isPass ? '✅ PASS' : '❌ 수정 필요'}`);
+      if (!isPass && rv.result) {
+        lines.push(rv.result.slice(0, 400));
+      }
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function buildChiefSystemPrompt(): string {
@@ -1042,6 +1329,7 @@ function buildChiefSystemPrompt(): string {
 6. 실행 전에 반드시 사용자 승인을 받으세요.
 7. 아래 오피스 상태를 참고해 taskId, agentId 등을 직접 사용하세요.
 8. 단순/정의형 질문(예: "원칙 설명", "기준 요약", "체크리스트 n개")은 설명 모드로 짧게 직답하고, 불필요한 실행 제안/추가 액션 요청을 붙이지 마세요.
+9. 체인이 진행 중일 때 사용자가 추가 요청을 하면, 해당 내용을 다음 단계에 반영할 것임을 알려주세요.
 9. add/create/reset/cancel 계열 요청은 1~2문장으로 답하고, 필요한 최소 액션만 제시하세요.
 
 응답 길이:
@@ -1059,6 +1347,37 @@ function buildChiefSystemPrompt(): string {
 - 사용자가 명시적으로 회의를 요청한 경우
 - 3명 이상의 에이전트가 협업해야 하는 복잡한 작업인 경우
 단순 작업(삭제, 상태 확인, 1인 작업)에는 절대 미팅을 제안하지 마세요.
+
+## 요청 난이도 자동 판단
+사용자가 새 프로젝트/기능을 요청하면 먼저 난이도를 판단하고, 그에 맞는 플로우를 제안하세요.
+
+**Level 1 — Simple (단순)**
+- 기준: 단일 페이지/컴포넌트, 기존 기능 수정, UI 변경, 스타일 수정
+- 예시: "로그인 페이지 만들어줘", "버튼 색 바꿔줘", "헤더 수정"
+- 플로우: Developer 1명에게 바로 배정
+- 액션: create_task → assign (developer)
+
+**Level 2 — Standard (보통)**
+- 기준: CRUD 앱, 여러 페이지, API 연동, 단일 서비스 범위
+- 예시: "채팅 앱 만들어줘", "Todo CRUD", "게시판 만들어줘"
+- 플로우: PM 명세서 작성 → Developer 구현 → Reviewer 리뷰
+- 액션: create_task (PM 기획) → 완료 후 체인으로 개발/리뷰
+
+**Level 3 — Complex (복잡)**
+- 기준: 다중 서비스/마이크로서비스, 실시간 기능, DB 설계 필요, 대규모 아키텍처, 여러 기술 스택 혼합
+- 예시: "SNS 플랫폼", "이커머스 사이트", "실시간 협업 툴", "SaaS 제품"
+- 플로우:
+  1. 먼저 기술 검토 회의를 소집 (start_meeting, character="architecture")
+     - 참여자: 프로젝트 규모에 맞게 선택 (CTO역 PM, Frontend Dev, Backend Dev, DevOps 등)
+     - 회의에서 아키텍처/기술 스택/역할 분담 논의
+  2. 회의 결과를 바탕으로 PM이 개발 명세서 작성 (create_task, PM)
+  3. 명세서 기반으로 역할별 태스크 분배 (프론트엔드/백엔드/인프라 등 병렬 가능)
+- 액션 순서: start_meeting (architecture) → 완료 후 confirm → PM 명세서 → 역할별 create_task
+
+판단 시 주의:
+- 사용자가 "회의 없이 바로 해줘", "바로 개발해줘" 등 명시적으로 요청하면 그 의사를 존중하세요.
+- 애매하면 Standard로 처리하세요. 과도한 프로세스보다 빠른 실행이 낫습니다.
+- 난이도 판단 결과를 사용자에게 간결히 알려주세요 (예: "복잡한 프로젝트로 판단됩니다. 기술 검토 회의부터 시작할까요?")
 
 ## 미팅 흐름 규칙 (엄격)
 - "PM N명 먼저 미팅" 요청 시: 반드시 미팅을 먼저 생성/실행하세요.
@@ -1085,13 +1404,15 @@ ${state}
 [ACTION:confirm_meeting meetingId="미팅ID"]
 [ACTION:confirm_task taskId="태스크ID"]
 [ACTION:start_review meetingId="미팅ID"]
+[ACTION:view_task_result taskId="태스크ID"]
 
 의사결정 액션:
-- confirm_meeting: 완료된 미팅을 확정하고 다음 단계 자동 실행 (meetingId 생략 시 최근 완료 미팅)
+- confirm_meeting: 완료된 미팅을 확정하고 다음 단계 자동 실행 (meetingId 생략 가능 — 최근 완료 미팅 자동 선택)
 - confirm_task: 완료된 태스크를 확정하고 체인 다음 단계 자동 실행 (taskId 생략 시 최근 완료 태스크)
 - start_review: 브레인스토밍/기획 미팅 결과를 리뷰어 점수화 (meetingId 생략 시 최근 미팅)
 - 사용자가 "확정", "진행", "다음 단계" 등을 말하면 적절한 confirm 액션을 제안하세요.
-- 사용자가 "리뷰", "점수화" 등을 말하면 start_review를 제안하세요.
+- 사용자가 "리뷰", "점수화", "후보 평가" 등을 말하면 start_review를 제안하세요.
+- view_task_result: 완료된 태스크의 상세 결과를 조회하여 사용자에게 보여줌
 
 사용 가능한 role: pm, developer, reviewer, designer, devops, qa
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
@@ -1112,7 +1433,14 @@ ${state}
 
 character 선택 기준: 사용자 요청 맥락에 맞는 타입을 자동 선택하세요. 예) "아키텍처 설계 회의" → architecture, "스프린트 계획" → sprint-planning
 
-이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요.`;
+이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요.
+
+## 리뷰 피드백 반영
+사용자가 "리뷰 피드백 반영해줘", "수정해줘", "fix", "수정 반영" 등을 말하면:
+1. 가장 최근 완료된 리뷰 결과를 참조 (위 오피스 상태에서 확인)
+2. [Fix] 접두어로 수정 태스크를 create_task로 생성 제안
+3. 태스크 설명에 "리뷰 피드백을 반영하여 수정" 내용 포함
+4. assignRole="developer"로 개발자에게 배정 (Dev→Review 2단계 체인 자동 적용됨)`;
 }
 
 /** Parse [ACTION:type key="value" ...] blocks from LLM output */
@@ -1137,7 +1465,7 @@ function parseActions(text: string): { actions: ChiefAction[]; cleanText: string
   return { actions, cleanText };
 }
 
-const TASK_ID_PLACEHOLDER_RE = /^(\(?.*생성된\s*task\s*id.*\)?|\(?.*task\s*id.*\)?|\{?taskid\}?|<taskid>|new[-_ ]?task)$/i;
+const TASK_ID_PLACEHOLDER_RE = /^(\(?.*생성된\s*task\s*id.*\)?|\(?.*task\s*id.*\)?|\{?taskid\}?|<taskid>|new[-_ ]?task|__NEW__|__new__|NEW_TASK_ID|TASK_ID|<.*id.*>)$/i;
 
 function isTaskIdPlaceholder(value?: string): boolean {
   const v = (value || '').trim();
@@ -1196,7 +1524,7 @@ function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'defi
   const msg = (userMessage || '').toLowerCase();
 
   // Keep status detection strict to avoid misclassifying normal requests.
-  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|진행\s*중(이야|인가|이냐)?|진행중|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|결과\s*나왔|끝났|완료\s*됐|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
+  const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|상태\s*확인|진행\s*중(이야|인가|이냐)?|진행중\??|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|결과\s*(나왔|는\??|어때\??)?|다\s*됐(어|나|니)?\??|아직(이야|이냐|인가)?\??|끝났(어|나|니)?\??|완료\s*됐(어|나|니)?\??|언제\s*(줘|돼|됨|끝나)|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
   const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg);
 
   if (readOnlyStatusLike && !mutationLike) {
@@ -1457,16 +1785,79 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           taskDescription = `${taskDescription}\n\n## 참고: 이전 태스크 결과 ("${prevTask.title}")\n\n${prevResult}`;
         }
 
+        // Attach recent meeting context if available
+        const recentMeetings = listMeetings().filter(m => m.status === 'completed').sort((a, b) => 
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+        if (recentMeetings.length > 0) {
+          const recentMeeting = recentMeetings[0];
+          const meetingAge = Date.now() - new Date(recentMeeting.updatedAt + 'Z').getTime();
+          // Attach if meeting was completed within last 60 minutes (likely related)
+          if (meetingAge < 60 * 60 * 1000 && recentMeeting.report) {
+            taskDescription = `${taskDescription}\n\n## 참고: 최근 회의 결과 ("${recentMeeting.title}")\n\n${recentMeeting.report.slice(0, 3000)}`;
+          }
+        }
+
+        // Check for duplicate task
+        const duplicate = allTasks.find(t => t.title === taskTitle && (t.status === 'in-progress' || t.status === 'pending'));
+        if (duplicate) {
+          return { ...action, result: { ok: false, message: `동일한 작업 "${taskTitle}"이(가) 이미 진행 중입니다 (ID: ${duplicate.id.slice(0, 8)})` } };
+        }
+
+        // Auto-attach original code + review feedback for fix tasks
+        if (taskTitle.startsWith('[Fix]') || /수정|fix|피드백.*반영/i.test(taskTitle)) {
+          const recentReview = allTasks
+            .filter(t => (t.title.startsWith('[Review]') || t.title.startsWith('[리뷰]') || t.title.startsWith('[코드 리뷰]')) && t.status === 'completed' && t.result)
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+
+          if (recentReview) {
+            try {
+              const rootTask = findRootTask(recentReview.id);
+              // Find the dev step result (sibling task under same root)
+              const devTask = allTasks.find(t =>
+                t.parentTaskId === rootTask.id &&
+                (t.title.startsWith('[Dev]') || t.title.startsWith('[개발]') || t.title.startsWith('[개발 실행]')) &&
+                t.status === 'completed' && t.result
+              );
+              const originalCode = devTask?.result || rootTask.result || '';
+              if (originalCode) {
+                taskDescription += `\n\n---\n## 📝 원본 코드 (수정 대상)\n${originalCode.slice(0, 4000)}`;
+              }
+              taskDescription += `\n\n---\n## 🔍 리뷰어 피드백 (반영 필요)\n${recentReview.result!.slice(0, 2000)}`;
+            } catch { /* findRootTask may throw if orphaned */ }
+          }
+        }
+
         // 1) Dynamic start-role recommendation (intent/output/complexity hints)
         const preferredRole = recommendStartRoleFromIntent(taskTitle, taskDescription, assignRole);
 
-        // 2) Resolve initial assignee from recommended first step
+        // 2) Resolve initial assignee from recommended first step (least-recently-used for fairness)
         let assigneeId: string | null = null;
         if (preferredRole) {
           const agents = listAgents();
-          const candidate = agents.find(a => a.role === preferredRole && a.state === 'idle')
-            || agents.find(a => a.role === preferredRole);
-          if (candidate) assigneeId = candidate.id;
+          // Exclude agents already assigned in this batch to distribute work
+          const candidates = agents.filter(a => a.role === preferredRole && a.state === 'idle' && !batchAssignedAgentIds.has(a.id));
+          if (candidates.length === 0) {
+            // fallback: any idle agent of that role (including batch-assigned, they might be only option)
+            const fallback = agents.filter(a => a.role === preferredRole && a.state === 'idle');
+            if (fallback.length > 0) {
+              fallback.sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+              assigneeId = fallback[0].id;
+            } else {
+              const any = agents.filter(a => a.role === preferredRole);
+              any.sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+              if (any.length > 0) assigneeId = any[0].id;
+            }
+          } else {
+            // Pick least recently used idle agent not in batch
+            candidates.sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+            assigneeId = candidates[0].id;
+          }
+        }
+
+        // Track assigned agents within this batch to prevent duplicate assignment
+        if (assigneeId) {
+          batchAssignedAgentIds.add(assigneeId);
         }
 
         const taskBatchId = action.params.batchId || null;
@@ -1478,7 +1869,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
 
         return { ...action, result: {
           ok: true,
-          message: `작업 "${task.title}" 생성됨\n\n📋 추천 체인 (${plan.steps.length}단계):\n${planSummary}\n\n필요하면 단계 추가/삭제/순서 변경 후 확정하세요.`,
+          message: `작업 "${task.title}" 생성됨 (taskId: ${task.id}, runId: pending)\n\n📋 추천 체인 (${plan.steps.length}단계):\n${planSummary}\n\n필요하면 단계 추가/삭제/순서 변경 후 확정하세요.`,
           id: task.id,
         }};
       }
@@ -1498,7 +1889,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
             ...action,
             result: {
               ok: false,
-              message: '점수화 리뷰 미팅은 sourceCandidates가 필요합니다. 완료된 기획/브레인스토밍 미팅에서 "리뷰어 점수화 시작"으로 생성해주세요.',
+              message: '점수화 리뷰 미팅은 sourceCandidates가 필요합니다. 완료된 기획/브레인스토밍 미팅에서 "후보 순위 평가" 버튼으로 생성해주세요.',
             },
           };
         }
@@ -1594,7 +1985,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
 
         stmts.updateTask.run(agentId, 'pending', task.result || null, taskId);
         setTimeout(() => processQueue(), 100);
-        return { ...action, result: { ok: true, message: `작업 "${task.title}"를 ${agent.name}에게 배정했습니다.` } };
+        return { ...action, result: { ok: true, message: `작업 "${task.title}"를 ${agent.name}에게 배정했습니다. (taskId: ${taskId}, runId: pending)` } };
       }
       case 'cancel_task': {
         const taskId = normalizeTaskId(action.params.taskId);
@@ -1642,12 +2033,18 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           const result = handleChiefAction(notifId, `approve-${latestCompleted.id}`, { meetingId: latestCompleted.id }, sessionId);
           return { ...action, result: { ok: true, message: result.reply } };
         }
-        const meeting = getMeeting(meetingId);
+        let meeting = getMeeting(meetingId);
+        if (!meeting) {
+          // Fuzzy match: LLM sometimes uses truncated IDs
+          const allMeetings = listMeetings();
+          meeting = allMeetings.find(m => m.id.startsWith(meetingId)) || null;
+        }
         if (!meeting) {
           return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
         }
-        const notifId = `synthetic-confirm-${meetingId}-${Date.now()}`;
-        const result = handleChiefAction(notifId, `approve-${meetingId}`, { meetingId }, sessionId);
+        const resolvedMeetingId = meeting.id;
+        const notifId = `synthetic-confirm-${resolvedMeetingId}-${Date.now()}`;
+        const result = handleChiefAction(notifId, `approve-${resolvedMeetingId}`, { meetingId: resolvedMeetingId }, sessionId);
         return { ...action, result: { ok: true, message: result.reply } };
       }
       case 'start_review': {
@@ -1665,8 +2062,16 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           const r = handleChiefAction(notifId, `start-review-${latestBrainstorm.id}`, { meetingId: latestBrainstorm.id }, sessionId);
           return { ...action, result: { ok: true, message: r.reply } };
         }
-        const notifId = `synthetic-review-${meetingId}-${Date.now()}`;
-        const r = handleChiefAction(notifId, `start-review-${meetingId}`, { meetingId }, sessionId);
+        let resolvedId = meetingId;
+        if (!getMeeting(meetingId)) {
+          // Fuzzy match: LLM sometimes uses truncated IDs
+          const allMeetings = listMeetings();
+          const found = allMeetings.find(m => m.id.startsWith(meetingId));
+          if (found) resolvedId = found.id;
+          else return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+        }
+        const notifId = `synthetic-review-${resolvedId}-${Date.now()}`;
+        const r = handleChiefAction(notifId, `start-review-${resolvedId}`, { meetingId: resolvedId }, sessionId);
         return { ...action, result: { ok: true, message: r.reply } };
       }
       case 'confirm_task': {
@@ -1694,16 +2099,30 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         if (!meetingId) {
           return { ...action, result: { ok: false, message: 'meetingId가 필요합니다' } };
         }
-        const meeting = getMeeting(meetingId);
+        let meeting = getMeeting(meetingId);
+        if (!meeting) {
+          // Fuzzy match: LLM sometimes uses truncated IDs
+          const allMeetings = listMeetings();
+          meeting = allMeetings.find(m => m.id.startsWith(meetingId)) || null;
+        }
         if (!meeting) {
           return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
         }
-        const deleted = deleteMeeting(meetingId);
+        const deleted = deleteMeeting(meeting.id);
         return { ...action, result: { ok: deleted, message: deleted ? `미팅 "${meeting.title}" 삭제됨` : '미팅 삭제 실패' } };
       }
       case 'delete_all_meetings': {
         const count = deleteAllMeetings();
         return { ...action, result: { ok: true, message: `미팅 ${count}건 삭제됨` } };
+      }
+      case 'view_task_result': {
+        const { taskId } = action.params;
+        const tasks = listTasks();
+        const task = taskId
+          ? tasks.find(t => t.id === taskId || t.id.startsWith(taskId))
+          : tasks.filter(t => t.status === 'completed').sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+        if (!task) return { ...action, result: { ok: false, message: '태스크를 찾을 수 없습니다' } };
+        return { ...action, result: { ok: true, message: `📋 "${task.title}" 결과:\n\n${task.result || '결과 없음'}` } };
       }
       default:
         return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
@@ -1736,6 +2155,8 @@ export function approveProposal(
     throw new Error(`No pending proposal found for messageId: ${messageId}`);
   }
 
+  const scopedSessionId = (sessionId || lastActiveChiefSessionId || 'chief-default').trim() || 'chief-default';
+
   const continueOnError = options?.continueOnError === true;
   const base = overrideActions && overrideActions.length > 0 ? overrideActions : actions;
   const toExecute = selectedIndices
@@ -1745,7 +2166,7 @@ export function approveProposal(
   const totalCount = toExecute.length;
 
   // Feedback: approval received
-  pushMessage('chief-default', {
+  pushMessage(scopedSessionId, {
     id: `approval-ack-${Date.now()}`,
     role: 'chief',
     content: `✅ **승인됨** — ${totalCount}건의 액션을 실행합니다. (정책: ${continueOnError ? 'continue-on-error' : 'fail-fast'})`,
@@ -1772,7 +2193,7 @@ export function approveProposal(
     const stepLabel = `[${i + 1}/${totalCount}]`;
 
     // Feedback: execution start
-    pushMessage('chief-default', {
+    pushMessage(scopedSessionId, {
       id: `exec-start-${Date.now()}-${i}`,
       role: 'chief',
       content: `⏳ ${stepLabel} 실행 중: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`,
@@ -1788,7 +2209,7 @@ export function approveProposal(
 
     // Feedback: execution result
     const ok = executed.result?.ok;
-    pushMessage('chief-default', {
+    pushMessage(scopedSessionId, {
       id: `exec-result-${Date.now()}-${i}`,
       role: 'chief',
       content: ok
@@ -1807,7 +2228,7 @@ export function approveProposal(
   const skippedActions = stopIndex >= 0 ? toExecute.slice(stopIndex + 1) : [];
   if (stoppedReason && skippedActions.length > 0) {
     const skippedList = skippedActions.map((a, idx) => `${stopIndex + 2 + idx}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join(', ');
-    pushMessage('chief-default', {
+    pushMessage(scopedSessionId, {
       id: `exec-abort-${Date.now()}`,
       role: 'chief',
       content: `⛔ 실행 중단: ${stoppedReason}\n미실행 액션: ${skippedList}`,
@@ -1819,6 +2240,15 @@ export function approveProposal(
   const successCount = executedActions.filter(a => a.result?.ok).length;
   const failCount = executedActions.length - successCount;
   const pendingTasks = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress');
+  const traceLines: string[] = [];
+  for (const action of executedActions) {
+    const tid = action.result?.id;
+    if (!tid) continue;
+    const task = listTasks(true).find(t => t.id === tid);
+    const assignee = task?.assigneeId ? getAgent(task.assigneeId) : null;
+    const runId = assignee?.currentTaskId === tid ? (assignee.sessionId || 'pending') : 'pending';
+    traceLines.push(`• taskId=${tid} | runId=${runId}`);
+  }
 
   let summaryMsg = `🎯 **실행 완료** — 성공 ${successCount}건`;
   if (failCount > 0) summaryMsg += `, 실패 ${failCount}건`;
@@ -1826,13 +2256,16 @@ export function approveProposal(
   if (skippedActions.length > 0) {
     summaryMsg += `\n🧾 **미실행 액션:** ${skippedActions.map(a => ACTION_LABEL_MAP[a.type] || a.type).join(', ')}`;
   }
+  if (traceLines.length > 0) {
+    summaryMsg += `\n\n🔎 **실행 추적 정보**\n${traceLines.join('\n')}`;
+  }
   if (pendingTasks.length > 0) {
     summaryMsg += `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• "진행중이야?"로 상태 확인 가능\n• 완료 시 자동으로 보고드립니다`;
   } else {
     summaryMsg += `\n\n📌 **다음 단계:** 추가 작업이 필요하시면 말씀해주세요.`;
   }
 
-  pushMessage('chief-default', {
+  pushMessage(scopedSessionId, {
     id: `exec-summary-${Date.now()}`,
     role: 'chief',
     content: summaryMsg,
@@ -1848,7 +2281,7 @@ export function approveProposal(
     executedActions,
     skippedActions,
     stoppedReason,
-    messages: getChiefMessages(lastActiveChiefSessionId || 'chief-default'),
+    messages: getChiefMessages(scopedSessionId),
     state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
   };
 }
@@ -1866,6 +2299,10 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   cancel_meeting: '미팅 삭제',
   delete_meeting: '미팅 삭제',
   delete_all_meetings: '전체 미팅 삭제',
+  start_review: '후보 순위 평가',
+  confirm_meeting: '미팅 확정',
+  confirm_task: '태스크 확정',
+  view_task_result: '태스크 결과 조회',
 };
 
 /** Reject / discard a pending proposal */
@@ -2043,11 +2480,106 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
   const messageId = `chief-${Date.now()}-${uuid().slice(0, 8)}`;
 
+  const fixSummaryReply = buildFixSummaryReply(userMessage);
+  if (fixSummaryReply) {
+    pushMessage(sessionId, { id: messageId, role: 'chief', content: fixSummaryReply, createdAt: now });
+    return { messageId, async: false, reply: fixSummaryReply, messages: getChiefMessages(sessionId) };
+  }
+
+  // Feature 1: Mid-chain intervention — if a chain is actively running, queue the user message as an amendment
+  const allTasks = listTasks();
+  const inProgressChainTasks = allTasks.filter(t => t.status === 'in-progress' && !t.parentTaskId);
+  const activeChainRootId = inProgressChainTasks.find(t => {
+    const plan = getChainPlanForTask(t.id);
+    return plan && (plan.status === 'running' || plan.status === 'confirmed');
+  })?.id;
+
+  const isStatusIntent = classifyIntent(userMessage) === 'status';
+  const isStatusOrApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes)$/i.test(userMessage.trim()) || isStatusIntent;
+  if (activeChainRootId && !isStatusOrApproval) {
+    const amendments = chainAmendments.get(activeChainRootId) || [];
+    amendments.push(userMessage.trim());
+    chainAmendments.set(activeChainRootId, amendments);
+    const reply = `✅ 메모했습니다. 다음 단계에 반영됩니다: ${userMessage.trim()}`;
+    pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
+    if (responseCallback) {
+      responseCallback(sessionId, {
+        messageId,
+        reply,
+        actions: [],
+        state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+        sessionId,
+      });
+    }
+    return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+  }
+
+  // Detect review fix request — shortcut before LLM call
+  const isFixRequest = /(리뷰.*(피드백|수정|반영)|피드백.*반영|수정.*반영|fix.*review|🔧\s*수정\s*반영)/i.test(userMessage.trim());
+  if (isFixRequest) {
+    const recentReview = allTasks
+      .filter(t => (t.title.startsWith('[Review]') || t.title.startsWith('[리뷰]') || t.title.startsWith('[코드 리뷰]')) && t.status === 'completed' && t.result)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+
+    if (recentReview) {
+      let rootTask: ReturnType<typeof findRootTask> | null = null;
+      try { rootTask = findRootTask(recentReview.id); } catch {}
+      const baseTitle = rootTask?.title?.replace(/^\[.*?\]\s*/, '') || recentReview.title.replace(/^\[.*?\]\s*/, '');
+      const fixTitle = `[Fix] ${baseTitle}`;
+      const sourceCode = rootTask?.result || '';
+      const fixDescription = [
+        '리뷰어 피드백을 반영하여 코드를 수정해주세요.',
+        '',
+        '⚠️ Critical/Major 이슈를 모두 수정하고, 수정된 전체 코드를 출력하세요.',
+        '',
+        '---',
+        '## 🧩 원본 코드/결과 (수정 대상)',
+        sourceCode ? sourceCode.slice(0, 5000) : '(원본 코드 없음)',
+        '',
+        '---',
+        '## 🔍 리뷰 피드백',
+        (recentReview.result || '').slice(0, 3000),
+      ].join('\n');
+
+      // Create a proposal action for user to approve
+      const fixAction: ChiefAction = {
+        type: 'create_task',
+        params: { title: fixTitle, description: fixDescription, assignRole: 'developer' },
+      };
+      pendingProposals.set(messageId, [fixAction]);
+      pendingProposalBySession.set(sessionId, messageId);
+
+      const reply = `✅ 리뷰 피드백 반영 작업을 제안합니다.\n\n📋 "${fixTitle}"\n• 개발자가 리뷰 피드백을 반영하여 수정합니다\n• 수정 완료 후 자동으로 재리뷰합니다\n\n승인하시면 실행합니다.${formatActionList([fixAction])}`;
+      pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
+      if (responseCallback) {
+        responseCallback(sessionId, {
+          messageId,
+          reply,
+          actions: [fixAction],
+          state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+          sessionId,
+        });
+      }
+      return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+    }
+  }
+
   // Short affirmative responses with no pending proposal → ignore gracefully
   const isShortAffirmative = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(userMessage.trim().toLowerCase());
   const pendingMessageId = pendingProposalBySession.get(sessionId);
 
+  // If user changed their mind while previous LLM proposal was still in-flight, clear stale queued approval.
+  if (!isShortAffirmative && queuedApprovalBySession.has(sessionId)) {
+    queuedApprovalBySession.delete(sessionId);
+  }
+
   if (isShortAffirmative && !pendingMessageId) {
+    if (llmInFlightBySession.has(sessionId)) {
+      queuedApprovalBySession.add(sessionId);
+      const reply = '직전 요청을 처리 중입니다. 완료되면 방금 승인("응")을 자동으로 이어서 실행할게요.';
+      pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
+      return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+    }
     const reply = '현재 대기 중인 제안이 없습니다. 새로운 지시를 해주세요.';
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
@@ -2065,6 +2597,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
       const results: string[] = [];
       const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
+      batchAssignedAgentIds.clear(); // Reset batch tracking for this approval round
       results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
       console.log(`[chief] chatWithChief approval: executing ${toExecute.length} actions, isGenericApproval=${isGenericApproval}`);
       for (let i = 0; i < toExecute.length; i++) {
@@ -2078,8 +2611,14 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
           runtimeBinding.lastCreatedTaskId = executed.result.id;
         }
         results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
-        if (ok && action.type === 'create_task') {
-          results.push(`${stepLabel}↪ 추천 체인이 생성되었습니다. 필요 시 체인 미리보기에서 단계를 편집할 수 있습니다.`);
+        if (ok && action.type === 'create_task' && executed.result?.id) {
+          // Auto-confirm and auto-execute the chain plan
+          const taskChainPlan = getChainPlanForTask(executed.result.id);
+          if (taskChainPlan && taskChainPlan.status === 'proposed') {
+            confirmChainPlan(taskChainPlan.id);
+            setChainAutoExecute(taskChainPlan.id, true);
+          }
+          results.push(`${stepLabel}↪ 추천 체인이 자동 확정되었습니다. 체인 미리보기에서 진행 상황을 확인할 수 있습니다.`);
         }
       }
 
@@ -2136,9 +2675,8 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
   const inDemoMode = isDemoMode();
   const intent: 'status' | 'simple_action' | 'definition' | 'other' = inDemoMode ? ruleIntent : 'other';
 
-  // Demo mode only: use fast rule-based status reply.
-  // Full OpenClaw mode should be model-first for flexible intent handling.
-  if (inDemoMode && intent === 'status') {
+  // Always handle read-only status queries synchronously so they are never misrouted as amendments/actions.
+  if (ruleIntent === 'status') {
     const reply = buildMonitoringReply(userMessage);
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
@@ -2173,6 +2711,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
     const fullPrompt = `${systemPrompt}\n\n## 대화 이력\n${conversationContext}\n\nUser: ${userMessage}\n\nChief:`;
 
+    llmInFlightBySession.set(sessionId, messageId);
     spawnAgentSession({
       sessionId: `chief-llm-${messageId}`,
       agentName: 'Chief',
@@ -2186,7 +2725,69 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
           const intentActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
           const { actions: proposedActions, batchId } = applyBatchToCreateTaskActions(userMessage, intentActions);
 
+          // If user already sent "응" while this LLM call was still processing, auto-approve once.
+          const hadQueuedApproval = queuedApprovalBySession.delete(sessionId);
+          if (hadQueuedApproval && proposedActions.length > 0) {
+            const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
+            batchAssignedAgentIds.clear();
+            const results: string[] = [`✅ 승인됨(대기열 자동실행) — ${proposedActions.length}건 실행 시작`];
+            for (let i = 0; i < proposedActions.length; i++) {
+              const action = bindActionWithRuntimeContext(proposedActions[i], runtimeBinding);
+              const stepLabel = proposedActions.length > 1 ? `[${i + 1}/${proposedActions.length}] ` : '';
+              const executed = executeAction(action, sessionId);
+              const ok = executed.result?.ok;
+              if (ok && executed.type === 'create_task' && executed.result?.id) {
+                runtimeBinding.lastCreatedTaskId = executed.result.id;
+                const taskChainPlan = getChainPlanForTask(executed.result.id);
+                if (taskChainPlan && taskChainPlan.status === 'proposed') {
+                  confirmChainPlan(taskChainPlan.id);
+                  setChainAutoExecute(taskChainPlan.id, true);
+                }
+              }
+              results.push(`${stepLabel}${ok ? '✅' : '❌'} ${executed.result?.message || action.type}`);
+            }
+            const autoApprovedReply = `${cleanText ? cleanText + '\n\n' : ''}${results.join('\n')}`;
+            pushMessage(sessionId, { id: messageId, role: 'chief', content: autoApprovedReply, createdAt: new Date().toISOString() });
+            if (responseCallback) {
+              responseCallback(sessionId, {
+                messageId,
+                reply: autoApprovedReply,
+                actions: [],
+                state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+                sessionId,
+              });
+            }
+            return;
+          }
+
           // Emergency auto-execute: stop/cancel commands skip approval
+          // Auto-execute start_review and view_task_result without approval
+          const autoExecTypes = new Set(['start_review', 'view_task_result', 'confirm_meeting', 'confirm_task']);
+          const allAutoExec = proposedActions.length > 0 && proposedActions.every(a => autoExecTypes.has(a.type));
+          if (allAutoExec) {
+            const results: string[] = [`⚡ 즉시 실행 — ${proposedActions.length}건`];
+            for (const action of proposedActions) {
+              try {
+                const r = executeAction(action, sessionId);
+                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || '완료'}`);
+              } catch (e) {
+                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : '실패'}`);
+              }
+            }
+            const autoReply = `${cleanText ? cleanText + '\n\n' : ''}${results.join('\n')}`;
+            pushMessage(sessionId, { id: messageId, role: 'chief', content: autoReply, createdAt: new Date().toISOString() });
+            if (responseCallback) {
+              responseCallback(sessionId, {
+                messageId,
+                reply: autoReply,
+                actions: [],
+                state: { agents: listAgents(), tasks: listTasks(), meetings: listMeetings() },
+                sessionId,
+              });
+            }
+            return;
+          }
+
           const isEmergencyStop = /^(멈춰|중지|스톱|stop|cancel|취소|다\s*멈춰|전부\s*중지|다\s*중지|그만)/i.test(userMessage.trim());
           const allCancelActions = proposedActions.length > 0 && proposedActions.every(a => a.type === 'cancel_task' || a.type === 'cancel_all_pending' || a.type === 'cancel_meeting');
           if (isEmergencyStop && allCancelActions) {
@@ -2246,6 +2847,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
             responseCallback(sessionId, response);
           }
         } finally {
+          llmInFlightBySession.delete(sessionId);
           cleanupRun(run.sessionId);
         }
       },

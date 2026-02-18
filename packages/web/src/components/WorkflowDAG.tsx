@@ -167,14 +167,20 @@ export default function WorkflowDAG() {
     };
   }, [drag, isPanning]);
 
-  // Center the view
+  // Center the view — run after positions are set
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (containerRef.current && positions.size) {
       const rect = containerRef.current.getBoundingClientRect();
-      setPan({ x: rect.width / 2, y: 40 });
+      // Calculate centroid of all nodes
+      let sumX = 0, sumY = 0;
+      positions.forEach(p => { sumX += p.x; sumY += p.y; });
+      const cx = sumX / positions.size;
+      const cy = sumY / positions.size;
+      // Pan so centroid is at center of container
+      setPan({ x: rect.width / 2 - cx, y: rect.height / 2 - cy });
     }
-  }, [taskIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [positions.size, taskIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!tasks.length) {
     return (
@@ -298,7 +304,7 @@ export default function WorkflowDAG() {
           </div>
           {tooltip.task.result && (
             <div className="text-xs text-gray-500 mt-1 border-t border-gray-700 pt-1 line-clamp-3">
-              {tooltip.task.result}
+              {/^\s*<!DOCTYPE|^\s*<html/i.test(tooltip.task.result!) ? '🌐 HTML 결과물' : tooltip.task.result!.slice(0, 80)}
             </div>
           )}
         </div>

@@ -217,10 +217,17 @@ export function parseAgentOutput(stdout: string): string {
       if (texts.length > 0) {
         return texts.join('\n');
       }
+      // payloads is empty — don't expose raw JSON, return fallback
+      return data.meta?.error || '작업이 완료되었습니다. 추가 지시가 있으시면 말씀해주세요.';
     }
 
     const raw = data.reply || data.content || data.message || data.result;
     if (typeof raw === 'string') return raw;
+
+    // Don't expose internal JSON structures as chat messages
+    if (data.meta || data.agentMeta || data.sessionId) {
+      return '작업이 완료되었습니다. 무엇을 도와드릴까요?';
+    }
 
     return JSON.stringify(data, null, 2);
   } catch {

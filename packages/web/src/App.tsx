@@ -21,10 +21,18 @@ type View = 'office' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'fa
 
 export default function App() {
   const [view, setView] = useState<View>('office');
+  const activeView = useStore((s) => s.activeView);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
   const [decisionCount, setDecisionCount] = useState(0);
   useEffect(() => { connectWS(); }, []);
+  useEffect(() => {
+    const validViews: View[] = ['office', 'dashboard', 'decisions', 'meetings', 'workflow', 'failures', 'history', 'tasks'];
+    if (activeView && validViews.includes(activeView as View)) {
+      setView(activeView as View);
+      useStore.getState().setActiveView(null);
+    }
+  }, [activeView]);
   useEffect(() => {
     const load = () => fetch('/api/decisions/pending/count')
       .then(r => r.json()).then(d => setDecisionCount(d.count)).catch(() => {});

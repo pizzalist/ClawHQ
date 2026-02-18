@@ -79,6 +79,8 @@ interface Store {
   chainPlans: ChainPlan[];               // active chain plans
   connected: boolean;
   initialized: boolean;
+  activeView: string | null;           // set to switch tab from anywhere (e.g. 'meetings')
+  selectedMeetingId: string | null;    // pre-select a meeting in MeetingRoom
   selectedAgentId: string | null;
   selectedTaskId: string | null;
   sidebarOpen: boolean;
@@ -106,6 +108,8 @@ interface Store {
   refreshActiveChainPlans: () => Promise<void>;
   addEvent: (event: AppEvent) => void;
   setConnected: (v: boolean) => void;
+  setActiveView: (view: string | null) => void;
+  setSelectedMeetingId: (id: string | null) => void;
   setSelectedAgent: (id: string | null) => void;
   setSelectedTask: (id: string | null) => void;
   setSidebarOpen: (v: boolean) => void;
@@ -145,6 +149,8 @@ export const useStore = create<Store>((set, get) => ({
   chainPlans: [],
   connected: false,
   initialized: false,
+  activeView: null,
+  selectedMeetingId: null,
   selectedAgentId: null,
   selectedTaskId: null,
   sidebarOpen: true,
@@ -449,6 +455,8 @@ export const useStore = create<Store>((set, get) => ({
   },
   addEvent: (event) => set((s) => ({ events: [event, ...s.events].slice(0, 200) })),
   setConnected: (connected) => set({ connected }),
+  setActiveView: (activeView) => set({ activeView }),
+  setSelectedMeetingId: (selectedMeetingId) => set({ selectedMeetingId }),
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
   setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
@@ -743,6 +751,22 @@ export function connectWS() {
       }
       case 'chief_notification': {
         store.handleChiefNotification(msg.payload as ChiefNotification);
+        break;
+      }
+      case 'chief_update': {
+        // Reset: clear all chief state (sent after reset-all)
+        useStore.setState({
+          chiefMessages: [],
+          chiefSuggestions: [],
+          chiefMeetingDraft: null,
+          chiefProposedActions: [],
+          chiefExecutedActions: [],
+          chiefPendingMessageId: null,
+          chiefCheckIns: [],
+          chiefNotifications: [],
+          chiefPendingDecisions: 0,
+          chiefSessionId: makeSessionId(),
+        });
         break;
       }
       case 'chain_plan_update': {

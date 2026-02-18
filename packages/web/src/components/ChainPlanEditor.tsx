@@ -128,11 +128,21 @@ export default function ChainPlanEditor({ plan }: { plan: ChainPlan }) {
     setLocalSteps(prev => prev.map((s, i) => i === idx ? step : s));
   };
   const handleAdd = () => {
-    setLocalSteps(prev => [...prev, {
-      role: 'developer' as AgentRole,
-      label: '개발',
-      reason: '추가 단계',
-    }]);
+    setLocalSteps(prev => {
+      // Context-aware default: suggest next logical role based on last step
+      const lastRole = prev.length > 0 ? prev[prev.length - 1].role : 'pm';
+      const NEXT_ROLE: Record<string, AgentRole> = {
+        pm: 'developer', developer: 'reviewer', reviewer: 'developer',
+        designer: 'developer', devops: 'qa', qa: 'developer',
+      };
+      const nextRole = NEXT_ROLE[lastRole] || 'reviewer';
+      const nextInfo = ROLE_OPTIONS.find(r => r.value === nextRole);
+      return [...prev, {
+        role: nextRole,
+        label: nextInfo?.label || nextRole,
+        reason: '추가 단계',
+      }];
+    });
   };
   const handleSave = async () => {
     await editChainSteps(plan.id, localSteps);

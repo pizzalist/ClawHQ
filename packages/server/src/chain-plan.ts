@@ -72,11 +72,14 @@ export function suggestChainPlan(
     reason: STEP_REASONS[startRole] || `${startRole} 단계`,
   });
 
+  // Walk the chain from startRole
   // Walk the intent-based chain
   // Real IT flow: PM → Dev → Reviewer → Dev(fix) → Reviewer(approve)
   // Allow exactly 1 review round-trip (dev→rev→dev→rev), then stop
   let currentRole: AgentRole = startRole;
-  const taskLike = { title: taskTitle, description: taskDescription, expectedDeliverables };
+  // For chain planning, after the first step the deliverables change
+  // (PM produces reports, but Dev produces code — don't use PM's deliverables for Dev step)
+  const taskLike = { title: taskTitle, description: taskDescription, expectedDeliverables: undefined as DeliverableType[] | undefined };
   let reviewRoundTrips = 0; // track reviewer↔developer cycles
   const MAX_REVIEW_ROUNDTRIPS = 1;
   for (let i = 0; i < 8; i++) { // safety limit
@@ -219,6 +222,12 @@ export function markChainCompleted(planId: string): ChainPlan {
   plan.status = 'completed';
   emitChange(plan);
   return plan;
+}
+
+/** Reset all chain plan state (for full data reset) */
+export function resetChainPlanState(): void {
+  plans.clear();
+  taskPlanIndex.clear();
 }
 
 /** Cancel a plan */

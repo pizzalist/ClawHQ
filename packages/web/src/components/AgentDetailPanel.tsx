@@ -171,7 +171,7 @@ export default function AgentDetailPanel() {
                   </div>
                   {currentTask.result && (
                     <div className="mt-2 p-2 bg-[#0f0f1a] rounded text-xs font-mono text-green-400 whitespace-pre-wrap max-h-32 overflow-y-auto">
-                      {currentTask.result}
+                      {/^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(currentTask.result!) ? '🌐 웹 앱 결과물' : currentTask.result!.slice(0, 200)}
                     </div>
                   )}
                 </div>

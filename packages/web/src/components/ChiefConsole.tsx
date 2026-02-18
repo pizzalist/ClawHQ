@@ -5,6 +5,15 @@ import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, Ch
 import { MarkdownContent } from '../lib/format/markdown';
 import ChainPlanEditor from './ChainPlanEditor';
 
+function extractHtmlFromResult(result: string): string | null {
+  const htmlMatch = result.match(/```html\s*\n([\s\S]*?)```/);
+  if (htmlMatch) return htmlMatch[1];
+  if (result.trim().startsWith('<!DOCTYPE') || result.trim().startsWith('<html')) {
+    return result.trim();
+  }
+  return null;
+}
+
 // Error Boundary to prevent full-page crash from hooks errors
 class ChiefErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
   state = { hasError: false, error: '' };
@@ -55,7 +64,7 @@ const STAGE_STYLES: Record<string, { icon: string; border: string; bg: string }>
 
 const NOTIF_STYLES: Record<string, { icon: string; border: string; bg: string }> = {
   task_complete: { icon: '✅', border: 'border-emerald-500/40', bg: 'bg-emerald-500/10' },
-  task_failed: { icon: '❌', border: 'border-red-500/40', bg: 'bg-red-500/10' },
+  task_failed: { icon: '❌', border: 'border-indigo-500/40', bg: 'bg-indigo-500/10' },
   meeting_complete: { icon: '🏛️', border: 'border-indigo-500/40', bg: 'bg-indigo-500/10' },
   meeting_review_complete: { icon: '🔍', border: 'border-purple-500/40', bg: 'bg-purple-500/10' },
   info: { icon: 'ℹ️', border: 'border-gray-500/40', bg: 'bg-gray-500/10' },
@@ -170,7 +179,7 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
   const hasResult = action.result != null;
   const ok = action.result?.ok;
   const borderClass = hasResult
-    ? ok ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'
+    ? ok ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-indigo-500/30 bg-indigo-500/10'
     : selected ? 'border-accent/50 bg-accent/10' : 'border-gray-700/40 bg-gray-800/50';
 
   return (
@@ -200,10 +209,16 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
   );
 }
 
-function InlineNotification({ notification, onViewMeetingResult }: { notification: ChiefNotification; onViewMeetingResult: (meetingId: string) => void }) {
+function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, onSendMessage }: { notification: ChiefNotification; onViewMeetingResult: (meetingId: string) => void; onPreviewHtml?: (html: string) => void; onSendMessage?: (msg: string) => void }) {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
+  const tasks = useStore((s) => s.tasks);
   const [acting, setActing] = useState<string | null>(null);
   const style = NOTIF_STYLES[notification.type] || NOTIF_STYLES.info;
+
+  // Check if task result contains HTML for live preview
+  const taskId = notification.taskId;
+  const taskResult = taskId ? tasks.find(t => t.id === taskId)?.result : null;
+  const previewableHtml = taskResult ? extractHtmlFromResult(taskResult) : null;
 
   // Filter: only keep view_result actions; decision buttons removed (use chat instead)
   const viewActions = notification.actions.filter((act) => act.action === 'view_result');
@@ -243,10 +258,26 @@ function InlineNotification({ notification, onViewMeetingResult }: { notificatio
               </button>
             );
           })}
+          {previewableHtml && onPreviewHtml && (
+            <button
+              onClick={() => onPreviewHtml(previewableHtml)}
+              className="px-3 py-1.5 rounded-lg border border-emerald-600 bg-emerald-800/70 hover:bg-emerald-700 text-sm text-gray-200 transition-colors"
+            >
+              🖥️ 라이브 프리뷰
+            </button>
+          )}
+          {onSendMessage && /리뷰|review|FAIL|불합격|수정\s*필요|critical|major/i.test(notification.summary) && (
+            <button
+              onClick={() => onSendMessage('리뷰 피드백 반영해줘')}
+              className="px-3 py-1.5 rounded-lg border border-amber-600 bg-amber-800/70 hover:bg-amber-700 text-sm text-gray-200 transition-colors"
+            >
+              🔧 수정 반영
+            </button>
+          )}
         </div>
       )}
       <div className="text-xs text-gray-500 mt-1">
-        💬 채팅으로 '확정', '리뷰 시작', '수정 요청' 등을 입력하세요
+        💬 채팅으로 '확정', '후보 평가', '수정 요청' 등을 입력하세요
       </div>
     </div>
   );
@@ -323,7 +354,7 @@ function ThinkingIndicator() {
   );
 }
 
-function ChatMessage({ m, checkIn, onViewMeetingResult }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn; onViewMeetingResult: (meetingId: string) => void }) {
+function ChatMessage({ m, checkIn, onViewMeetingResult, onPreviewHtml, onSendMessage }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn; onViewMeetingResult: (meetingId: string) => void; onPreviewHtml?: (html: string) => void; onSendMessage?: (msg: string) => void }) {
   const isUser = m.role === 'user';
   const hasNotification = m.notification != null;
 
@@ -335,7 +366,7 @@ function ChatMessage({ m, checkIn, onViewMeetingResult }: { m: ChiefChatMessage;
       {/* For notification messages, only render InlineNotification (avoids duplicate content) */}
       {hasNotification ? (
         <div className="max-w-[85%]">
-          <InlineNotification notification={m.notification!} onViewMeetingResult={onViewMeetingResult} />
+          <InlineNotification notification={m.notification!} onViewMeetingResult={onViewMeetingResult} onPreviewHtml={onPreviewHtml} onSendMessage={onSendMessage} />
         </div>
       ) : (
         <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${
@@ -374,12 +405,21 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
   const loadingMeeting = useStore((s) => s.loading['createMeeting']);
 
   const [input, setInput] = useState('');
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
   const chainPlans = useStore((s) => s.chainPlans);
-  const activeChainPlans = chainPlans.filter(p => p.status !== 'completed' && p.status !== 'cancelled');
+  const tasks = useStore((s) => s.tasks);
+  const activeChainPlans = chainPlans.filter(p => {
+    // Hide completed/cancelled plans
+    if (p.status === 'completed' || p.status === 'cancelled') return false;
+    // Hide plans whose task no longer exists or is completed with no pending chain steps
+    const task = tasks.find(t => t.id === p.taskId);
+    if (!task) return false;
+    return true;
+  });
 
   const hasSuggestions = chiefSuggestions.length > 0;
   const hasExecuted = chiefExecutedActions.length > 0;
@@ -403,28 +443,9 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
   }, [chiefCheckIns]);
 
   const handleViewMeetingResult = async (meetingId: string) => {
-    // Fetch meeting data and display full result inline in chat
-    try {
-      const res = await fetch(`/api/meetings/${meetingId}`);
-      if (!res.ok) throw new Error('Failed to fetch meeting');
-      const meeting: Meeting = await res.json();
-      const resultText = formatMeetingFullResult(meeting);
-      const resultMsg: ChiefChatMessage = {
-        id: `meeting-result-${meetingId}-${Date.now()}`,
-        role: 'chief',
-        content: resultText,
-        createdAt: new Date().toISOString(),
-      };
-      useStore.setState((s) => ({ chiefMessages: [...s.chiefMessages, resultMsg] }));
-    } catch {
-      const errorMsg: ChiefChatMessage = {
-        id: `meeting-result-error-${Date.now()}`,
-        role: 'chief',
-        content: '⚠️ 회의 결과를 불러올 수 없습니다.',
-        createdAt: new Date().toISOString(),
-      };
-      useStore.setState((s) => ({ chiefMessages: [...s.chiefMessages, errorMsg] }));
-    }
+    // Navigate to Meetings tab and select this meeting
+    useStore.getState().setSelectedMeetingId(meetingId);
+    useStore.getState().setActiveView('meetings');
   };
 
   const send = async () => {
@@ -461,7 +482,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
             </div>
           )}
           {chiefMessages.map((m) => (
-            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} onViewMeetingResult={handleViewMeetingResult} />
+            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} onViewMeetingResult={handleViewMeetingResult} onPreviewHtml={setPreviewHtml} onSendMessage={(msg) => { setInput(''); chiefChat(msg); }} />
           ))}
           {chiefThinking && <ThinkingIndicator />}
           <div ref={messagesEndRef} />
@@ -521,7 +542,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
             <div className="text-sm font-semibold text-indigo-200 mb-1">킥오프 미팅</div>
             <button onClick={() => createMeeting(chiefMeetingDraft.title, chiefMeetingDraft.description, chiefMeetingDraft.participantIds, chiefMeetingDraft.character)}
               disabled={loadingMeeting}
-              className="w-full px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-40">
+              className="w-full px-3 py-2 rounded-lg bg-indigo-600 hover:bg-red-500 text-white text-sm font-semibold disabled:opacity-40">
               {loadingMeeting ? '시작 중...' : '🏛️ 시작'}
             </button>
           </div>
@@ -554,6 +575,24 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
       </div>
 
       {/* MeetingResultModal removed from inline — results now shown in chat */}
+
+      {/* Live Preview Modal */}
+      {previewHtml && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setPreviewHtml(null)}>
+          <div className="bg-gray-900 rounded-lg w-[90vw] h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center p-3 border-b border-gray-700">
+              <span className="text-white font-medium">🖥️ 라이브 프리뷰</span>
+              <button onClick={() => setPreviewHtml(null)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <iframe
+              srcDoc={previewHtml}
+              className="flex-1 bg-white rounded-b-lg"
+              sandbox="allow-scripts allow-same-origin"
+              title="Live Preview"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

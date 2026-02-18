@@ -2,7 +2,7 @@ export type AgentState = 'idle' | 'working' | 'reviewing' | 'error' | 'done' | '
 export type AgentRole = 'pm' | 'developer' | 'reviewer' | 'designer' | 'devops' | 'qa';
 export type AgentModel = 'claude-opus-4-6' | 'claude-sonnet-4' | 'openai-codex/o3' | 'openai-codex/gpt-5.3-codex';
 export type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'failed' | 'cancelled';
-export type EventType = 'agent_created' | 'agent_state_changed' | 'task_created' | 'task_assigned' | 'task_completed' | 'task_failed' | 'message' | 'chain_spawned';
+export type EventType = 'agent_created' | 'agent_state_changed' | 'task_created' | 'task_assigned' | 'task_completed' | 'task_failed' | 'message' | 'chain_spawned' | 'chain_completed';
 export interface Agent {
     id: string;
     name: string;
@@ -54,7 +54,7 @@ export interface ChainPlan {
     /** Last server mutation time. Used to ignore out-of-order WS updates on client. */
     updatedAt: string;
 }
-export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting' | 'confirm_meeting' | 'confirm_task' | 'start_review';
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting' | 'confirm_meeting' | 'confirm_task' | 'start_review' | 'view_task_result';
 export interface ChiefAction {
     type: ChiefActionType;
     params: Record<string, string>;

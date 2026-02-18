@@ -1,8 +1,8 @@
 # QA 재검증 보고서 (배포 후 검증)
 
 ## 1) 실행 개요
-- 시작 시각: 2026-02-16T06:49:02.750Z
-- 종료 시각: 2026-02-16T06:49:03.694Z
+- 시작 시각: 2026-02-18T16:30:17.175Z
+- 종료 시각: 2026-02-18T16:30:18.064Z
 - 대상 서버: http://127.0.0.1:3001
 - 총 점검 수: 5
 - PASS: 5
@@ -11,11 +11,11 @@
 ## 2) 점검 결과
 | ID | 항목 | 결과 | 소요(ms) | 상세 |
 |---|---|---|---:|---|
-| D01 | Health endpoint | PASS | 931 | status=ok, demoMode=false, agents=8 |
-| D02 | Core list endpoints | PASS | 4 | agents=8, tasks=8, meetings=0, events=24 |
-| D03 | Monitoring endpoints | PASS | 2 | alerts=3, timeseries.points=25 |
-| D04 | Chief chat smoke test | PASS | 5 | sync-reply |
-| D05 | Agent create/delete round-trip | PASS | 2 | created-and-deleted=343bb594-7ec1-41c5-a693-c88b006f64cc |
+| D01 | Health endpoint | PASS | 868 | status=ok, demoMode=false, agents=11 |
+| D02 | Core list endpoints | PASS | 6 | agents=11, tasks=3, meetings=0, events=0 |
+| D03 | Monitoring endpoints | PASS | 3 | alerts=3, timeseries.points=25 |
+| D04 | Chief chat smoke test | PASS | 10 | sync-reply |
+| D05 | Agent create/delete round-trip | PASS | 2 | created-and-deleted=cc4c2e88-28f1-4c8c-908e-dc49b57d242a |
 
 ## 3) 판정
 - ✅ 배포 후 핵심 API/기능 재검증을 통과했습니다.

@@ -3,9 +3,10 @@ import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-
 import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
-import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun } from './openclaw-adapter.js';
+import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun, getAgentRun } from './openclaw-adapter.js';
 import { createDeliverablesFromResult } from './deliverables.js';
 import { shouldAutoChain, advanceChainPlan, hasPendingChainPlan, getChainPlanForTask, markChainCompleted } from './chain-plan.js';
+import { chainAmendments } from './chief-agent.js';
 const listeners = [];
 export function onTaskEvent(fn) {
     listeners.push(fn);
@@ -45,8 +46,11 @@ export function listTasks(includeTest = false) {
     return rows.map(rowToTask);
 }
 function shouldForceTestTask(title, description) {
-    const text = `${title}\n${description}`.toLowerCase();
-    return /(\bqc\b|\bqa\b|자동\s*검증|auto\s*validation|내부\s*핫픽스|internal\s*hotfix|테스트|test\s*flow)/i.test(text);
+    // Only check the title for test-task classification.
+    // Description often contains injected previous task results which may
+    // contain words like "테스트" in normal context, causing false positives.
+    const text = title.toLowerCase();
+    return /(\bqc\b|\bqa\b|자동\s*검증|auto\s*validation|내부\s*핫픽스|internal\s*hotfix|test\s*flow)/i.test(text);
 }
 export function createTask(title, description, assigneeId, parentTaskId, expectedDeliverables, opts) {
     // Auto-detect deliverable type if not explicitly provided
@@ -107,6 +111,7 @@ export function stopAgentTask(agentId) {
     }
     // Cancel the task
     if (agent.currentTaskId) {
+        clearTaskTimeout(agent.currentTaskId);
         stmts.updateTask.run(agentId, 'cancelled', 'Stopped by user', agent.currentTaskId);
         emitTaskEvent('task_failed', agentId, agent.currentTaskId, `Task stopped by user`);
     }
@@ -114,6 +119,64 @@ export function stopAgentTask(agentId) {
     resetAgent(agentId);
 }
 let isProcessingQueue = false;
+const DEFAULT_TASK_TIMEOUT_MS = 120_000;
+const COMPLEX_TASK_TIMEOUT_MS = 240_000;
+const taskTimeoutTimers = new Map();
+const completionEventTaskIds = new Set();
+const watchdogReassignCount = new Map();
+function emitTaskCompletedOnce(agentId, taskId, message) {
+    if (completionEventTaskIds.has(taskId))
+        return;
+    completionEventTaskIds.add(taskId);
+    emitTaskEvent('task_completed', agentId, taskId, message);
+}
+function clearTaskTimeout(taskId) {
+    const timer = taskTimeoutTimers.get(taskId);
+    if (timer) {
+        clearTimeout(timer);
+        taskTimeoutTimers.delete(taskId);
+    }
+}
+function scheduleTaskTimeout(task, agentId, sessionId) {
+    clearTaskTimeout(task.id);
+    const complexity = estimateTaskComplexity(task);
+    const timeoutMs = complexity === 'high' ? COMPLEX_TASK_TIMEOUT_MS : DEFAULT_TASK_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+        const current = stmts.getTask.get(task.id);
+        if (!current)
+            return;
+        const status = current.status;
+        if (status !== 'in-progress')
+            return;
+        const agent = getAgent(agentId);
+        if (agent?.sessionId === sessionId) {
+            try {
+                killAgentRun(sessionId);
+            }
+            catch { /* ignore */ }
+            try {
+                cleanupRun(sessionId);
+            }
+            catch { /* ignore */ }
+            try {
+                transitionAgent(agentId, 'error', task.id);
+            }
+            catch { /* ignore */ }
+            setTimeout(() => {
+                try {
+                    transitionAgent(agentId, 'idle', null, null);
+                }
+                catch { /* ignore */ }
+            }, 500);
+        }
+        const reason = `Task timed out after ${Math.round(timeoutMs / 1000)}s`;
+        stmts.updateTask.run(agentId, 'failed', reason, task.id);
+        emitTaskEvent('task_failed', agentId, task.id, `Task "${task.title}" failed: timeout (${Math.round(timeoutMs / 1000)}s)`);
+        clearTaskTimeout(task.id);
+        processQueue();
+    }, timeoutMs);
+    taskTimeoutTimers.set(task.id, timer);
+}
 /**
  * Process the task queue: assign pending tasks to idle agents.
  * For real mode, spawns OpenClaw agent sessions.
@@ -133,6 +196,23 @@ export function processQueue() {
         const idleAgents = listAgents().filter(a => a.state === 'idle');
         if (idleAgents.length === 0)
             return;
+        // Sort idle agents by least-recently-used (oldest updatedAt first) for round-robin fairness
+        const allAgents = listAgents();
+        const workingCountByAgent = new Map();
+        for (const a of allAgents) {
+            if (a.state === 'working') {
+                workingCountByAgent.set(a.id, (workingCountByAgent.get(a.id) || 0) + 1);
+            }
+        }
+        // Prefer agents with fewer active tasks, then least recently active
+        idleAgents.sort((a, b) => {
+            const wa = workingCountByAgent.get(a.id) || 0;
+            const wb = workingCountByAgent.get(b.id) || 0;
+            if (wa !== wb)
+                return wa - wb;
+            // Older updatedAt = been idle longer = should get next task
+            return new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime();
+        });
         let slotsLeft = MAX_CONCURRENT_TASKS - activeCount;
         const usedAgents = new Set();
         for (const task of pending) {
@@ -177,6 +257,7 @@ function assignTask(agentId, task) {
         prompt,
         onComplete: (run) => handleRunComplete(agent.id, task.id, task.title, run),
     });
+    scheduleTaskTimeout(task, agent.id, sessionId);
 }
 const ROLE_INSTRUCTIONS = {
     pm: `You are a Project Manager. Your job is to create REPORTS, PLANS, and ANALYSIS only.
@@ -232,7 +313,12 @@ function buildPrompt(name, role, task) {
 }
 /** Walk up parentTaskId chain to find the root task */
 function findRootTask(taskId) {
-    let current = rowToTask(stmts.getTask.get(taskId));
+    const initial = stmts.getTask.get(taskId);
+    if (!initial) {
+        // reset-all can remove tasks while async callbacks are in flight
+        throw new Error(`Task not found: ${taskId}`);
+    }
+    let current = rowToTask(initial);
     while (current.parentTaskId) {
         const parent = stmts.getTask.get(current.parentTaskId);
         if (!parent)
@@ -294,15 +380,21 @@ export function decideNextRoleByIntent(task, currentRole) {
             // Medium/low or bugfix validation: QA first then Dev correction.
             return 'qa';
         }
-        // report/document: PM -> Reviewer only when explicitly asked
-        if (reportOnly)
+        // PM tasks almost always lead to development — even spec/planning docs
+        // Only end the chain at PM if it's truly a standalone report (analysis, summary)
+        // with no implementation intent at all
+        const text = `${task.title}\n${task.description}`.toLowerCase();
+        const hasImplementationContext = /(개발|구현|코드|코딩|앱|웹|사이트|api|mvp|feature|기능|만들|빌드|build|implement|design|디자인|ui|ux|phase)/i.test(text);
+        if (reportOnly && !hasImplementationContext) {
             return reviewRequested ? 'reviewer' : undefined;
-        // implementation/web/code/api/design/data: PM -> Developer
+        }
+        // PM -> Developer (standard flow: planning leads to implementation)
         return 'developer';
     }
     if (currentRole === 'reviewer') {
-        // Reviewer finds issues → Developer must fix (this is standard code review flow)
-        return 'developer';
+        // Reviewer is the terminal step — chain ends after review (Dev→Review is the standard 2-step flow)
+        // Returning developer here would cause an infinite Dev→Review→Dev→Review loop
+        return undefined;
     }
     if (currentRole === 'qa') {
         // QA finds bugs → Developer must fix
@@ -310,11 +402,15 @@ export function decideNextRoleByIntent(task, currentRole) {
     }
     if (currentRole === 'developer') {
         // Developer -> Reviewer for code review (standard flow)
+        // Always suggest review after development — this is standard practice
         if (reviewRequested)
             return 'reviewer';
         // If QA was requested, go to QA after development
         if (qaToDevRequested)
             return 'qa';
+        // Default: always do a review after development (Dev→Review is standard)
+        if (!reportOnly)
+            return 'reviewer';
         return undefined;
     }
     return undefined;
@@ -353,12 +449,18 @@ function getChainChildren(rootTaskId) {
 }
 /** When a chain step completes, update root task with progress or final result */
 function updateRootTaskFromChain(taskId, result) {
-    const currentTask = rowToTask(stmts.getTask.get(taskId));
+    const currentRow = stmts.getTask.get(taskId);
+    if (!currentRow)
+        return; // task may have been removed by reset-all while async completion callback is running
+    const currentTask = rowToTask(currentRow);
     const rootTask = findRootTask(taskId);
     if (rootTask.id === taskId)
         return; // This IS the root task
     const agent = currentTask.assigneeId ? getAgent(currentTask.assigneeId) : null;
-    const nextRole = agent ? resolveNextRoleForTask(taskId, agent.role) : undefined;
+    // Bug 2 fix: 체인 플랜이 completed면 intent-based 로직 무시하고 부모 태스크도 완료 처리
+    const chainPlan = getChainPlanForTask(rootTask.id);
+    const chainDone = chainPlan && chainPlan.status === 'completed';
+    const nextRole = chainDone ? undefined : (agent ? resolveNextRoleForTask(taskId, agent.role) : undefined);
     if (!nextRole) {
         // TERMINAL step. Aggregate and complete root task.
         const children = getChainChildren(rootTask.id);
@@ -386,7 +488,7 @@ function updateRootTaskFromChain(taskId, result) {
         catch (e) {
             console.error('[deliverables] root copy error:', e);
         }
-        emitTaskEvent('task_completed', rootTask.assigneeId, rootTask.id, `Task "${rootTask.title}" completed (pipeline finished)`);
+        emitTaskCompletedOnce(rootTask.assigneeId, rootTask.id, `Task "${rootTask.title}" completed (pipeline finished)`);
     }
     else {
         // Intermediate step — update root with progress
@@ -394,10 +496,16 @@ function updateRootTaskFromChain(taskId, result) {
         const completedSteps = 1 + children.filter(c => c.status === 'completed').length;
         const totalSteps = getPlannedStepCount(rootTask);
         const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
-        stmts.updateTask.run(rootTask.assigneeId, 'in-progress', `⏳ Step ${completedSteps}/${totalSteps}: ${stepLabel} starting...`, rootTask.id);
+        // Keep existing result (dev output) — only update status text in a progress field, not overwrite result
+        const existingResult = rootTask.result || '';
+        const progressPrefix = `⏳ Step ${completedSteps}/${totalSteps}: ${stepLabel} starting...`;
+        // Only overwrite if no real result yet
+        const newResult = existingResult && !existingResult.startsWith('⏳') ? existingResult : progressPrefix;
+        stmts.updateTask.run(rootTask.assigneeId, 'in-progress', newResult, rootTask.id);
     }
 }
 function handleRunComplete(agentId, taskId, title, run) {
+    clearTaskTimeout(taskId);
     try {
         const success = run.exitCode === 0;
         const result = success
@@ -411,9 +519,15 @@ function handleRunComplete(agentId, taskId, title, run) {
             catch { /* skip if invalid */ }
             emitTaskEvent('message', agentId, taskId, `${getAgent(agentId)?.name ?? 'Agent'} is reviewing results...`);
             setTimeout(() => {
+                // Ensure task is marked completed and agent returns to idle no matter what
+                let taskMarkedComplete = false;
                 try {
-                    transitionAgent(agentId, 'done', taskId);
+                    try {
+                        transitionAgent(agentId, 'done', taskId);
+                    }
+                    catch { /* agent may already be idle/done */ }
                     stmts.updateTask.run(agentId, 'completed', result, taskId);
+                    taskMarkedComplete = true;
                     // Auto-create deliverables from result (pass agent role for type enforcement)
                     const agentRole = getAgent(agentId)?.role;
                     try {
@@ -423,7 +537,20 @@ function handleRunComplete(agentId, taskId, title, run) {
                         console.error('[deliverables] parse error:', e);
                     }
                     // Chain plan aware: check if auto-chain should proceed
-                    const currentTask = rowToTask(stmts.getTask.get(taskId));
+                    const currentRow = stmts.getTask.get(taskId);
+                    if (!currentRow) {
+                        // reset-all can remove tasks while completion callbacks are still pending
+                        setTimeout(() => {
+                            try {
+                                transitionAgent(agentId, 'idle', null, null);
+                                cleanupRun(run.sessionId);
+                                processQueue();
+                            }
+                            catch { /* already transitioned */ }
+                        }, 200);
+                        return;
+                    }
+                    const currentTask = rowToTask(currentRow);
                     const isRootTask = !currentTask.parentTaskId;
                     const rootTaskId = isRootTask ? taskId : findRootTask(taskId).id;
                     // 서버 단일 소스 정합성: 마지막 step 완료 시 즉시 completed로 확정
@@ -433,6 +560,13 @@ function handleRunComplete(agentId, taskId, title, run) {
                         && completedPlan.status !== 'cancelled'
                         && completedPlan.currentStep >= completedPlan.steps.length - 1) {
                         markChainCompleted(completedPlan.id);
+                        // Emit chain_completed event for Chief to pick up
+                        const rootRow = stmts.getTask.get(rootTaskId);
+                        if (rootRow) {
+                            const rootTask = rowToTask(rootRow);
+                            const stepSummary = completedPlan.steps.map(s => s.label).join(' → ');
+                            emitTaskEvent('chain_completed', agentId, rootTaskId, `🎉 Chain completed: "${rootTask.title}" | Steps: ${stepSummary}`);
+                        }
                     }
                     const autoChain = shouldAutoChain(rootTaskId);
                     let chainSpawned = false;
@@ -460,6 +594,12 @@ function handleRunComplete(agentId, taskId, title, run) {
                             const noRemainingStep = (plan.currentStep + 1) >= plan.steps.length;
                             if (noRemainingStep && plan.status !== 'completed' && plan.status !== 'cancelled') {
                                 markChainCompleted(plan.id);
+                                const rootRow = stmts.getTask.get(rootTaskId);
+                                if (rootRow) {
+                                    const rootTask = rowToTask(rootRow);
+                                    const stepSummary = plan.steps.map(s => s.label).join(' → ');
+                                    emitTaskEvent('chain_completed', agentId, rootTaskId, `🎉 Chain completed: "${rootTask.title}" | Steps: ${stepSummary}`);
+                                }
                             }
                         }
                         else {
@@ -470,17 +610,13 @@ function handleRunComplete(agentId, taskId, title, run) {
                     }
                     // Only emit task_completed for root when no follow-up chain was spawned.
                     if (!(isRootTask && chainSpawned)) {
-                        emitTaskEvent('task_completed', agentId, taskId, `Task "${title}" completed`);
+                        emitTaskCompletedOnce(agentId, taskId, `Task "${title}" completed`);
                     }
                     // Update root task with chain progress/completion
                     updateRootTaskFromChain(taskId, result);
                     if (isRootTask && chainSpawned) {
-                        const rootTask = rowToTask(stmts.getTask.get(taskId));
-                        const plan = getChainPlanForTask(taskId);
-                        const totalSteps = plan ? plan.steps.length : getPlannedStepCount(rootTask);
-                        const currentStep = plan ? plan.currentStep : 0;
-                        const stepLabel = plan ? plan.steps[currentStep]?.label : 'next';
-                        stmts.updateTask.run(agentId, 'in-progress', `⏳ Step ${currentStep + 1}/${totalSteps}: ${stepLabel} starting...`, taskId);
+                        // Don't overwrite actual result with progress text — keep the dev output
+                        stmts.updateTask.run(agentId, 'in-progress', result, taskId);
                     }
                     // Return to idle after brief pause
                     setTimeout(() => {
@@ -492,7 +628,24 @@ function handleRunComplete(agentId, taskId, title, run) {
                         catch { /* already transitioned */ }
                     }, 2000);
                 }
-                catch { /* already transitioned */ }
+                catch (innerErr) {
+                    // Safety net: ensure task is completed and agent returns to idle even if chain logic fails
+                    console.error(`[task-queue] Error in post-completion logic for task ${taskId}:`, innerErr);
+                    if (!taskMarkedComplete) {
+                        try {
+                            stmts.updateTask.run(agentId, 'completed', result, taskId);
+                        }
+                        catch { /* best effort */ }
+                    }
+                    setTimeout(() => {
+                        try {
+                            transitionAgent(agentId, 'idle', null, null);
+                            cleanupRun(run.sessionId);
+                            processQueue();
+                        }
+                        catch { /* already transitioned */ }
+                    }, 2000);
+                }
             }, 1500);
         }
         else {
@@ -512,6 +665,19 @@ function handleRunComplete(agentId, taskId, title, run) {
     }
     catch (err) {
         console.error(`[task-queue] Error handling completion for task ${taskId}:`, err);
+        // Safety net: mark task as failed and return agent to idle
+        try {
+            stmts.updateTask.run(agentId, 'failed', `Internal error: ${String(err)}`, taskId);
+        }
+        catch { /* best effort */ }
+        setTimeout(() => {
+            try {
+                transitionAgent(agentId, 'idle', null, null);
+                cleanupRun(run.sessionId);
+                processQueue();
+            }
+            catch { /* best effort */ }
+        }, 2000);
     }
 }
 function spawnChainFollowUp(agentId, taskId, title, result) {
@@ -519,19 +685,51 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         const agent = getAgent(agentId);
         if (!agent)
             return { spawned: false };
+        // Guard: limit chain depth to 4 steps max to prevent runaway chains
+        const MAX_CHAIN_DEPTH = 4;
+        const chainChildren = getChainChildren(findRootTask(taskId).id);
+        if (chainChildren.length >= MAX_CHAIN_DEPTH)
+            return { spawned: false };
         const nextRole = resolveNextRoleForTask(taskId, agent.role);
         if (!nextRole)
             return { spawned: false }; // Conditional chain says stop here
-        // Find an agent with the next role
-        const nextAgentRow = stmts.findAgentByRole.get(nextRole);
-        if (!nextAgentRow)
+        // Find an agent with the next role — prefer idle, then least recently used
+        const roleAgents = listAgents().filter(a => a.role === nextRole);
+        if (roleAgents.length === 0)
             return { spawned: false }; // No agent with that role exists
-        const nextAgentId = nextAgentRow.id;
-        const nextAgentName = nextAgentRow.name;
+        const idleOfRole = roleAgents.filter(a => a.state === 'idle');
+        // Pick least recently used idle agent, or fallback to any agent of the role
+        const sortedCandidates = (idleOfRole.length > 0 ? idleOfRole : roleAgents)
+            .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
+        const nextAgentId = sortedCandidates[0].id;
+        const nextAgentName = sortedCandidates[0].name;
         const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
         const prevStepLabel = CHAIN_STEP_LABELS[agent.role] || agent.role;
-        const chainTitle = `[${stepLabel}] ${title}`;
-        const chainDesc = `## 이전 단계: ${agent.name} (${prevStepLabel})\n\n아래 이전 단계의 결과를 기반으로 ${stepLabel} 작업을 수행하세요.\n\n---\n\n${result.slice(0, 4000)}`;
+        // Bug 4 fix: 기존 prefix 제거 후 현재 단계 prefix만 붙임
+        const strippedTitle = title.replace(/^(\[[^\]]*\]\s*)+/, '');
+        const chainTitle = `[${stepLabel}] ${strippedTitle}`;
+        let chainDesc = `## 이전 단계: ${agent.name} (${prevStepLabel})\n\n아래 이전 단계의 결과를 기반으로 ${stepLabel} 작업을 수행하세요.\n\n---\n\n${result.slice(0, 4000)}`;
+        // Feature 2: PM Spec → Reviewer Checklist
+        if (nextRole === 'reviewer') {
+            const rootTask = findRootTask(taskId);
+            const children = getChainChildren(rootTask.id);
+            const allSteps = [rootTask, ...children];
+            const pmStep = allSteps.find(t => {
+                const a = t.assigneeId ? getAgent(t.assigneeId) : null;
+                return a?.role === 'pm';
+            });
+            if (pmStep?.result) {
+                chainDesc += '\n\n---\n## 📋 PM 기획서 (체크리스트로 사용)\n' + pmStep.result.slice(0, 3000);
+                chainDesc += '\n\n⚠️ 위 기획서의 각 항목이 구현되었는지 체크리스트로 검증하세요.';
+            }
+        }
+        // Feature 1: Apply chain amendments from user mid-chain intervention
+        const rootTaskId = findRootTask(taskId).id;
+        const amendments = chainAmendments.get(rootTaskId);
+        if (amendments?.length) {
+            chainDesc += '\n\n---\n## 📝 사용자 추가 요청\n' + amendments.map((a, i) => `${i + 1}. ${a}`).join('\n');
+            chainAmendments.delete(rootTaskId);
+        }
         // Carry original expected deliverable from root task and clamp to next role.
         const rootTask = findRootTask(taskId);
         const originalExpected = rootTask.expectedDeliverables;
@@ -550,6 +748,36 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
     catch (err) {
         console.error('[task-queue] Chain follow-up error:', err);
         return { spawned: false };
+    }
+}
+export function syncRootTaskStates() {
+    const tasks = listTasks(true);
+    const roots = tasks.filter(t => !t.parentTaskId);
+    for (const root of roots) {
+        const children = getChainChildren(root.id);
+        if (children.length === 0)
+            continue;
+        const hasActiveChild = children.some(c => c.status === 'in-progress' || c.status === 'pending');
+        const hasFailedChild = children.some(c => c.status === 'failed');
+        const latestChildResult = [...children]
+            .filter(c => !!c.result && !String(c.result).startsWith('⏳'))
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]?.result;
+        if (hasFailedChild && root.status !== 'failed') {
+            stmts.updateTask.run(root.assigneeId, 'failed', root.result || latestChildResult || 'Child task failed', root.id);
+            continue;
+        }
+        if (hasActiveChild) {
+            const stableResult = root.result && !root.result.startsWith('⏳') ? root.result : (latestChildResult || root.result || null);
+            if (root.status !== 'in-progress' || stableResult !== root.result) {
+                stmts.updateTask.run(root.assigneeId, 'in-progress', stableResult, root.id);
+            }
+            continue;
+        }
+        const allTerminal = children.every(c => c.status === 'completed' || c.status === 'cancelled');
+        if (allTerminal && root.status !== 'completed') {
+            stmts.updateTask.run(root.assigneeId, 'completed', latestChildResult || root.result, root.id);
+            emitTaskCompletedOnce(root.assigneeId, root.id, `Task "${root.title}" completed (root-child sync)`);
+        }
     }
 }
 export { getChainChildren, findRootTask, spawnChainFollowUp };
@@ -581,3 +809,63 @@ export function listEvents() {
         createdAt: row.created_at,
     }));
 }
+/**
+ * Watchdog: detect and fix stuck in-progress tasks.
+ * Policy:
+ * 1) run timeout (120s/240s) should fail tasks first.
+ * 2) If task still stuck and agent is no longer working, reassign once.
+ * 3) If already reassigned or very old, terminate as failed.
+ */
+const HARD_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes absolute max
+function watchdogSweep() {
+    try {
+        const inProgressTasks = listTasks().filter(t => t.status === 'in-progress');
+        const now = Date.now();
+        for (const task of inProgressTasks) {
+            if (!task.assigneeId)
+                continue;
+            const agent = getAgent(task.assigneeId);
+            if (!agent)
+                continue;
+            const taskAge = now - new Date((task.updatedAt || task.createdAt) + 'Z').getTime();
+            const run = agent.sessionId ? getAgentRun(agent.sessionId) : undefined;
+            const runAlive = !!run && !run.done;
+            const agentNotWorking = agent.state !== 'working' && agent.state !== 'reviewing';
+            const staleWithoutRun = !runAlive && taskAge > 60_000;
+            const hardExpired = taskAge > HARD_TIMEOUT_MS;
+            if (!staleWithoutRun && !hardExpired)
+                continue;
+            console.warn(`[watchdog] Stuck task detected "${task.title}" (id=${task.id}, agent=${agent.name}, agentState=${agent.state}, age=${Math.round(taskAge / 1000)}s, runAlive=${runAlive})`);
+            clearTaskTimeout(task.id);
+            const reassignCount = watchdogReassignCount.get(task.id) || 0;
+            const shouldReassign = !hardExpired && agentNotWorking && reassignCount < 1;
+            if (shouldReassign) {
+                watchdogReassignCount.set(task.id, reassignCount + 1);
+                stmts.updateTask.run(null, 'pending', task.result, task.id);
+                try {
+                    transitionAgent(agent.id, 'idle', null, null);
+                }
+                catch { /* ignore */ }
+                emitTaskEvent('message', agent.id, task.id, `[watchdog] Stuck task re-queued once (policy: reassign-then-fail).`);
+                continue;
+            }
+            const reason = hardExpired
+                ? `Task failed by watchdog: hard timeout (${Math.round(taskAge / 1000)}s)`
+                : `Task failed by watchdog: stuck without active run (${Math.round(taskAge / 1000)}s)`;
+            stmts.updateTask.run(task.assigneeId, 'failed', reason, task.id);
+            emitTaskEvent('task_failed', task.assigneeId, task.id, `[watchdog] Task "${task.title}" terminated (${hardExpired ? 'hard-timeout' : 'stuck'})`);
+            try {
+                transitionAgent(agent.id, 'idle', null, null);
+            }
+            catch { /* ignore */ }
+        }
+        processQueue();
+    }
+    catch (err) {
+        console.error('[watchdog] Error during sweep:', err);
+    }
+}
+// Run watchdog every 2 minutes
+setInterval(watchdogSweep, 2 * 60 * 1000);
+// Also run once after startup (30s delay)
+setTimeout(watchdogSweep, 30_000);

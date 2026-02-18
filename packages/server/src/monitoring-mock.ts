@@ -97,6 +97,16 @@ const ALERTS: MonitoringAlert[] = [
   },
 ];
 
+let _monitoringReset = false;
+
+export function resetMonitoringState() {
+  _monitoringReset = true;
+}
+
+export function unresetMonitoringState() {
+  _monitoringReset = false;
+}
+
 function seededNoise(seed: number): number {
   const x = Math.sin(seed * 12.9898) * 43758.5453;
   return x - Math.floor(x);
@@ -126,6 +136,19 @@ function metricValue(base: number, jitter: number, seed: number): number {
 export function getMockMetrics(windowInput?: string) {
   const window = parseWindow(windowInput);
   const sampledAt = new Date().toISOString();
+
+  if (_monitoringReset) {
+    const metrics: MonitoringMetric[] = METRIC_CONFIG.map((cfg) => ({
+      key: cfg.key,
+      label: cfg.label,
+      value: 0,
+      unit: cfg.unit,
+      trend: { direction: 'flat' as const, delta: 0, deltaPct: 0 },
+      sampledAt,
+    }));
+    return { window, sampledAt, metrics };
+  }
+
   const seedBase = Math.floor(Date.now() / (5 * 60 * 1000));
 
   const metrics: MonitoringMetric[] = METRIC_CONFIG.map((cfg, idx) => {
@@ -162,6 +185,11 @@ export function getMockTimeSeries(metricInput?: string, windowInput?: string, in
   const window = parseWindow(windowInput);
   const interval = parseInterval(intervalInput);
 
+  if (_monitoringReset) {
+    const cfg = METRIC_CONFIG.find((m) => m.key === metric) ?? METRIC_CONFIG[0];
+    return { metric, unit: cfg.unit, window, interval, points: [] };
+  }
+
   const now = Date.now();
   const windowMs = WINDOW_TO_MS[window];
   const intervalMs = INTERVAL_TO_MS[interval];
@@ -189,6 +217,9 @@ export function getMockTimeSeries(metricInput?: string, windowInput?: string, in
 }
 
 export function getMockAlerts(statusInput?: string) {
+  if (_monitoringReset) {
+    return { total: 0, active: 0, alerts: [] };
+  }
   const statusFilter = statusInput === 'active' || statusInput === 'resolved' ? statusInput : undefined;
   const alerts = statusFilter ? ALERTS.filter((a) => a.status === statusFilter) : ALERTS;
   return {

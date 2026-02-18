@@ -293,11 +293,7 @@ export default function TaskResultModal() {
                   </div>
                 )}
               </div>
-              {hasChain && (
-                <div className="text-[11px] text-gray-500 mb-2">
-                  연결: finalDeliverableId={threadSummary?.finalDeliverableId || '-'} · latestDeliverableByThread={threadSummary?.latestDeliverableByThread || '-'}
-                </div>
-              )}
+              {/* Internal IDs hidden — dev-only info */}
               <div className="bg-[#0f0f1a] rounded-lg border border-gray-700/40 p-4 text-sm text-gray-200 leading-relaxed">
                 <MarkdownContent text={finalOutputText} className="text-sm" />
               </div>

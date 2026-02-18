@@ -161,7 +161,7 @@ export default function HistoryReplay() {
                 <div className="mt-1 text-xs text-gray-500">
                   Task: <span className="text-gray-400">{task.title}</span>
                   {task.status === 'completed' && task.result && (
-                    <span className="ml-2 text-green-400/70">→ {(task.result as string).slice(0, 80)}</span>
+                    <span className="ml-2 text-green-400/70">→ {/^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(task.result as string) ? '🌐 HTML 결과물' : `${(task.result as string).slice(0, 80)}`}</span>
                   )}
                 </div>
               )}

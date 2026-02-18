@@ -171,7 +171,7 @@ export default function TaskListView() {
           )}
           {!progress && t.result && !t.result.startsWith('⏳') && (
             <div className="text-[10px] text-gray-500 truncate max-w-[300px] mt-0.5">
-              {t.result.slice(0, 80)}...
+              {/^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(t.result) ? '🌐 HTML 웹 결과물' : `${t.result.slice(0, 80)}...`}
             </div>
           )}
         </td>

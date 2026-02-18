@@ -20,9 +20,9 @@ const t1 = uuid();
 const t2 = uuid();
 const t3 = uuid();
 
-stmts.insertTask.run(t1, '핫픽스 배포', '운영 버그 핫픽스', null, JSON.stringify(['web']));
-stmts.insertTask.run(t2, 'QA 재검증', '배포 후 검증', null, JSON.stringify(['report']));
-stmts.insertTask.run(t3, '리포트 정리', '완료 보고서 작성', null, JSON.stringify(['report']));
+stmts.insertTask.run(t1, '핫픽스 배포', '운영 버그 핫픽스', null, JSON.stringify(['web']), 0);
+stmts.insertTask.run(t2, 'QA 재검증', '배포 후 검증', null, JSON.stringify(['report']), 0);
+stmts.insertTask.run(t3, '리포트 정리', '완료 보고서 작성', null, JSON.stringify(['report']), 0);
 
 stmts.updateTask.run(null, 'in-progress', null, t1);
 stmts.updateTask.run(null, 'pending', null, t2);

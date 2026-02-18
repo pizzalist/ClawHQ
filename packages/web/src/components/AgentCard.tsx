@@ -3,7 +3,7 @@ import { ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
 
 const STATE_STYLES: Record<string, { bg: string; text: string; dot: string; pulse: boolean }> = {
   idle: { bg: 'bg-gray-500/15', text: 'text-gray-400', dot: 'bg-gray-500', pulse: false },
-  working: { bg: 'bg-blue-500/15', text: 'text-blue-400', dot: 'bg-blue-500', pulse: true },
+  working: { bg: 'bg-yellow-400/20', text: 'text-yellow-300', dot: 'bg-yellow-300', pulse: true },
   reviewing: { bg: 'bg-yellow-500/15', text: 'text-yellow-400', dot: 'bg-yellow-500', pulse: true },
   done: { bg: 'bg-green-500/15', text: 'text-green-400', dot: 'bg-green-500', pulse: false },
   error: { bg: 'bg-red-500/15', text: 'text-red-400', dot: 'bg-red-500', pulse: false },
