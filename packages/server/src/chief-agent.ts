@@ -31,6 +31,18 @@ const pendingProposalBySession = new Map<string, string>();
 const notificationSessionById = new Map<string, string>();
 let lastActiveChiefSessionId = 'chief-default';
 
+/** Reset all chief in-memory state (for full data reset) */
+export function resetChiefState() {
+  sessionMessages.clear();
+  pendingProposals.clear();
+  pendingProposalBySession.clear();
+  notificationSessionById.clear();
+  lastActiveChiefSessionId = 'chief-default';
+  reportedTaskCompletions.clear();
+  emittedNotificationKeys.clear();
+  handledInlineActionKeys.clear();
+}
+
 function compactText(input: string, limit = 500): string {
   const normalized = (input || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   if (normalized.length <= limit) return normalized;
@@ -210,9 +222,20 @@ function parseApprovalSelection(userMessage: string, total: number): number[] | 
     if (idx >= 0 && idx < total) return [idx];
     return null;
   }
-  // Short approval words — only if message is very short (< 10 chars) to avoid false matches
+  // Short approval words — exact match for short messages
   if (msg.length < 10 && /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(msg)) return [0];
+  // Approval prefix with additional instructions — "응, 그리고 ..." / "응 근데 ..." / "네, ..." etc.
+  if (/^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+/i.test(msg)) return [0];
   return null;
+}
+
+/**
+ * Extract the additional instruction part after an approval prefix.
+ * e.g. "응, 그리고 개발 태스크도 만들어줘" → "그리고 개발 태스크도 만들어줘"
+ */
+function extractPostApprovalMessage(userMessage: string): string | null {
+  const match = userMessage.trim().match(/^(?:ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+(.+)$/is);
+  return match ? match[1].trim() : null;
 }
 
 // Callbacks for async chief responses (set by index.ts)
@@ -430,7 +453,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextStep.role), nextStep.role, DEFAULT_MODEL_BY_ROLE[nextStep.role]);
 
             const nextTitle = `[${nextStep.label}] ${task?.title || ''}`.trim();
-            const nextDesc = `이전 단계 결과를 기반으로 ${nextStep.label}을(를) 수행하세요.\n\n${nextStep.reason}\n\n## 이전 결과\n${(task?.result || '').slice(0, 2000)}`;
+            const nextDesc = `이전 단계 결과를 기반으로 ${nextStep.label}을(를) 수행하세요.\n\n${nextStep.reason}\n\n## 이전 결과\n${(task?.result || '').slice(0, 4000)}`;
             const newTask = createTask(nextTitle, nextDesc, nextAgent.id, taskId);
             // Link new task to same chain plan so handleRunComplete can find it
             linkTaskToChainPlan(newTask.id, chainPlan.id);
@@ -786,7 +809,7 @@ export function chiefHandleMeetingChange() {
 
       // Build context-appropriate actions
       const meetingActions: any[] = [
-        { id: `view-meeting-${meeting.id}`, label: '📄 회의 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
+        { id: `view-meeting-${meeting.id}`, label: '📊 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
       ];
 
       // If planning/brainstorm meeting, offer to start review scoring
@@ -1059,10 +1082,35 @@ ${state}
 [ACTION:cancel_meeting meetingId="미팅ID"]
 [ACTION:delete_meeting meetingId="미팅ID"]
 [ACTION:delete_all_meetings]
+[ACTION:confirm_meeting meetingId="미팅ID"]
+[ACTION:confirm_task taskId="태스크ID"]
+[ACTION:start_review meetingId="미팅ID"]
+
+의사결정 액션:
+- confirm_meeting: 완료된 미팅을 확정하고 다음 단계 자동 실행 (meetingId 생략 시 최근 완료 미팅)
+- confirm_task: 완료된 태스크를 확정하고 체인 다음 단계 자동 실행 (taskId 생략 시 최근 완료 태스크)
+- start_review: 브레인스토밍/기획 미팅 결과를 리뷰어 점수화 (meetingId 생략 시 최근 미팅)
+- 사용자가 "확정", "진행", "다음 단계" 등을 말하면 적절한 confirm 액션을 제안하세요.
+- 사용자가 "리뷰", "점수화" 등을 말하면 start_review를 제안하세요.
 
 사용 가능한 role: pm, developer, reviewer, designer, devops, qa
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
-사용 가능한 character: brainstorm, planning, review, retrospective
+사용 가능한 character: brainstorm, planning, review, retrospective, kickoff, architecture, design, sprint-planning, estimation, demo, postmortem, code-review, daily
+- brainstorm: 아이디어 발산/후보 도출
+- planning: 기획서/명세서 작성 (확정된 주제 기반)
+- kickoff: 프로젝트 킥오프 (목표/역할/일정)
+- architecture: 기술 아키텍처 설계
+- design: UI/UX 설계
+- sprint-planning: 스프린트 계획/태스크 분배
+- estimation: 공수/리소스/일정 산정
+- demo: 결과물 시연 리뷰
+- postmortem: 장애/실패 분석
+- code-review: 코드 리뷰
+- daily: 데일리 스탠드업
+- retrospective: 회고 (잘된점/개선점/액션아이템)
+- review: 후보 점수화/평가
+
+character 선택 기준: 사용자 요청 맥락에 맞는 타입을 자동 선택하세요. 예) "아키텍처 설계 회의" → architecture, "스프린트 계획" → sprint-planning
 
 이미 있는 에이전트를 활용할 수 있으면 새로 만들지 마세요.`;
 }
@@ -1385,13 +1433,29 @@ function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { par
 }
 
 /** Execute a single parsed action. Called only after user approval. */
-function executeAction(action: ChiefAction): ChiefAction {
+function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
+  console.log(`[chief] executeAction: type=${action.type}, params=${JSON.stringify(action.params).slice(0, 200)}`);
   try {
     switch (action.type) {
       case 'create_task': {
         const { title, description, assignRole } = action.params;
         const taskTitle = title || 'Untitled';
-        const taskDescription = description || '';
+        let taskDescription = description || '';
+
+        // Auto-inject related task results into description for context continuity
+        // Look for recently completed tasks that are referenced or related
+        const allTasks = listTasks();
+        const completedRelated = allTasks.filter(t => 
+          t.status === 'completed' && t.result && 
+          (taskTitle.includes(t.title.replace(/^\[.*?\]\s*/, '')) || 
+           t.title.replace(/^\[.*?\]\s*/, '').split(' ').some(w => w.length > 3 && taskTitle.includes(w)))
+        ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+        if (completedRelated.length > 0) {
+          const prevTask = completedRelated[0];
+          const prevResult = prevTask.result!.slice(0, 4000);
+          taskDescription = `${taskDescription}\n\n## 참고: 이전 태스크 결과 ("${prevTask.title}")\n\n${prevResult}`;
+        }
 
         // 1) Dynamic start-role recommendation (intent/output/complexity hints)
         const preferredRole = recommendStartRoleFromIntent(taskTitle, taskDescription, assignRole);
@@ -1475,9 +1539,25 @@ function executeAction(action: ChiefAction): ChiefAction {
           return { ...action, result: { ok: false, message: '미팅 참여자 자동 구성 실패 (최소 2명 필요)' } };
         }
 
+        // Build contextual description from recent session messages
+        let meetingDescription = '총괄자가 시작한 미팅';
+        if (sessionId) {
+          const recentMsgs = getSessionMessages(sessionId).slice(-15);
+          const contextParts: string[] = [];
+          for (const m of recentMsgs) {
+            if (!m.content?.trim()) continue;
+            const prefix = m.role === 'user' ? '[사용자]' : '[총괄자]';
+            const truncated = m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content;
+            contextParts.push(`${prefix} ${truncated}`);
+          }
+          if (contextParts.length > 0) {
+            meetingDescription = `## 이전 대화 컨텍스트\n\n${contextParts.join('\n\n')}\n\n위 대화를 바탕으로 미팅을 진행해주세요.`;
+          }
+        }
+
         const meeting = startPlanningMeeting(
           title || '총괄자 미팅',
-          `총괄자가 시작한 미팅`,
+          meetingDescription,
           participantIds,
           (character as any) || 'planning',
         );
@@ -1545,6 +1625,69 @@ function executeAction(action: ChiefAction): ChiefAction {
         stmts.updateAgentState.run('idle', null, null, agentId);
         return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 상태 초기화됨` } };
       }
+      case 'confirm_meeting': {
+        // Confirm/approve a completed meeting and trigger next steps
+        const { meetingId } = action.params;
+        if (!meetingId) {
+          // Try to find the latest completed meeting
+          const allMeetings = listMeetings();
+          const latestCompleted = allMeetings.filter(m => m.status === 'completed').sort((a, b) => 
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          )[0];
+          if (!latestCompleted) {
+            return { ...action, result: { ok: false, message: '확정할 완료된 미팅이 없습니다' } };
+          }
+          // Delegate to handleChiefAction with a synthetic notification
+          const notifId = `synthetic-confirm-${latestCompleted.id}-${Date.now()}`;
+          const result = handleChiefAction(notifId, `approve-${latestCompleted.id}`, { meetingId: latestCompleted.id }, sessionId);
+          return { ...action, result: { ok: true, message: result.reply } };
+        }
+        const meeting = getMeeting(meetingId);
+        if (!meeting) {
+          return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+        }
+        const notifId = `synthetic-confirm-${meetingId}-${Date.now()}`;
+        const result = handleChiefAction(notifId, `approve-${meetingId}`, { meetingId }, sessionId);
+        return { ...action, result: { ok: true, message: result.reply } };
+      }
+      case 'start_review': {
+        // Start review scoring for a completed brainstorm/planning meeting
+        const { meetingId } = action.params;
+        if (!meetingId) {
+          const allMeetings = listMeetings();
+          const latestBrainstorm = allMeetings.filter(m => 
+            m.status === 'completed' && (m.character === 'brainstorm' || m.character === 'planning') && !m.sourceMeetingId
+          ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+          if (!latestBrainstorm) {
+            return { ...action, result: { ok: false, message: '리뷰할 미팅이 없습니다' } };
+          }
+          const notifId = `synthetic-review-${latestBrainstorm.id}-${Date.now()}`;
+          const r = handleChiefAction(notifId, `start-review-${latestBrainstorm.id}`, { meetingId: latestBrainstorm.id }, sessionId);
+          return { ...action, result: { ok: true, message: r.reply } };
+        }
+        const notifId = `synthetic-review-${meetingId}-${Date.now()}`;
+        const r = handleChiefAction(notifId, `start-review-${meetingId}`, { meetingId }, sessionId);
+        return { ...action, result: { ok: true, message: r.reply } };
+      }
+      case 'confirm_task': {
+        // Confirm a completed task and trigger chain advancement
+        const { taskId } = action.params;
+        if (!taskId) {
+          const tasks = listTasks();
+          const latestCompleted = tasks.filter(t => t.status === 'completed' && !t.parentTaskId).sort((a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          )[0];
+          if (!latestCompleted) {
+            return { ...action, result: { ok: false, message: '확정할 완료된 태스크가 없습니다' } };
+          }
+          const notifId = `synthetic-confirm-task-${latestCompleted.id}-${Date.now()}`;
+          const result = handleChiefAction(notifId, `approve-${latestCompleted.id}`, { taskId: latestCompleted.id }, sessionId);
+          return { ...action, result: { ok: true, message: result.reply } };
+        }
+        const notifId = `synthetic-confirm-task-${taskId}-${Date.now()}`;
+        const result = handleChiefAction(notifId, `approve-${taskId}`, { taskId }, sessionId);
+        return { ...action, result: { ok: true, message: result.reply } };
+      }
       case 'cancel_meeting': // alias for delete_meeting
       case 'delete_meeting': {
         const { meetingId } = action.params;
@@ -1580,6 +1723,7 @@ export function approveProposal(
   selectedIndices?: number[],
   overrideActions?: ChiefAction[],
   options?: { continueOnError?: boolean },
+  sessionId?: string,
 ): {
   executedActions: ChiefAction[];
   skippedActions: ChiefAction[];
@@ -1635,7 +1779,7 @@ export function approveProposal(
       createdAt: new Date().toISOString(),
     });
 
-    const executed = executeAction(action);
+    const executed = executeAction(action, sessionId || lastActiveChiefSessionId || 'chief-default');
     executedActions.push(executed);
 
     if (executed.result?.ok && executed.type === 'create_task' && executed.result?.id) {
@@ -1899,24 +2043,37 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
   const messageId = `chief-${Date.now()}-${uuid().slice(0, 8)}`;
 
-  // If there is a pending proposal for this session, treat short approval text as execution intent.
+  // Short affirmative responses with no pending proposal → ignore gracefully
+  const isShortAffirmative = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(userMessage.trim().toLowerCase());
   const pendingMessageId = pendingProposalBySession.get(sessionId);
+
+  if (isShortAffirmative && !pendingMessageId) {
+    const reply = '현재 대기 중인 제안이 없습니다. 새로운 지시를 해주세요.';
+    pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
+    return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
+  }
+
+  // If there is a pending proposal for this session, treat short approval text as execution intent.
   if (pendingMessageId) {
     const pending = pendingProposals.get(pendingMessageId) || [];
     const selected = parseApprovalSelection(userMessage, pending.length);
     if (selected && selected.length > 0) {
       // If user says generic approval ("응", "승인"), execute ALL pending actions sequentially
-      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase());
+      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase())
+        || /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+/i.test(userMessage.trim().toLowerCase());
       const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
 
       const results: string[] = [];
       const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
       results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
+      console.log(`[chief] chatWithChief approval: executing ${toExecute.length} actions, isGenericApproval=${isGenericApproval}`);
       for (let i = 0; i < toExecute.length; i++) {
         const action = bindActionWithRuntimeContext(toExecute[i], runtimeBinding);
         const stepLabel = toExecute.length > 1 ? `[${i + 1}/${toExecute.length}] ` : '';
-        const executed = executeAction(action);
+        console.log(`[chief] chatWithChief step ${i+1}/${toExecute.length}: type=${action.type}, params=${JSON.stringify(action.params).slice(0, 200)}`);
+        const executed = executeAction(action, sessionId);
         const ok = executed.result?.ok;
+        console.log(`[chief] chatWithChief step ${i+1} result: ok=${ok}, message=${executed.result?.message?.slice(0, 100)}`);
         if (ok && executed.type === 'create_task' && executed.result?.id) {
           runtimeBinding.lastCreatedTaskId = executed.result.id;
         }
@@ -1956,6 +2113,17 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
       }
 
       pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
+
+      // If user had additional instructions after approval prefix, process them as a follow-up
+      const postApproval = extractPostApprovalMessage(userMessage);
+      if (postApproval) {
+        // Queue the additional instruction as a new chat message after a short delay
+        // so the approval result is visible first
+        setTimeout(() => {
+          chatWithChief(sessionId, postApproval);
+        }, 500);
+      }
+
       return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
     } else {
       // User sent a new unrelated message — discard the pending proposal
@@ -2026,7 +2194,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
             const results: string[] = [`🛑 긴급 중지 — ${proposedActions.length}건 즉시 실행`];
             for (const action of proposedActions) {
               try {
-                const r = executeAction(action);
+                const r = executeAction(action, sessionId);
                 results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || '완료'}`);
               } catch (e) {
                 results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : '실패'}`);

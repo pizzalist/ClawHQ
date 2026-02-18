@@ -4,6 +4,220 @@ import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent, resetAgent, createAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
+type RoleInfo = { label: string; focus: string };
+
+function buildMeetingPrompt(agentName: string, roleInfo: RoleInfo, title: string, description: string, character: MeetingCharacter): string {
+  const header = `당신은 ${agentName}, AI 오피스 팀의 ${roleInfo.label}입니다.\n\n팀이 다음 주제에 대해 회의를 진행하고 있습니다:\n\n## "${title}"\n\n${description}\n\n${roleInfo.label} 관점에서 전문적인 분석과 의견을 공유해주세요.\n\n집중해야 할 영역:\n- ${roleInfo.focus}\n`;
+
+  const PROMPTS: Record<string, string> = {
+    brainstorm: `## 필수 출력 형식 (반드시 따르세요)
+
+### 후보 목록
+반드시 3~5개의 구체적인 후보/아이디어를 제시하세요. 각 후보는 아래 형식을 따르세요:
+
+[CANDIDATE] 후보명: (한줄 설명 및 근거)
+
+### 다양성 규칙 (엄격)
+- 각 후보는 서로 다른 도메인/카테고리에서 도출하세요 (중복 금지)
+- "무난한" 후보보다 참신하고 구체적인 후보를 우선하세요
+
+### 분석
+후보 목록 제시 후, ${roleInfo.label} 관점에서 각 후보에 대한 간략한 분석을 작성하세요.`,
+
+    planning: (() => {
+      const roleTasks: Record<string, string> = {
+        PM: `### PM 담당 영역\n- 프로젝트 목표 및 범위 정의\n- 기능 요구사항 목록 (우선순위 포함)\n- MVP 범위 및 마일스톤 타임라인\n- 이해관계자 및 성공 지표`,
+        '개발': `### 개발 담당 영역\n- 기술 스택 선정 및 근거\n- 시스템 아키텍처 설계 (컴포넌트 다이어그램)\n- API 설계 주요 엔드포인트\n- 데이터 모델 초안\n- 기술적 리스크 및 대안`,
+        '리뷰어': `### 리뷰어 담당 영역\n- 코드 품질 기준 및 리뷰 체크리스트\n- 잠재적 리스크 및 병목 분석\n- 보안/성능 고려사항\n- 테스트 전략 제안`,
+        '디자이너': `### 디자이너 담당 영역\n- UX 플로우 및 주요 화면 구성\n- 디자인 시스템/컴포넌트 목록\n- 사용성 고려사항\n- 접근성 요구사항`,
+        DevOps: `### DevOps 담당 영역\n- 인프라 구성 및 배포 전략\n- CI/CD 파이프라인 설계\n- 모니터링/로깅 계획\n- 스케일링 전략`,
+        QA: `### QA 담당 영역\n- 테스트 전략 (단위/통합/E2E)\n- 테스트 케이스 주요 시나리오\n- 품질 기준 및 수용 조건\n- 자동화 범위`,
+      };
+      const roleSection = roleTasks[roleInfo.label] || `### ${roleInfo.label} 담당 영역\n- ${roleInfo.focus} 관점에서 구체적 명세 작성`;
+      return `## 필수 출력 형식 — 기획/명세서 (후보 제안 금지!)
+
+이 회의는 이미 결정된 주제에 대한 **구체적 기획서/개발 명세서**를 작성하는 회의입니다.
+새로운 후보를 제안하지 마세요. [CANDIDATE] 태그를 사용하지 마세요.
+
+${roleSection}
+
+마크다운 ## 섹션 형식으로 구조화된 명세서를 작성하세요.
+구체적이고 실행 가능한 수준으로 작성하세요. 모호한 방향 제시가 아닌, 바로 개발에 착수할 수 있는 수준의 상세함이 필요합니다.`;
+    })(),
+
+    kickoff: `## 필수 출력 형식 — 프로젝트 킥오프
+
+### 프로젝트 목표 및 비전
+- 프로젝트가 해결하는 문제
+- 성공의 정의
+
+### 팀 역할 및 책임
+- 각 역할별 담당 영역
+
+### 일정 및 마일스톤
+- 주요 마일스톤과 예상 일정
+- 의존성 및 병목 지점
+
+### 성공 기준 및 KPI
+- 측정 가능한 성공 지표
+- 모니터링 방법`,
+
+    architecture: `## 필수 출력 형식 — 기술 아키텍처 설계
+
+### 시스템 아키텍처
+- 전체 시스템 구조 (컴포넌트별 역할)
+- 데이터 흐름
+
+### 기술 스택 선정
+- 각 레이어별 기술 선택과 근거
+- 대안 비교
+
+### DB 스키마 설계
+- 핵심 엔티티와 관계
+- 인덱싱 전략
+
+### API 설계
+- 주요 엔드포인트
+- 인증/인가 방식
+
+### 인프라 및 배포
+- 배포 환경
+- CI/CD 파이프라인
+- 모니터링/로깅`,
+
+    design: `## 필수 출력 형식 — UI/UX 설계
+
+### 사용자 페르소나
+- 주요 타겟 사용자 정의
+
+### 핵심 사용자 플로우
+- 주요 시나리오별 사용자 여정
+
+### 화면 구성
+- 주요 화면별 레이아웃과 구성 요소
+- 네비게이션 구조
+
+### 디자인 시스템
+- 컬러/타이포그래피/컴포넌트 가이드
+- 반응형 전략`,
+
+    'sprint-planning': `## 필수 출력 형식 — 스프린트 계획
+
+### 스프린트 목표
+- 이번 스프린트에서 달성할 핵심 목표
+
+### 백로그 우선순위
+- 태스크 목록 (우선순위순)
+- 각 태스크별 스토리포인트/공수 추정
+
+### 태스크 배분
+- 팀원별 담당 태스크
+
+### 리스크 및 의존성
+- 블로커 가능성
+- 외부 의존성`,
+
+    estimation: `## 필수 출력 형식 — 공수/리소스 산정
+
+### 기능별 공수 산정
+- 각 기능/모듈별 예상 공수 (인일 기준)
+
+### 일정 추정
+- 낙관적 / 현실적 / 비관적 시나리오
+
+### 리소스 요구사항
+- 필요 인력 및 역할
+- 외부 리소스 (API, 서비스 등)
+
+### 리스크 버퍼
+- 불확실성 요인
+- 권장 버퍼 비율`,
+
+    demo: `## 필수 출력 형식 — 데모/시연 리뷰
+
+### 시연 항목 평가
+- 각 시연 항목별 완성도 평가
+- 목표 대비 달성률
+
+### 피드백
+- 잘된 점
+- 개선이 필요한 부분
+
+### 다음 스텝
+- 우선 수정 사항
+- 다음 데모까지 목표`,
+
+    postmortem: `## 필수 출력 형식 — 포스트모템 (장애/실패 분석)
+
+### 사건 타임라인
+- 발생 시점부터 해결까지 시간순 기록
+
+### 근본 원인 분석
+- 직접 원인
+- 근본 원인 (5 Whys)
+
+### 영향 범위
+- 사용자/시스템에 미친 영향
+
+### 재발 방지 대책
+- 단기 조치
+- 장기 개선안
+- 모니터링 강화`,
+
+    'code-review': `## 필수 출력 형식 — 코드 리뷰
+
+### 코드 품질
+- 가독성, 구조, 네이밍 평가
+- SOLID 원칙 준수 여부
+
+### 보안
+- 잠재적 보안 취약점
+
+### 성능
+- 성능 이슈 또는 최적화 포인트
+
+### 개선 제안
+- 구체적 리팩토링 제안
+- 테스트 커버리지 의견`,
+
+    daily: `## 필수 출력 형식 — 데일리 스탠드업
+
+### 어제 완료한 일
+- 주요 완료 항목
+
+### 오늘 할 일
+- 계획된 작업 목록
+
+### 블로커/이슈
+- 진행을 막는 문제
+- 도움이 필요한 사항`,
+
+    retrospective: `## 필수 출력 형식 — 회고
+
+### 잘된 점 (Keep)
+- 계속 유지할 것들
+
+### 개선할 점 (Problem)
+- 문제가 됐거나 비효율적이었던 것
+
+### 시도할 것 (Try)
+- 다음에 시도해볼 개선안
+- 구체적 액션 아이템`,
+
+    review: `## 필수 출력 형식 — 리뷰/평가
+
+각 후보에 대해 아래 기준으로 1~10점 평가하세요:
+- 실행 가능성
+- 임팩트/가치
+- 리스크
+
+[SCORE] 후보명: (점수) — (한줄 평가)`,
+  };
+
+  const body = PROMPTS[character] || PROMPTS.brainstorm;
+  return `${header}\n${body}\n\n반드시 한국어로 응답하세요.`;
+}
+
 type MeetingListener = () => void;
 const listeners: MeetingListener[] = [];
 export function onMeetingChange(fn: MeetingListener) { listeners.push(fn); }
@@ -117,6 +331,7 @@ const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
   },
 };
 
+
 /**
  * Start a collaborative planning meeting.
  * Each agent contributes their expert perspective on the topic (NOT a competing proposal).
@@ -165,43 +380,7 @@ export function startPlanningMeeting(title: string, description: string, partici
     const roleInfo = ROLE_FOCUS[agent.role] || { label: agent.role, focus: '전반적인 분석' };
     const sessionId = `meeting-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
 
-    const prompt = `당신은 ${agent.name}, AI 오피스 팀의 ${roleInfo.label}입니다.
-
-팀이 다음 주제에 대해 회의를 진행하고 있습니다:
-
-## "${title}"
-
-${description}
-
-${roleInfo.label} 관점에서 전문적인 분석과 의견을 공유해주세요.
-
-집중해야 할 영역:
-- ${roleInfo.focus}
-- 이 주제에 대한 구체적인 분석
-- 실행 가능한 제안
-
-## 필수 출력 형식 (반드시 따르세요)
-
-### 후보 목록
-반드시 3~5개의 구체적인 후보/아이디어를 제시하세요. 각 후보는 아래 형식을 따르세요:
-
-[CANDIDATE] 후보명: (한줄 설명 및 근거)
-
-예시:
-[CANDIDATE] 실시간 협업 에디터: 구글 독스 대안으로 WebSocket 기반 실시간 편집 기능 — 기존 SaaS 대비 자체 호스팅 차별화
-[CANDIDATE] AI 코드 리뷰 봇: PR 자동 분석 도구 — 개발자 피로도 감소, API 연동 용이
-
-### 다양성 규칙 (엄격)
-- 최근 회의에서 이미 논의된 주제("AI Office" 등)와 동일/유사한 후보는 반드시 피하세요
-- 각 후보는 서로 다른 도메인/카테고리에서 도출하세요 (중복 금지)
-- "무난한" 후보보다 참신하고 구체적인 후보를 우선하세요
-
-### 분석
-후보 목록 제시 후, ${roleInfo.label} 관점에서 각 후보에 대한 간략한 분석을 작성하세요.
-
-"제안서"나 "proposal" 형식으로 작성하지 마세요. 회의에서 발언하듯이 자연스럽게 분석과 의견을 직접 공유해주세요.
-
-반드시 한국어로 응답하세요.`;
+    const prompt = buildMeetingPrompt(agent.name, roleInfo, title, description, character || 'planning');
 
     // Force-reset agent to idle before starting to avoid FSM conflicts
     try { resetAgent(agentId); } catch { /* ignore */ }
@@ -457,15 +636,17 @@ export function extractCandidatesFromMeeting(meetingId: string): MeetingCandidat
   if (!meeting || meeting.status !== 'completed') return [];
 
   // Parse structured [CANDIDATE] tags from all proposals
+  // Supports: [CANDIDATE] Name: desc, [CANDIDATE] Name — desc, [CANDIDATE] **Name**: desc, [CANDIDATE] **Name** — desc
   const candidateMap = new Map<string, { name: string; summary: string; count: number }>();
-  const candidateRegex = /\[CANDIDATE\]\s*(.+?):\s*(.+)/gi;
+  const candidateRegex = /\[CANDIDATE\]\s*\*{0,2}(.+?)\*{0,2}\s*[:\-—–]\s*(.+)/gi;
 
   for (const proposal of meeting.proposals) {
     let match: RegExpExecArray | null;
     const regex = new RegExp(candidateRegex.source, candidateRegex.flags);
     while ((match = regex.exec(proposal.content)) !== null) {
-      const name = match[1].trim();
+      const name = match[1].trim().replace(/^\*+|\*+$/g, ''); // strip leftover bold markers
       const summary = match[2].trim().slice(0, 800);
+      if (!name || name.length > 200) continue; // sanity check
       const existing = candidateMap.get(name);
       if (existing) {
         existing.count++;

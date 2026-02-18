@@ -13,8 +13,9 @@ import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPla
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, validateWebDeliverable } from './deliverables.js';
 import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
-import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn } from './chief-agent.js';
+import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn, resetChiefState } from './chief-agent.js';
 import { stmts } from './db.js';
+import { commitDeliverable, commitTaskDeliverables, getCommitLog } from './git-commit.js';
 import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample } from './monitoring-mock.js';
 const app = express();
 app.use(cors());
@@ -72,9 +73,26 @@ onTaskEvent((event) => {
     // Chief monitors task events for proactive check-ins
     chiefHandleTaskEvent(event);
 });
+// WebSocket ping/pong heartbeat — terminate unresponsive clients
+const WS_PING_INTERVAL = 30_000;
+const wsAliveMap = new WeakMap();
+const pingInterval = setInterval(() => {
+    for (const client of wss.clients) {
+        if (wsAliveMap.get(client) === false) {
+            console.log('[ws] Terminating unresponsive client');
+            client.terminate();
+            continue;
+        }
+        wsAliveMap.set(client, false);
+        client.ping();
+    }
+}, WS_PING_INTERVAL);
+wss.on('close', () => clearInterval(pingInterval));
 // WebSocket connection
 wss.on('connection', (ws) => {
     console.log('[ws] Client connected');
+    wsAliveMap.set(ws, true);
+    ws.on('pong', () => wsAliveMap.set(ws, true));
     const initial = {
         agents: listAgents(),
         tasks: listTasks(),
@@ -120,14 +138,15 @@ app.post('/api/chief/chat', (req, res) => {
     }
 });
 app.post('/api/chief/proposal/approve', (req, res) => {
-    const { messageId, selectedIndices, overrideActions, continueOnError } = req.body || {};
+    const { messageId, selectedIndices, overrideActions, continueOnError, sessionId } = req.body || {};
     if (!messageId || typeof messageId !== 'string') {
         return res.status(400).json({ error: 'messageId is required' });
     }
     try {
+        const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : (req.header('x-chief-session-id') || undefined);
         const result = approveProposal(messageId, selectedIndices, overrideActions, {
             continueOnError: continueOnError === true,
-        });
+        }, resolvedSessionId);
         // Broadcast all updated state + chief messages so chat feedback appears
         broadcast({ type: 'agents_update', payload: listAgents() });
         broadcast({ type: 'tasks_update', payload: listTasks() });
@@ -407,6 +426,33 @@ app.get('/api/deliverables/:id/download', (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
     res.send(d.content);
+});
+// --- AI Commit ---
+app.post('/api/deliverables/:id/commit', (req, res) => {
+    try {
+        const { message } = req.body || {};
+        const sanitizedMsg = typeof message === 'string' ? message.slice(0, 500) : undefined;
+        const result = commitDeliverable(req.params.id, sanitizedMsg);
+        res.json(result);
+    }
+    catch (err) {
+        res.status(500).json({ ok: false, error: err.message || 'Internal error' });
+    }
+});
+app.post('/api/tasks/:id/commit', (req, res) => {
+    try {
+        const { message } = req.body || {};
+        const sanitizedMsg = typeof message === 'string' ? message.slice(0, 500) : undefined;
+        const result = commitTaskDeliverables(req.params.id, sanitizedMsg);
+        res.json(result);
+    }
+    catch (err) {
+        res.status(500).json({ ok: false, error: err.message || 'Internal error' });
+    }
+});
+app.get('/api/commits', (req, res) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
+    res.json(getCommitLog(limit));
 });
 // Presets
 app.get('/api/presets', (_req, res) => {
@@ -740,6 +786,22 @@ app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {
     broadcast({ type: 'meetings_update', payload: listMeetings() });
     res.json({ ok: true, ...result });
 });
+// Alias for frontend reset button
+app.post('/api/reset-all', (_req, res) => {
+    stmts.deleteAllReviewScores.run();
+    stmts.deleteAllProposals.run();
+    stmts.deleteAllDecisionItems.run();
+    stmts.deleteAllDeliverables.run();
+    stmts.deleteAllTasks.run();
+    stmts.deleteAllMeetings.run();
+    stmts.deleteAllEvents.run();
+    resetChiefState();
+    broadcast({ type: 'tasks_update', payload: listTasks() });
+    broadcast({ type: 'meetings_update', payload: listMeetings() });
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    broadcast({ type: 'chief_update', payload: { messages: [] } });
+    res.json({ ok: true, reset: ['tasks', 'meetings', 'events', 'deliverables', 'decisions', 'chief'] });
+});
 app.post('/api/admin/reset', (_req, res) => {
     // Order matters due to foreign-key references
     stmts.deleteAllReviewScores.run();
@@ -981,6 +1043,8 @@ async function main() {
     await checkOpenClaw();
     seedDemoAgents();
     recoverStuckState();
+    // Process any pending tasks left from before restart
+    setTimeout(() => processQueue(), 2000);
     server.listen(SERVER_PORT, () => {
         console.log(`[server] AI Office server running on http://localhost:${SERVER_PORT}`);
         console.log(`[server] WebSocket available at ws://localhost:${SERVER_PORT}/ws`);

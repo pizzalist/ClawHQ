@@ -17,6 +17,37 @@ export default function DeliverableList({ taskId }: Props) {
   const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [commitStatus, setCommitStatus] = useState<Record<string, { loading: boolean; result?: string; error?: string }>>({});
+
+  const handleCommit = async (deliverableId: string) => {
+    setCommitStatus(s => ({ ...s, [deliverableId]: { loading: true } }));
+    try {
+      const res = await fetch(`${API}/api/deliverables/${deliverableId}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await res.json();
+      if (data.ok) {
+        setCommitStatus(s => ({ ...s, [deliverableId]: { loading: false, result: data.commitHash || data.message } }));
+      } else {
+        setCommitStatus(s => ({ ...s, [deliverableId]: { loading: false, error: data.error } }));
+      }
+    } catch (err: any) {
+      setCommitStatus(s => ({ ...s, [deliverableId]: { loading: false, error: err.message } }));
+    }
+  };
+
+  const handleCommitAll = async () => {
+    setCommitStatus(s => ({ ...s, __all: { loading: true } }));
+    try {
+      const res = await fetch(`${API}/api/tasks/${taskId}/commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await res.json();
+      if (data.ok) {
+        setCommitStatus(s => ({ ...s, __all: { loading: false, result: data.commitHash || data.message } }));
+      } else {
+        setCommitStatus(s => ({ ...s, __all: { loading: false, error: data.error } }));
+      }
+    } catch (err: any) {
+      setCommitStatus(s => ({ ...s, __all: { loading: false, error: err.message } }));
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -41,9 +72,24 @@ export default function DeliverableList({ taskId }: Props) {
 
   return (
     <div>
-      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-        Deliverables ({deliverables.length})
-      </h3>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          Deliverables ({deliverables.length})
+        </h3>
+        {deliverables.length > 1 && (
+          <button
+            onClick={handleCommitAll}
+            disabled={commitStatus.__all?.loading}
+            className="px-2.5 py-1 text-xs bg-green-600/20 text-green-400 hover:bg-green-600/30 rounded-md font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+          >
+            {commitStatus.__all?.loading ? '⏳' : '📦'} Commit All
+            {commitStatus.__all?.result && <span className="text-green-300 ml-1">✓ {commitStatus.__all.result}</span>}
+          </button>
+        )}
+      </div>
+      {commitStatus.__all?.error && (
+        <div className="text-xs text-red-400 mb-2 bg-red-900/20 px-2 py-1 rounded">❌ {commitStatus.__all.error}</div>
+      )}
       <div className="grid gap-2">
         {deliverables.map(d => {
           const meta = DELIVERABLE_LABELS[d.type] || DELIVERABLE_LABELS.document;
@@ -75,6 +121,14 @@ export default function DeliverableList({ taskId }: Props) {
                   className="px-2.5 py-1 text-xs bg-accent/20 text-accent hover:bg-accent/30 rounded-md font-medium transition-colors"
                 >
                   Open
+                </button>
+                <button
+                  onClick={() => handleCommit(d.id)}
+                  disabled={commitStatus[d.id]?.loading}
+                  className="px-2.5 py-1 text-xs bg-green-600/20 text-green-400 hover:bg-green-600/30 rounded-md font-medium transition-colors disabled:opacity-50"
+                  title={commitStatus[d.id]?.result ? `✓ ${commitStatus[d.id].result}` : commitStatus[d.id]?.error ? `❌ ${commitStatus[d.id].error}` : 'Commit to git'}
+                >
+                  {commitStatus[d.id]?.loading ? '⏳' : commitStatus[d.id]?.result ? '✅' : '💾'}
                 </button>
                 <a
                   href={`${API}/api/deliverables/${d.id}/download`}

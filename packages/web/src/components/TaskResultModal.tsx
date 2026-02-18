@@ -54,10 +54,27 @@ export default function TaskResultModal() {
   } | null>(null);
   const [activeOutputTab, setActiveOutputTab] = useState<'final' | 'qa' | 'draft'>('final');
 
-  if (!selectedTaskId) return null;
+  const task = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
 
-  const task = tasks.find((t) => t.id === selectedTaskId);
-  if (!task) return null;
+  useEffect(() => {
+    if (!task) { setThreadSummary(null); return; }
+    let alive = true;
+    fetch(`/api/tasks/${task.id}/thread-summary`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!alive || !data) return;
+        setThreadSummary(data);
+        if (data.finalDeliverableId) setActiveOutputTab('final');
+        else if (data.qaDeliverableId) setActiveOutputTab('qa');
+        else if (data.draftDeliverableId) setActiveOutputTab('draft');
+      })
+      .catch(() => {
+        if (alive) setThreadSummary(null);
+      });
+    return () => { alive = false; };
+  }, [task?.id]);
+
+  if (!selectedTaskId || !task) return null;
 
   const agent = task.assigneeId ? agents.find((a) => a.id === task.assigneeId) : null;
   const status = STATUS_BADGE[task.status] || STATUS_BADGE.pending;
@@ -96,23 +113,6 @@ export default function TaskResultModal() {
 
   // Parse chain progress
   const chainProgress = task.result?.match(/^⏳ Step (\d+)\/(\d+): (.+)$/);
-
-  useEffect(() => {
-    let alive = true;
-    fetch(`/api/tasks/${task.id}/thread-summary`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!alive || !data) return;
-        setThreadSummary(data);
-        if (data.finalDeliverableId) setActiveOutputTab('final');
-        else if (data.qaDeliverableId) setActiveOutputTab('qa');
-        else if (data.draftDeliverableId) setActiveOutputTab('draft');
-      })
-      .catch(() => {
-        if (alive) setThreadSummary(null);
-      });
-    return () => { alive = false; };
-  }, [task.id]);
 
   const selectedDeliverableId = activeOutputTab === 'final'
     ? (threadSummary?.finalDeliverableId || threadSummary?.latestDeliverableByThread)

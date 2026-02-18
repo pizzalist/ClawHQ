@@ -250,9 +250,10 @@ function needsReviewByIntent(task) {
 }
 function needsDevFollowupAfterReview(task) {
     const text = `${task.title}\n${task.description}`.toLowerCase();
-    const reviewIntent = /(qc|qa|리뷰|검토|테스트|품질)/i.test(text);
-    const devFixIntent = /(개발|개발자|반영|수정|재수정|fix|implement)/i.test(text);
-    return reviewIntent && devFixIntent;
+    // Only trigger QA→Dev flow when QA/testing is explicitly requested (not just "리뷰")
+    const qaIntent = /(qc|qa|테스트|품질검증|품질\s*검사|unit\s*test|e2e|integration\s*test)/i.test(text);
+    const devFixIntent = /(수정|재수정|fix|bugfix|핫픽스|hotfix|패치)/i.test(text);
+    return qaIntent && devFixIntent;
 }
 function estimateTaskComplexity(task) {
     const text = `${task.title}\n${task.description}`.toLowerCase();
@@ -299,15 +300,22 @@ export function decideNextRoleByIntent(task, currentRole) {
         // implementation/web/code/api/design/data: PM -> Developer
         return 'developer';
     }
-    if (currentRole === 'qa' || currentRole === 'reviewer') {
+    if (currentRole === 'reviewer') {
+        // Reviewer finds issues → Developer must fix (this is standard code review flow)
+        return 'developer';
+    }
+    if (currentRole === 'qa') {
+        // QA finds bugs → Developer must fix
         return qaToDevRequested ? 'developer' : undefined;
     }
     if (currentRole === 'developer') {
-        // QA->Developer correction flow usually ends after Dev fix unless explicit extra review intent.
+        // Developer -> Reviewer for code review (standard flow)
+        if (reviewRequested)
+            return 'reviewer';
+        // If QA was requested, go to QA after development
         if (qaToDevRequested)
-            return reviewRequested && complexity === 'high' ? 'reviewer' : undefined;
-        // Developer -> Reviewer only when explicitly requested by intent
-        return reviewRequested ? 'reviewer' : undefined;
+            return 'qa';
+        return undefined;
     }
     return undefined;
 }
@@ -523,7 +531,7 @@ function spawnChainFollowUp(agentId, taskId, title, result) {
         const stepLabel = CHAIN_STEP_LABELS[nextRole] || nextRole;
         const prevStepLabel = CHAIN_STEP_LABELS[agent.role] || agent.role;
         const chainTitle = `[${stepLabel}] ${title}`;
-        const chainDesc = `Auto-chained from ${agent.name}'s ${prevStepLabel} step.\n\nPrevious result:\n${result.slice(0, 1000)}`;
+        const chainDesc = `## 이전 단계: ${agent.name} (${prevStepLabel})\n\n아래 이전 단계의 결과를 기반으로 ${stepLabel} 작업을 수행하세요.\n\n---\n\n${result.slice(0, 4000)}`;
         // Carry original expected deliverable from root task and clamp to next role.
         const rootTask = findRootTask(taskId);
         const originalExpected = rootTask.expectedDeliverables;

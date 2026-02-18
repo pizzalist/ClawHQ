@@ -54,7 +54,7 @@ export interface ChainPlan {
     /** Last server mutation time. Used to ignore out-of-order WS updates on client. */
     updatedAt: string;
 }
-export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting';
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting' | 'confirm_meeting' | 'confirm_task' | 'start_review';
 export interface ChiefAction {
     type: ChiefActionType;
     params: Record<string, string>;
@@ -178,7 +178,7 @@ export interface DecisionHistoryEntry {
     decidedAt: string;
 }
 export type MeetingType = 'planning' | 'review' | 'debate' | 'tech-spec';
-export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective';
+export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective' | 'kickoff' | 'architecture' | 'design' | 'sprint-planning' | 'estimation' | 'demo' | 'postmortem' | 'code-review' | 'daily';
 export type TechSpecRole = 'cto' | 'frontend-lead' | 'backend-lead' | 'qa-devils-advocate';
 export interface TechSpecParticipant {
     agentId: string;

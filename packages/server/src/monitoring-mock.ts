@@ -76,13 +76,13 @@ const ALERTS: MonitoringAlert[] = [
   {
     id: 'alert-error-rate-002',
     severity: 'critical',
-    status: 'active',
+    status: 'resolved',
     source: 'execution-worker',
     title: 'Error rate spike detected',
     message: 'Task error rate exceeded 8% over a rolling 15m window.',
     firstSeenAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
     lastSeenAt: new Date(Date.now() - 90 * 1000).toISOString(),
-    resolvedAt: null,
+    resolvedAt: new Date(Date.now() - 60 * 1000).toISOString(),
   },
   {
     id: 'alert-ws-003',

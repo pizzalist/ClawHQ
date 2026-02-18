@@ -1,8 +1,39 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useEffect, useMemo, useRef, useState } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { useStore } from '../store';
 import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, ChiefInlineAction, Meeting } from '@ai-office/shared';
 import { MarkdownContent } from '../lib/format/markdown';
 import ChainPlanEditor from './ChainPlanEditor';
+
+// Error Boundary to prevent full-page crash from hooks errors
+class ChiefErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
+  state = { hasError: false, error: '' };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ChiefConsole] Render error:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-4 text-center space-y-2">
+          <div className="text-red-400 text-sm">⚠️ 화면 오류 발생</div>
+          <div className="text-xs text-gray-500">{this.state.error}</div>
+          <button onClick={() => this.setState({ hasError: false, error: '' })}
+            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs">
+            다시 시도
+          </button>
+          <button onClick={() => window.location.reload()}
+            className="px-3 py-1 bg-accent hover:bg-accent/80 text-white rounded text-xs ml-2">
+            새로고침
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const ROLE_LABELS: Record<string, string> = {
   pm: 'PM', developer: '개발', reviewer: '리뷰어',
@@ -34,13 +65,13 @@ function getInlineActionCopy(action: ChiefInlineAction): { label: string; title?
   if (action.action === 'view_result') {
     if (action.params?.meetingId) {
       return {
-        label: '👁 미리보기 (모달)',
-        title: '회의 결과를 모달에서 미리 봅니다. 대화 본문에는 추가되지 않습니다.',
+        label: '📊 결과 보기',
+        title: '회의 결과를 상세히 봅니다 (점수표, 참여자 의견 포함).',
       };
     }
     return {
-      label: '👁 결과 미리보기',
-      title: '결과를 미리 확인합니다. 확정을 누르기 전에는 실행되지 않습니다.',
+      label: '📊 결과 보기',
+      title: '결과를 확인합니다.',
     };
   }
   if (action.action === 'approve' || action.id.startsWith('approve')) {
@@ -64,17 +95,68 @@ function formatMeetingPreview(meeting: Meeting): string {
   return `${header}${desc}\n\n${proposals || '_아직 수집된 의견이 없습니다._'}`;
 }
 
+function formatMeetingFullResult(meeting: Meeting): string {
+  const sections: string[] = [];
+  sections.push(`# ${meeting.title}`);
+  if (meeting.description) sections.push(meeting.description);
+  sections.push(`**상태:** ${meeting.status} · **유형:** ${meeting.character || 'planning'} · **참여자:** ${meeting.participants?.length || 0}명`);
+
+  if (meeting.report) {
+    sections.push(`## 📋 종합 보고서\n\n${meeting.report}`);
+  }
+
+  if (meeting.proposals && meeting.proposals.length > 0) {
+    const proposalText = meeting.proposals
+      .map((p, i) => `### ${i + 1}. ${p.agentName}\n\n${p.content || '(내용 없음)'}`)
+      .join('\n\n');
+    sections.push(`## 💬 참여자 의견\n\n${proposalText}`);
+  }
+
+  const dp = (meeting as any).decisionPacket;
+  if (dp) {
+    const dpLines: string[] = ['## 📊 의사결정 패킷'];
+    if (dp.recommendation) {
+      dpLines.push(`### 추천안: ${dp.recommendation.name}`);
+      if (dp.recommendation.summary) dpLines.push(dp.recommendation.summary);
+      if (dp.recommendation.score != null) dpLines.push(`**점수:** ${Number(dp.recommendation.score).toFixed(2)}`);
+    }
+    if (dp.rankings && dp.rankings.length > 0) {
+      dpLines.push(`### 순위`);
+      dp.rankings.forEach((r: any, i: number) => {
+        dpLines.push(`${i + 1}. **${r.name}** — 점수: ${Number(r.score).toFixed(2)}${r.summary ? ` · ${r.summary}` : ''}`);
+      });
+    }
+    if (dp.reviewerScoreCards && dp.reviewerScoreCards.length > 0) {
+      dpLines.push(`### 리뷰어별 점수표`);
+      for (const card of dp.reviewerScoreCards) {
+        dpLines.push(`**${card.reviewerName}** (${card.reviewerRole}):`);
+        for (const s of card.scores) {
+          dpLines.push(`- ${s.candidateName}: **${s.score}/10**${s.comment ? ` — ${s.comment}` : ''}`);
+        }
+      }
+    }
+    if (dp.tradeoffs) dpLines.push(`### 트레이드오프\n\n${dp.tradeoffs}`);
+    sections.push(dpLines.join('\n\n'));
+  }
+
+  return sections.join('\n\n');
+}
+
 function MeetingResultModal({ meeting, onClose }: { meeting: Meeting; onClose: () => void }) {
+  const [viewMode, setViewMode] = useState<'preview' | 'full'>('full');
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[1px] flex items-center justify-center p-4" onClick={onClose}>
       <div className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-xl border border-indigo-500/40 bg-surface shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-3 border-b border-gray-700/40 flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-indigo-200">📝 회의 결과 미리보기</h3>
-          <span className="text-xs text-gray-400">(대화 스트림에 추가되지 않음)</span>
+          <h3 className="text-sm font-semibold text-indigo-200">{viewMode === 'full' ? '📊 회의 결과 상세' : '📝 회의 결과 미리보기'}</h3>
+          <div className="flex gap-1 ml-2">
+            <button onClick={() => setViewMode('preview')} className={`px-2 py-0.5 rounded text-xs ${viewMode === 'preview' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>미리보기</button>
+            <button onClick={() => setViewMode('full')} className={`px-2 py-0.5 rounded text-xs ${viewMode === 'full' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>상세</button>
+          </div>
           <button onClick={onClose} className="ml-auto text-sm text-gray-400 hover:text-gray-200">닫기 ✕</button>
         </div>
         <div className="p-4 overflow-y-auto max-h-[calc(85vh-56px)]">
-          <MarkdownContent text={formatMeetingPreview(meeting)} className="text-sm" />
+          <MarkdownContent text={viewMode === 'full' ? formatMeetingFullResult(meeting) : formatMeetingPreview(meeting)} className="text-sm" />
         </div>
       </div>
     </div>
@@ -118,71 +200,53 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
   );
 }
 
-function InlineNotification({ notification, onPreviewMeeting }: { notification: ChiefNotification; onPreviewMeeting: (meetingId: string) => void }) {
-  const handleAction = useStore((s) => s.handleChiefInlineAction);
+function InlineNotification({ notification, onViewMeetingResult }: { notification: ChiefNotification; onViewMeetingResult: (meetingId: string) => void }) {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const [acting, setActing] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(false);
   const style = NOTIF_STYLES[notification.type] || NOTIF_STYLES.info;
 
-  const [dismissReason, setDismissReason] = useState<string | null>(null);
-
-  if (dismissed) {
-    return (
-      <div className={`rounded-xl border ${style.border} ${style.bg} p-2 opacity-50`}>
-        <div className="text-xs text-gray-400">{dismissReason || '✓ 처리됨'}</div>
-      </div>
-    );
-  }
+  // Filter: only keep view_result actions; decision buttons removed (use chat instead)
+  const viewActions = notification.actions.filter((act) => act.action === 'view_result');
 
   const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
     setActing(actionId);
-    // Special: view_result opens preview modals client-side (no chat pollution)
     if (action === 'view_result' && params.taskId && !params.meetingId) {
       setSelectedTask(params.taskId);
       setActing(null);
       return;
     }
     if (action === 'view_result' && params.meetingId) {
-      onPreviewMeeting(params.meetingId);
+      onViewMeetingResult(params.meetingId);
       setActing(null);
       return;
     }
-    // All other actions (approve/revise/start-review etc.) go to server
-    await handleAction(notification.id, actionId, params);
     setActing(null);
-    // Dismiss after handling (except view actions) with contextual reason
-    if (action !== 'view_result' && !actionId.startsWith('view-')) {
-      if (action === 'approve' || actionId.startsWith('approve')) {
-        setDismissReason('✅ 확정됨 — 다음 단계 안내가 아래에 표시됩니다');
-      } else if (action === 'request_revision' || actionId.startsWith('revise')) {
-        setDismissReason('🔄 수정 요청됨 — 수정 방향을 입력해주세요');
-      } else {
-        setDismissReason('✓ 처리됨');
-      }
-      setDismissed(true);
-    }
   };
 
   return (
     <div className={`rounded-xl border ${style.border} ${style.bg} p-3 space-y-2`}>
       <div className="text-sm font-semibold text-gray-200">{notification.title}</div>
       <MarkdownContent text={notification.summary} className="text-xs text-gray-300" />
-      <div className="flex flex-wrap gap-2 mt-1">
-        {notification.actions.map((act) => {
-          const copy = getInlineActionCopy(act);
-          return (
-            <button
-              key={act.id}
-              onClick={() => onAction(act.id, act.action, act.params)}
-              disabled={acting !== null}
-              title={copy.title}
-              className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
-            >
-              {acting === act.id ? '처리 중...' : copy.label}
-            </button>
-          );
-        })}
+      {viewActions.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-1">
+          {viewActions.map((act) => {
+            const copy = getInlineActionCopy(act);
+            return (
+              <button
+                key={act.id}
+                onClick={() => onAction(act.id, act.action, act.params)}
+                disabled={acting !== null}
+                title={copy.title}
+                className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
+              >
+                {acting === act.id ? '처리 중...' : copy.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className="text-xs text-gray-500 mt-1">
+        💬 채팅으로 '확정', '리뷰 시작', '수정 요청' 등을 입력하세요
       </div>
     </div>
   );
@@ -259,10 +323,9 @@ function ThinkingIndicator() {
   );
 }
 
-function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn; onPreviewMeeting: (meetingId: string) => void }) {
+function ChatMessage({ m, checkIn, onViewMeetingResult }: { m: ChiefChatMessage; checkIn?: ChiefCheckIn; onViewMeetingResult: (meetingId: string) => void }) {
   const isUser = m.role === 'user';
   const hasNotification = m.notification != null;
-  const notifStyle = hasNotification ? NOTIF_STYLES[m.notification!.type] || NOTIF_STYLES.info : null;
 
   // Guard: skip rendering empty chief messages (no content and no notification)
   if (!isUser && !(m.content || '').trim() && !hasNotification) return null;
@@ -271,11 +334,9 @@ function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; ch
     <div className="space-y-2">
       {/* For notification messages, only render InlineNotification (avoids duplicate content) */}
       {hasNotification ? (
-        m.notification!.actions.length > 0 && (
-          <div className="max-w-[85%]">
-            <InlineNotification notification={m.notification!} onPreviewMeeting={onPreviewMeeting} />
-          </div>
-        )
+        <div className="max-w-[85%]">
+          <InlineNotification notification={m.notification!} onViewMeetingResult={onViewMeetingResult} />
+        </div>
       ) : (
         <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap ${
           isUser
@@ -298,30 +359,21 @@ function ChatMessage({ m, checkIn, onPreviewMeeting }: { m: ChiefChatMessage; ch
   );
 }
 
-export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
+function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
   const chiefMessages = useStore((s) => s.chiefMessages);
   const chiefSuggestions = useStore((s) => s.chiefSuggestions);
   const chiefMeetingDraft = useStore((s) => s.chiefMeetingDraft);
   const chiefThinking = useStore((s) => s.chiefThinking);
-  const chiefProposedActions = useStore((s) => s.chiefProposedActions);
   const chiefExecutedActions = useStore((s) => s.chiefExecutedActions);
-  const chiefPendingMessageId = useStore((s) => s.chiefPendingMessageId);
   const chiefCheckIns = useStore((s) => s.chiefCheckIns);
-  const meetings = useStore((s) => s.meetings);
   const chiefChat = useStore((s) => s.chiefChat);
-  const approveProposal = useStore((s) => s.approveProposal);
-  const rejectProposal = useStore((s) => s.rejectProposal);
   const applyChiefPlan = useStore((s) => s.applyChiefPlan);
   const createMeeting = useStore((s) => s.createMeeting);
   const loadingChat = useStore((s) => s.loading['chiefChat']);
-  const loadingApprove = useStore((s) => s.loading['chiefApprove']);
   const loadingApply = useStore((s) => s.loading['chiefApply']);
   const loadingMeeting = useStore((s) => s.loading['createMeeting']);
 
   const [input, setInput] = useState('');
-  const [selectedActionIndices, setSelectedActionIndices] = useState<Set<number>>(new Set());
-  const [previewMeetingId, setPreviewMeetingId] = useState<string | null>(null);
-  const [savedScrollTop, setSavedScrollTop] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -330,7 +382,6 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
   const activeChainPlans = chainPlans.filter(p => p.status !== 'completed' && p.status !== 'cancelled');
 
   const hasSuggestions = chiefSuggestions.length > 0;
-  const hasProposal = chiefProposedActions.length > 0 && chiefPendingMessageId != null;
   const hasExecuted = chiefExecutedActions.length > 0;
   const hasCheckIns = chiefCheckIns.length > 0;
   const hasChainPlans = activeChainPlans.length > 0;
@@ -341,16 +392,8 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
   );
 
   useEffect(() => {
-    if (chiefProposedActions.length > 0) {
-      setSelectedActionIndices(new Set(chiefProposedActions.map((_, i) => i)));
-    }
-  }, [chiefProposedActions]);
-
-  useEffect(() => {
-    if (!previewMeetingId) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [chiefMessages, chiefThinking, chiefCheckIns, previewMeetingId]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chiefMessages, chiefThinking, chiefCheckIns]);
 
   // Build check-in map for inline rendering
   const checkInByMsgId = useMemo(() => {
@@ -359,35 +402,30 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
     return map;
   }, [chiefCheckIns]);
 
-  const previewMeeting = useMemo(
-    () => (previewMeetingId ? meetings.find((m) => m.id === previewMeetingId) || null : null),
-    [meetings, previewMeetingId],
-  );
-
-  const openMeetingPreview = (meetingId: string) => {
-    const currentTop = chatScrollRef.current?.scrollTop ?? 0;
-    setSavedScrollTop(currentTop);
-    setPreviewMeetingId(meetingId);
+  const handleViewMeetingResult = async (meetingId: string) => {
+    // Fetch meeting data and display full result inline in chat
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}`);
+      if (!res.ok) throw new Error('Failed to fetch meeting');
+      const meeting: Meeting = await res.json();
+      const resultText = formatMeetingFullResult(meeting);
+      const resultMsg: ChiefChatMessage = {
+        id: `meeting-result-${meetingId}-${Date.now()}`,
+        role: 'chief',
+        content: resultText,
+        createdAt: new Date().toISOString(),
+      };
+      useStore.setState((s) => ({ chiefMessages: [...s.chiefMessages, resultMsg] }));
+    } catch {
+      const errorMsg: ChiefChatMessage = {
+        id: `meeting-result-error-${Date.now()}`,
+        role: 'chief',
+        content: '⚠️ 회의 결과를 불러올 수 없습니다.',
+        createdAt: new Date().toISOString(),
+      };
+      useStore.setState((s) => ({ chiefMessages: [...s.chiefMessages, errorMsg] }));
+    }
   };
-
-  const closeMeetingPreview = () => {
-    setPreviewMeetingId(null);
-    requestAnimationFrame(() => {
-      if (chatScrollRef.current && savedScrollTop != null) {
-        chatScrollRef.current.scrollTop = savedScrollTop;
-      }
-      setSavedScrollTop(null);
-    });
-  };
-
-  useEffect(() => {
-    if (!previewMeetingId) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMeetingPreview();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [previewMeetingId, savedScrollTop]);
 
   const send = async () => {
     const msg = input.trim();
@@ -400,26 +438,6 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     send();
-  };
-
-  const toggleAction = (idx: number) => {
-    setSelectedActionIndices(prev => {
-      const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx); else next.add(idx);
-      return next;
-    });
-  };
-
-  const handleApprove = async () => {
-    if (!chiefPendingMessageId) return;
-    const indices = selectedActionIndices.size === chiefProposedActions.length
-      ? undefined : Array.from(selectedActionIndices);
-    await approveProposal(chiefPendingMessageId, indices);
-  };
-
-  const handleReject = async () => {
-    if (!chiefPendingMessageId) return;
-    await rejectProposal(chiefPendingMessageId);
   };
 
   return (
@@ -443,7 +461,7 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
             </div>
           )}
           {chiefMessages.map((m) => (
-            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} onPreviewMeeting={openMeetingPreview} />
+            <ChatMessage key={m.id} m={m} checkIn={checkInByMsgId.get(m.id)} onViewMeetingResult={handleViewMeetingResult} />
           ))}
           {chiefThinking && <ThinkingIndicator />}
           <div ref={messagesEndRef} />
@@ -464,31 +482,7 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
       </div>
 
       {/* Side panel — proposals & actions */}
-      <div className={`${panel ? 'border-t border-gray-700/30 p-3 overflow-y-auto space-y-3 max-h-48' : 'w-72 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4'} ${!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && panel ? 'hidden' : ''}`}>
-
-        {/* LLM Proposal awaiting approval */}
-        {hasProposal && (
-          <div>
-            <h3 className="text-sm font-semibold text-yellow-300 mb-2">📋 제안 — 승인 대기</h3>
-            <p className="text-xs text-gray-400 mb-2">실행할 액션을 선택하세요.</p>
-            <div className="space-y-2 mb-3">
-              {chiefProposedActions.map((a, idx) => (
-                <ActionCard key={idx} action={a} index={idx} selectable
-                  selected={selectedActionIndices.has(idx)} onToggle={toggleAction} />
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={handleApprove} disabled={selectedActionIndices.size === 0 || loadingApprove}
-                className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-40">
-                {loadingApprove ? '실행 중...' : `✅ 승인 (${selectedActionIndices.size}건)`}
-              </button>
-              <button onClick={handleReject}
-                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm font-semibold">
-                ✗
-              </button>
-            </div>
-          </div>
-        )}
+      <div className={`${panel ? 'border-t border-gray-700/30 p-3 overflow-y-auto space-y-3 max-h-48' : 'w-72 shrink-0 border border-gray-700/40 rounded-xl bg-surface p-4 overflow-y-auto space-y-4'} ${!hasSuggestions && !hasExecuted && !hasChainPlans && panel ? 'hidden' : ''}`}>
 
         {/* Executed actions results */}
         {hasExecuted && (
@@ -503,7 +497,7 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
         )}
 
         {/* Legacy keyword-mode suggestions */}
-        {hasSuggestions && !hasProposal && (
+        {hasSuggestions && (
           <div>
             <h3 className="text-sm font-semibold text-gray-200 mb-2">팀 편성 제안</h3>
             <div className="space-y-2 mb-4">
@@ -543,7 +537,7 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
           </div>
         )}
 
-        {!hasSuggestions && !hasProposal && !hasExecuted && !hasChainPlans && !panel && (
+        {!hasSuggestions && !hasExecuted && !hasChainPlans && !panel && (
           <div>
             <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 가이드</h3>
             <div className="text-xs text-gray-400 space-y-2">
@@ -559,7 +553,15 @@ export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
         )}
       </div>
 
-      {previewMeeting && <MeetingResultModal meeting={previewMeeting} onClose={closeMeetingPreview} />}
+      {/* MeetingResultModal removed from inline — results now shown in chat */}
     </div>
+  );
+}
+
+export default function ChiefConsole({ panel = false }: { panel?: boolean }) {
+  return (
+    <ChiefErrorBoundary>
+      <ChiefConsoleInner panel={panel} />
+    </ChiefErrorBoundary>
   );
 }

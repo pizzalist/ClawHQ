@@ -73,11 +73,20 @@ export function suggestChainPlan(
   });
 
   // Walk the intent-based chain
+  // Real IT flow: PM → Dev → Reviewer → Dev(fix) → Reviewer(approve)
+  // Allow exactly 1 review round-trip (dev→rev→dev→rev), then stop
   let currentRole: AgentRole = startRole;
   const taskLike = { title: taskTitle, description: taskDescription, expectedDeliverables };
-  for (let i = 0; i < 5; i++) { // safety limit
+  let reviewRoundTrips = 0; // track reviewer↔developer cycles
+  const MAX_REVIEW_ROUNDTRIPS = 1;
+  for (let i = 0; i < 8; i++) { // safety limit
     const nextRole = decideNextRoleByIntent(taskLike, currentRole);
     if (!nextRole) break;
+    // Count review round-trips (reviewer→developer counts as 1 round-trip)
+    if (currentRole === 'reviewer' && nextRole === 'developer') {
+      reviewRoundTrips++;
+      if (reviewRoundTrips > MAX_REVIEW_ROUNDTRIPS) break;
+    }
     steps.push({
       role: nextRole,
       label: CHAIN_STEP_LABELS[nextRole] || nextRole,

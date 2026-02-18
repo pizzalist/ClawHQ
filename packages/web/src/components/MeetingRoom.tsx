@@ -9,6 +9,15 @@ const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
   planning: '📋 기획 회의',
   review: '🔍 검토 회의',
   retrospective: '🔄 회고',
+  kickoff: '🚀 프로젝트 킥오프',
+  architecture: '🏗️ 아키텍처 설계',
+  design: '🎨 UI/UX 설계',
+  'sprint-planning': '📅 스프린트 계획',
+  estimation: '📊 공수 산정',
+  demo: '🎬 데모/시연',
+  postmortem: '🔥 포스트모템',
+  'code-review': '💻 코드 리뷰',
+  daily: '☀️ 데일리 스탠드업',
 };
 
 const ROLE_ICONS: Record<string, string> = {

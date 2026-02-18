@@ -62,7 +62,7 @@ export interface ChainPlan {
 }
 
 // Chief Action types
-export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting';
+export type ChiefActionType = 'create_task' | 'create_agent' | 'start_meeting' | 'assign_task' | 'cancel_task' | 'cancel_all_pending' | 'reset_agent' | 'delete_meeting' | 'delete_all_meetings' | 'cancel_meeting' | 'confirm_meeting' | 'confirm_task' | 'start_review';
 
 export interface ChiefAction {
   type: ChiefActionType;
@@ -199,7 +199,7 @@ export interface DecisionHistoryEntry {
 
 // Meeting types
 export type MeetingType = 'planning' | 'review' | 'debate' | 'tech-spec';
-export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective';
+export type MeetingCharacter = 'brainstorm' | 'planning' | 'review' | 'retrospective' | 'kickoff' | 'architecture' | 'design' | 'sprint-planning' | 'estimation' | 'demo' | 'postmortem' | 'code-review' | 'daily';
 
 // Tech Spec Meeting types
 export type TechSpecRole = 'cto' | 'frontend-lead' | 'backend-lead' | 'qa-devils-advocate';

@@ -66,6 +66,17 @@ export default function TopBar() {
           </span>
           <ExportMenu />
           <button
+            onClick={async () => {
+              if (!confirm('⚠️ 모든 데이터(회의, 태스크, 이벤트, 결정)를 삭제합니다. 계속하시겠습니까?')) return;
+              try {
+                const r = await fetch('/api/reset-all', { method: 'POST' });
+                if (r.ok) { localStorage.removeItem('ai-office-chief-state-v1'); window.location.reload(); }
+                else { alert('초기화 실패'); }
+              } catch { alert('초기화 실패'); }
+            }}
+            className="px-3 py-1.5 bg-red-700/50 hover:bg-red-600/60 text-red-200 text-sm rounded-lg font-medium transition-all"
+          >🗑️ 데이터 초기화</button>
+          <button
             onClick={() => setShowTaskModal(true)}
             className="ml-2 px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-sm rounded-lg font-semibold transition-all hover:scale-105 active:scale-95 hover:shadow-lg hover:shadow-accent/20"
           >
