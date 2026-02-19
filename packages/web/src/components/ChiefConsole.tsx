@@ -84,6 +84,12 @@ function getInlineActionCopy(action: ChiefInlineAction): { label: string; title?
     };
   }
   if (action.action === 'approve' || action.id.startsWith('approve')) {
+    if (action.params?.mode === 'finalize_by_chief') {
+      return {
+        label: '🧭 총괄자 최종안 작성',
+        title: '비교 가능한 후보가 없어 점수화 평가를 건너뛰고, 총괄자 취합 결정으로 진행합니다.',
+      };
+    }
     return {
       label: '✅ 확정 · 다음 단계 실행',
       title: '미리보기 내용을 승인하고 다음 단계를 실제로 진행합니다.',
@@ -222,6 +228,7 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
 
   // Filter: only keep view_result actions; decision buttons removed (use chat instead)
   const viewActions = notification.actions.filter((act) => act.action === 'view_result');
+  const hasReviewAction = notification.actions.some((act) => act.id.startsWith('start-review-'));
 
   const onAction = async (actionId: string, action: string, params: Record<string, string>) => {
     setActing(actionId);
@@ -277,7 +284,9 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
         </div>
       )}
       <div className="text-xs text-gray-500 mt-1">
-        💬 채팅으로 '확정', '후보 평가', '수정 요청' 등을 입력하세요
+        {hasReviewAction
+          ? "💬 채팅으로 '확정', '후보 평가', '수정 요청' 등을 입력하세요"
+          : "💬 채팅으로 '확정', '총괄자 최종안', '수정 요청' 등을 입력하세요"}
       </div>
     </div>
   );

@@ -242,7 +242,15 @@ export const useStore = create<Store>((set, get) => ({
       // Add a user-side message for non-view actions so the chat shows what was clicked
       const isViewAction = actionId === 'view_result' || actionId.startsWith('view-');
       if (!isViewAction) {
-        const actionLabel = actionId.startsWith('approve') ? '✅ 확정' : actionId.startsWith('revise') || actionId.startsWith('revision') || actionId.startsWith('request_revision') ? '🔄 수정 요청' : actionId.startsWith('start-review') || actionId.startsWith('start_review') ? '🔍 리뷰어 점수화 시작' : actionId.startsWith('retry') ? '🔁 재시도' : `🔘 ${actionId}`;
+        const actionLabel = actionId.startsWith('approve')
+          ? (params?.mode === 'finalize_by_chief' ? '🧭 총괄자 최종안 작성' : '✅ 확정')
+          : actionId.startsWith('revise') || actionId.startsWith('revision') || actionId.startsWith('request_revision')
+            ? '🔄 수정 요청'
+            : actionId.startsWith('start-review') || actionId.startsWith('start_review')
+              ? '🔍 리뷰어 점수화 시작'
+              : actionId.startsWith('retry')
+                ? '🔁 재시도'
+                : `🔘 ${actionId}`;
         const userMsg: ChiefChatMessage = { id: `user-action-${Date.now()}`, role: 'user', content: actionLabel, createdAt: new Date().toISOString() };
         set((s) => ({ chiefMessages: [...s.chiefMessages, userMsg] }));
       }

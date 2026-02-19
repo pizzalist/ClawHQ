@@ -295,7 +295,7 @@ export interface TeamPlanSuggestion {
     role: AgentRole;
     count: number;
 }
-export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin' | 'chief_notification' | 'chain_plan_update';
+export type WSMessageType = 'agents_update' | 'tasks_update' | 'event' | 'initial_state' | 'meetings_update' | 'chief_response' | 'chief_checkin' | 'chief_notification' | 'chain_plan_update' | 'chief_update';
 export interface WSMessage {
     type: WSMessageType;
     payload: unknown;
