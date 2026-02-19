@@ -41,7 +41,7 @@ export const OFFICE_CHARACTER_EMOJI: Record<AgentRole, string> = {
 
 export const STATE_COLORS: Record<AgentState, string> = {
   idle: '#6b7280',
-  working: '#3b82f6',
+  working: '#facc15',
   reviewing: '#f59e0b',
   error: '#ef4444',
   done: '#10b981',

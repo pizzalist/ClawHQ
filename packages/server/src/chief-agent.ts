@@ -70,6 +70,11 @@ function summarizeTaskResult(result: string | null | undefined): string {
   return compactText(cleaned, 500);
 }
 
+function hasCriticalReviewFindings(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /(\bFAIL\b|불합격|수정\s*필요|critical|major|중대|심각|필수\s*수정)/i.test(text);
+}
+
 function getMeetingReviewReadiness(meetingId: string): { candidates: ReturnType<typeof extractCandidatesFromMeeting>; canScore: boolean } {
   const candidates = extractCandidatesFromMeeting(meetingId);
   const uniqueNames = new Set(candidates.map(c => c.name.trim()).filter(Boolean));
@@ -944,16 +949,22 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     // Dedup: skip if already emitted for this task
     if (isNotificationDuplicate('task_complete', event.taskId)) return;
 
+    const isReviewTask = /(review|리뷰|검토|qa|qc)/i.test(task.title);
+    const needsFixFromReview = isReviewTask && hasCriticalReviewFindings(task.result);
+    const reviewFixHint = needsFixFromReview
+      ? `\n\n💡 리뷰 피드백 반영이 필요하면 아래 "🔧 수정 반영(Fix)" 버튼(또는 "리뷰 피드백 반영해줘")을 사용하세요.`
+      : '';
+
     // Emit notification with inline actions
     notifyChief({
       id: `notif-task-${event.taskId}-${Date.now()}`,
       type: webDeliverables.length > 0 && validationWarning ? 'task_failed' : 'task_complete',
       title: task.title,
-      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}${task.result ? '\n\n📄 **결과 미리보기:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`,
+      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}${reviewFixHint}${task.result ? '\n\n📄 **결과 미리보기:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`,
       actions: [
         { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
         { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
-        { id: `revise-${event.taskId}`, label: '🔄 수정 요청', action: 'request_revision', params: { taskId: event.taskId } },
+        { id: `revise-${event.taskId}`, label: needsFixFromReview ? '🔧 수정 반영(Fix)' : '🔄 수정 요청', action: 'request_revision', params: { taskId: event.taskId } },
       ],
       taskId: event.taskId,
       createdAt: new Date().toISOString(),
