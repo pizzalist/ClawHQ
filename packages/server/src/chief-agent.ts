@@ -70,6 +70,13 @@ function summarizeTaskResult(result: string | null | undefined): string {
   return compactText(cleaned, 500);
 }
 
+function getMeetingReviewReadiness(meetingId: string): { candidates: ReturnType<typeof extractCandidatesFromMeeting>; canScore: boolean } {
+  const candidates = extractCandidatesFromMeeting(meetingId);
+  const uniqueNames = new Set(candidates.map(c => c.name.trim()).filter(Boolean));
+  const canScore = uniqueNames.size >= 2;
+  return { candidates, canScore };
+}
+
 function buildFixSummaryReply(userMessage: string): string | null {
   if (!/(수정\s*결과\s*요약|수정본\s*요약|수정\s*요약|fix\s*summary|변경\s*요약)/i.test(userMessage)) {
     return null;
@@ -489,14 +496,15 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         nextStepLines.push('\n\n완료.');
       } else {
         if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
-          // Do NOT auto-start review. Show candidates and let user decide.
-          const candidates = extractCandidatesFromMeeting(meetingId);
-          if (candidates && candidates.length > 0) {
+          // Do NOT auto-start review. Show review option only when comparable candidates are explicit.
+          const { candidates, canScore } = getMeetingReviewReadiness(meetingId);
+          if (canScore) {
             const candidateList = candidates.map((c, i) => `${i + 1}. **${c.name}**: ${c.summary.slice(0, 120)}`).join('\n');
             nextStepLines.push(`\n\n📋 **도출된 후보 ${candidates.length}건:**\n${candidateList}`);
             nextStepLines.push(`\n후보 순위 평가를 원하시면 회의 완료 알림의 "🏆 후보 순위 평가" 버튼을 눌러주세요.`);
           } else {
-            nextStepLines.push(`\n\n📋 구조화된 후보가 없습니다. 회의 결과를 확인해주세요.`);
+            nextStepLines.push(`\n\n📋 비교 가능한 후보가 없어 점수화 평가는 건너뜁니다.`);
+            nextStepLines.push(`🧭 이번 건은 총괄자 최종안으로 취합해 실행 단계로 넘깁니다.`);
           }
         } else if (meeting.sourceMeetingId) {
           // Review meeting confirmed → auto-create spec task from recommendation
@@ -705,27 +713,32 @@ export function handleChiefAction(notificationId: string, actionId: string, para
     if (meetingId) {
       const sourceMeeting = getMeeting(meetingId);
       if (sourceMeeting) {
-        // Find or create 3 reviewers
-        const agents = listAgents();
-        const reviewerPool = agents.filter(a => a.role === 'reviewer');
-        const reviewerIds: string[] = [];
-        for (const r of reviewerPool) {
-          if (reviewerIds.length < 3) reviewerIds.push(r.id);
-        }
-        // Create additional reviewers if needed
-        while (reviewerIds.length < 3) {
-          const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', 'claude-opus-4-6' as any);
-          reviewerIds.push(created.id);
-        }
-        const reviewMeeting = startReviewMeetingFromSource(
-          `[리뷰] ${sourceMeeting.title}`,
-          meetingId,
-          reviewerIds,
-        );
-        if (reviewMeeting) {
-          reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
+        const { canScore } = getMeetingReviewReadiness(meetingId);
+        if (!canScore) {
+          reply = 'ℹ️ 비교 가능한 후보가 없어 후보 평가는 생략됩니다.\n\n총괄자 최종안 작성(취합 결정)으로 진행해주세요.';
         } else {
-          reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보(sourceCandidates)가 없습니다. 먼저 기획/브레인스토밍 회의를 완료하여 후보를 도출한 뒤 "후보 순위 평가" 버튼을 눌러주세요.';
+          // Find or create 3 reviewers
+          const agents = listAgents();
+          const reviewerPool = agents.filter(a => a.role === 'reviewer');
+          const reviewerIds: string[] = [];
+          for (const r of reviewerPool) {
+            if (reviewerIds.length < 3) reviewerIds.push(r.id);
+          }
+          // Create additional reviewers if needed
+          while (reviewerIds.length < 3) {
+            const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', 'claude-opus-4-6' as any);
+            reviewerIds.push(created.id);
+          }
+          const reviewMeeting = startReviewMeetingFromSource(
+            `[리뷰] ${sourceMeeting.title}`,
+            meetingId,
+            reviewerIds,
+          );
+          if (reviewMeeting) {
+            reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
+          } else {
+            reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보가 2개 이상 필요합니다. 먼저 명시적 [CANDIDATE] 후보를 도출해 주세요.';
+          }
         }
       } else {
         reply = '리뷰 대상 회의를 찾을 수 없습니다.';
@@ -1053,15 +1066,25 @@ export function chiefHandleMeetingChange() {
         { id: `view-meeting-${meeting.id}`, label: '📊 결과 보기', action: 'view_result', params: { meetingId: meeting.id } },
       ];
 
-      // If planning/brainstorm meeting, offer to start review scoring
-      if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
+      // If planning/brainstorm meeting, only allow review scoring when explicit comparable candidates exist.
+      const isPlanningLike = meeting.character === 'planning' || meeting.character === 'brainstorm';
+      const readiness = isPlanningLike ? getMeetingReviewReadiness(meeting.id) : null;
+      if (isPlanningLike && readiness?.canScore) {
         meetingActions.push(
           { id: `start-review-${meeting.id}`, label: '🏆 후보 순위 평가 (리뷰어가 점수 매김)', action: 'start_review', params: { meetingId: meeting.id } },
         );
       }
 
       meetingActions.push(
-        { id: `approve-meeting-${meeting.id}`, label: '✅ 확정', action: 'approve', params: { meetingId: meeting.id } },
+        {
+          id: `approve-meeting-${meeting.id}`,
+          label: isPlanningLike && !(readiness?.canScore) ? '🧭 총괄자 최종안 작성' : '✅ 확정',
+          action: 'approve',
+          params: {
+            meetingId: meeting.id,
+            mode: isPlanningLike && !(readiness?.canScore) ? 'finalize_by_chief' : 'confirm',
+          },
+        },
         { id: `revise-meeting-${meeting.id}`, label: '🔄 수정 요청', action: 'request_revision', params: { meetingId: meeting.id } },
       );
 
@@ -1077,11 +1100,14 @@ export function chiefHandleMeetingChange() {
       // Dedup: skip if we already emitted a notification for this meeting
       if (!isNotificationDuplicate('meeting_complete', meeting.id)) {
         const participantCount = meeting.participants?.length || contributionCount;
+        const noCandidateHint = isPlanningLike && !(readiness?.canScore)
+          ? '\n\nℹ️ 비교 가능한 후보가 없어 후보 평가는 비활성화되었습니다. 총괄자 최종안 작성으로 진행하세요.'
+          : '';
         notifyChief({
           id: `notif-meeting-${meeting.id}-${Date.now()}`,
           type: 'meeting_complete',
           title: meeting.title,
-          summary: `🏛️ [회의 완료] "${meeting.title}"\n\n참여자 ${participantCount}명 중 ${contributionCount}명이 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
+          summary: `🏛️ [회의 완료] "${meeting.title}"\n\n참여자 ${participantCount}명 중 ${contributionCount}명이 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}${noCandidateHint}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
           actions: meetingActions,
           meetingId: meeting.id,
           createdAt: new Date().toISOString(),

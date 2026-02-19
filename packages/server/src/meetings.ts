@@ -656,20 +656,14 @@ export function extractCandidatesFromMeeting(meetingId: string): MeetingCandidat
     }
   }
 
-  // If structured candidates found, use them (deduplicated)
-  if (candidateMap.size > 0) {
-    return [...candidateMap.values()].map(c => ({
-      name: c.name,
-      summary: c.summary,
-      score: undefined,
-      rationale: undefined,
-    }));
-  }
+  // Only allow explicit structured candidates.
+  // If no [CANDIDATE] tags were provided, treat this meeting as synthesis-only.
+  // (Prevents forced "후보 평가" on discussions that produced no comparable options.)
+  if (candidateMap.size === 0) return [];
 
-  // Fallback: legacy behavior (one candidate per agent)
-  return meeting.proposals.map(p => ({
-    name: p.agentName,
-    summary: p.content.slice(0, 800),
+  return [...candidateMap.values()].map(c => ({
+    name: c.name,
+    summary: c.summary,
     score: undefined,
     rationale: undefined,
   }));
@@ -688,7 +682,7 @@ export function startReviewMeetingFromSource(
   if (!sourceMeeting || sourceMeeting.status !== 'completed') return null;
 
   const candidates = extractCandidatesFromMeeting(sourceMeetingId);
-  if (candidates.length === 0) return null;
+  if (candidates.length < 2) return null;
 
   const meeting = createMeeting(
     title,
