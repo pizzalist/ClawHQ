@@ -4,6 +4,7 @@ import type { TaskStatus, Deliverable, Task } from '@clawhq/shared';
 import { DELIVERABLE_LABELS } from '@clawhq/shared';
 import { utcDate, formatDuration } from '../utils/time';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
+import { useT } from '../i18n';
 
 const STATUS_BADGE: Record<string, { bg: string; icon: string }> = {
   pending: { bg: 'bg-gray-500/20 text-gray-400', icon: '⏳' },
@@ -33,6 +34,7 @@ export default function TaskListView() {
   const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [taskDeliverables, setTaskDeliverables] = useState<Record<string, Deliverable[]>>({});
+  const tFn = useT();
 
   // Fetch deliverable types for completed tasks
   useEffect(() => {
@@ -171,7 +173,7 @@ export default function TaskListView() {
           )}
           {!progress && t.result && !t.result.startsWith('⏳') && (
             <div className="text-[10px] text-gray-500 truncate max-w-[300px] mt-0.5">
-              {/^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(t.result) ? '🌐 HTML 웹 결과물' : `${t.result.slice(0, 80)}...`}
+              {/^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(t.result) ? tFn('notif.htmlResult') : `${t.result.slice(0, 80)}...`}
             </div>
           )}
         </td>
@@ -216,14 +218,14 @@ export default function TaskListView() {
             onChange={(e) => setShowChainSteps(e.target.checked)}
             className="rounded border-gray-600 bg-gray-800 text-accent focus:ring-accent/50 w-3 h-3"
           />
-          Show chain steps
+          {tFn('task.showChainSteps')}
         </label>
         <button
           onClick={() => setSortAsc(!sortAsc)}
           className="ml-auto px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-700/30 rounded"
           title="Toggle sort order"
         >
-          {sortAsc ? '↑ Oldest' : '↓ Newest'}
+          {sortAsc ? tFn('task.oldest') : tFn('task.newest')}
         </button>
       </div>
 
@@ -231,17 +233,17 @@ export default function TaskListView() {
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-600 py-12">
             <span className="text-3xl mb-2 opacity-40">📋</span>
-            <span className="text-sm">No tasks found</span>
+            <span className="text-sm">{tFn('task.noTasks')}</span>
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-panel border-b border-gray-700/30">
               <tr className="text-xs text-gray-500 uppercase tracking-wider">
-                <th className="text-left px-4 py-2">Status</th>
-                <th className="text-left px-4 py-2">Title</th>
-                <th className="text-left px-4 py-2 hidden md:table-cell">Agent</th>
-                <th className="text-left px-4 py-2 hidden sm:table-cell">Created</th>
-                <th className="text-left px-4 py-2 hidden lg:table-cell">Duration</th>
+                <th className="text-left px-4 py-2">{tFn('task.status')}</th>
+                <th className="text-left px-4 py-2">{tFn('task.title')}</th>
+                <th className="text-left px-4 py-2 hidden md:table-cell">{tFn('task.agent')}</th>
+                <th className="text-left px-4 py-2 hidden sm:table-cell">{tFn('task.created')}</th>
+                <th className="text-left px-4 py-2 hidden lg:table-cell">{tFn('task.duration')}</th>
               </tr>
             </thead>
             <tbody>

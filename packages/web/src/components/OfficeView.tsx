@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { OfficeScene } from '../office/OfficeScene';
 import ChiefConsole from './ChiefConsole';
+import { useT } from '../i18n';
 
 export default function OfficeView() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -13,6 +14,7 @@ export default function OfficeView() {
   const chiefThinking = useStore((s) => s.chiefThinking);
   const chiefPendingDecisions = useStore((s) => s.chiefPendingDecisions);
   const [chiefOpen, setChiefOpen] = useState(true);
+  const t = useT();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -46,7 +48,7 @@ export default function OfficeView() {
       <div className={`relative min-h-0 transition-all duration-300 ${chiefOpen ? 'flex-[7]' : 'flex-1'}`}>
         <div ref={containerRef} className="absolute inset-0" />
         <div className="absolute top-3 left-3 text-xs text-gray-500 bg-surface/80 px-2 py-1 rounded pointer-events-none">
-          🏢 Office Floor
+          {t('office.floor')}
         </div>
         {/* Chief toggle button (visible when panel is closed) */}
         {!chiefOpen && (
@@ -54,7 +56,7 @@ export default function OfficeView() {
             onClick={() => setChiefOpen(true)}
             className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 bg-surface/90 border border-gray-700/50 rounded-lg text-xs text-gray-300 hover:text-accent hover:border-accent/40 transition-colors shadow-lg backdrop-blur-sm"
           >
-            🧠 Chief
+            {t('office.chief')}
             {chiefPendingDecisions > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] bg-yellow-500 text-black rounded-full font-bold leading-none">
                 {chiefPendingDecisions}
@@ -81,7 +83,7 @@ export default function OfficeView() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold text-gray-200">Chief</div>
-                <div className="text-[10px] text-emerald-400">온라인</div>
+                <div className="text-[10px] text-emerald-400">{t('office.online')}</div>
               </div>
               {chiefPendingDecisions > 0 && (
                 <span className="px-1.5 py-0.5 text-[10px] bg-yellow-500 text-black rounded-full font-bold">
@@ -91,7 +93,7 @@ export default function OfficeView() {
               <button
                 onClick={() => setChiefOpen(false)}
                 className="p-1 rounded hover:bg-gray-700/40 text-gray-400 hover:text-gray-200 transition-colors"
-                title="패널 닫기"
+                title={t('office.closePanel')}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M9 18l6-6-6-6" />

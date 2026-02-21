@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { utcDate } from '../utils/time';
+import { useT } from '../i18n';
 
 const TYPE_CONFIG: Record<string, { icon: string; color: string }> = {
   agent_created: { icon: '🆕', color: 'text-purple-400' },
@@ -17,12 +18,14 @@ const CLICKABLE_TYPES = new Set(['task_completed', 'task_failed', 'task_assigned
 
 type FilterPreset = 'all' | 'errors' | 'tasks' | 'meetings' | 'agents';
 
-const FILTER_PRESETS: Array<{ key: FilterPreset; label: string; icon: string; types: string[] | null }> = [
-  { key: 'all', label: '전체', icon: '📋', types: null },
-  { key: 'errors', label: '오류', icon: '❌', types: ['task_failed'] },
-  { key: 'tasks', label: '태스크', icon: '📌', types: ['task_created', 'task_assigned', 'task_completed', 'task_failed', 'chain_spawned'] },
-  { key: 'meetings', label: '미팅', icon: '🤝', types: ['message'] },
-  { key: 'agents', label: '에이전트', icon: '🤖', types: ['agent_created', 'agent_state_changed'] },
+type FilterPresetDef = { key: FilterPreset; labelKey: string; icon: string; types: string[] | null };
+
+const FILTER_PRESETS_DEF: FilterPresetDef[] = [
+  { key: 'all', labelKey: 'activity.all', icon: '📋', types: null },
+  { key: 'errors', labelKey: 'activity.errors', icon: '❌', types: ['task_failed'] },
+  { key: 'tasks', labelKey: 'activity.tasks', icon: '📌', types: ['task_created', 'task_assigned', 'task_completed', 'task_failed', 'chain_spawned'] },
+  { key: 'meetings', labelKey: 'activity.meetings', icon: '🤝', types: ['message'] },
+  { key: 'agents', labelKey: 'activity.agents', icon: '🤖', types: ['agent_created', 'agent_state_changed'] },
 ];
 
 export default function ActivityLog() {
@@ -31,9 +34,10 @@ export default function ActivityLog() {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const [collapsed, setCollapsed] = useState(false);
   const [filter, setFilter] = useState<FilterPreset>('all');
+  const t = useT();
 
   const filteredEvents = useMemo(() => {
-    const preset = FILTER_PRESETS.find((p) => p.key === filter);
+    const preset = FILTER_PRESETS_DEF.find((p) => p.key === filter);
     if (!preset || !preset.types) return events;
     const typeSet = new Set(preset.types);
     return events.filter((e) => typeSet.has(e.type));
@@ -57,7 +61,7 @@ export default function ActivityLog() {
         </button>
         {!collapsed && (
           <div className="flex items-center gap-1 ml-auto pr-3">
-            {FILTER_PRESETS.map((preset) => (
+            {FILTER_PRESETS_DEF.map((preset) => (
               <button
                 key={preset.key}
                 onClick={() => setFilter(preset.key)}
@@ -66,9 +70,9 @@ export default function ActivityLog() {
                     ? 'bg-accent/20 text-accent border border-accent/30'
                     : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700/30 border border-transparent'
                 }`}
-                title={preset.label}
+                title={t(preset.labelKey)}
               >
-                {preset.icon} {preset.label}
+                {preset.icon} {t(preset.labelKey)}
               </button>
             ))}
           </div>
@@ -80,7 +84,7 @@ export default function ActivityLog() {
           const clickable = CLICKABLE_TYPES.has(e.type) && e.taskId;
           const task = clickable ? tasks.find((t) => t.id === e.taskId) : null;
           const rawPreview = task?.result ? task.result.slice(0, 100) : null;
-          const resultPreview = rawPreview && /^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(task!.result!) ? '🌐 HTML 결과물' : rawPreview;
+          const resultPreview = rawPreview && /^\s*<!DOCTYPE|^\s*<html|^\s*```html/i.test(task!.result!) ? `🌐 ${t('activity.htmlResult')}` : rawPreview;
 
           return (
             <div
@@ -115,15 +119,15 @@ export default function ActivityLog() {
             <span className="text-2xl mb-1 opacity-40">{filter === 'all' ? '📝' : '🔍'}</span>
             <span className="text-xs">
               {filter === 'all'
-                ? '아직 활동이 없습니다. Chief에게 작업을 요청해보세요!'
-                : `"${FILTER_PRESETS.find((p) => p.key === filter)?.label}" 필터에 해당하는 이벤트가 없습니다.`}
+                ? t('activity.empty')
+                : t('activity.emptyFilter').replace('{filter}', t(FILTER_PRESETS_DEF.find((p) => p.key === filter)?.labelKey || ''))}
             </span>
             {filter !== 'all' && (
               <button
                 onClick={() => setFilter('all')}
                 className="mt-1.5 text-[10px] text-accent hover:underline"
               >
-                전체 보기
+                {t('activity.viewAll')}
               </button>
             )}
           </div>

@@ -509,7 +509,7 @@ export const useStore = create<Store>((set, get) => ({
       const res = await fetch(`${API}/api/chief/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, sessionId: resolvedSessionId }),
+        body: JSON.stringify({ message, sessionId: resolvedSessionId, language: localStorage.getItem('clawhq-lang') || 'en' }),
       });
       if (!res.ok) {
         const text = await res.text();

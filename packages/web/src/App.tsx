@@ -9,13 +9,14 @@ import FailureTimeline from './components/FailureTimeline';
 import HistoryReplay from './components/HistoryReplay';
 import WorkflowDAG from './components/WorkflowDAG';
 import AgentDetailPanel from './components/AgentDetailPanel';
-import CommandInput from './components/CommandInput';
+// import CommandInput from './components/CommandInput';
 import ToastContainer, { toast } from './components/Toast';
 import TaskListView from './components/TaskListView';
 import TaskResultModal from './components/TaskResultModal';
 import DecisionsView from './components/decisions/DecisionsView';
 import MeetingRoom from './components/MeetingRoom';
 import ErrorBoundary from './components/ErrorBoundary';
+import { useT } from './i18n';
 
 type View = 'office' | 'dashboard' | 'decisions' | 'meetings' | 'workflow' | 'failures' | 'history' | 'tasks';
 
@@ -41,14 +42,16 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  const t = useT();
+
   useEffect(() => {
     const onError = (e: ErrorEvent) => {
       console.error('[RuntimeError]', e.error || e.message);
-      toast('런타임 오류를 감지했습니다. 자동 복구를 시도합니다.', 'error');
+      toast(t('error.runtime'), 'error');
     };
     const onRejection = (e: PromiseRejectionEvent) => {
       console.error('[UnhandledRejection]', e.reason);
-      toast('처리되지 않은 오류가 발생했습니다.', 'error');
+      toast(t('error.unhandled'), 'error');
     };
     window.addEventListener('error', onError);
     window.addEventListener('unhandledrejection', onRejection);
@@ -59,14 +62,14 @@ export default function App() {
   }, []);
 
   const tabs: [View, string][] = [
-    ['office', '🏢 Office'],
-    ['tasks', '📋 Tasks'],
-    ['dashboard', '📊 Dashboard'],
-    ['decisions', '📌 Decisions'],
-    ['meetings', '🏛️ Meetings'],
-    ['workflow', '🔗 Workflow'],
-    ['failures', '⚠️ Failures'],
-    ['history', '🕐 History'],
+    ['office', t('tab.office')],
+    ['tasks', t('tab.tasks')],
+    ['dashboard', t('tab.dashboard')],
+    ['decisions', t('tab.decisions')],
+    ['meetings', t('tab.meetings')],
+    ['workflow', t('tab.workflow')],
+    ['failures', t('tab.failures')],
+    ['history', t('tab.history')],
   ];
 
   return (
@@ -137,7 +140,7 @@ export default function App() {
             {view === 'failures' && <FailureTimeline />}
             {view === 'history' && <HistoryReplay />}
           </ErrorBoundary>
-          <CommandInput />
+          {/* CommandInput removed — use Chief Chat instead */}
         </main>
       </div>
       <AgentDetailPanel />
@@ -163,7 +166,7 @@ export default function App() {
           }`}
         >
           <span className="text-base">👥</span>
-          <span>Agents</span>
+          <span>{t('mobile.agents')}</span>
         </button>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { useStore } from '../store';
 import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, ChiefInlineAction, Meeting } from '@clawhq/shared';
 import { MarkdownContent } from '../lib/format/markdown';
 import ChainPlanEditor from './ChainPlanEditor';
+import { useT, t as tStatic } from '../i18n';
 
 function extractHtmlFromResult(result: string): string | null {
   const htmlMatch = result.match(/```html\s*\n([\s\S]*?)```/);
@@ -27,15 +28,15 @@ class ChiefErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
     if (this.state.hasError) {
       return (
         <div className="p-4 text-center space-y-2">
-          <div className="text-red-400 text-sm">⚠️ 화면 오류 발생</div>
+          <div className="text-red-400 text-sm">{tStatic('chief.renderError')}</div>
           <div className="text-xs text-gray-500">{this.state.error}</div>
           <button onClick={() => this.setState({ hasError: false, error: '' })}
             className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs">
-            다시 시도
+            {tStatic('chief.retry')}
           </button>
           <button onClick={() => window.location.reload()}
             className="px-3 py-1 bg-accent hover:bg-accent/80 text-white rounded text-xs ml-2">
-            새로고침
+            {tStatic('chief.reload')}
           </button>
         </div>
       );
@@ -44,17 +45,24 @@ class ChiefErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
   }
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  pm: 'PM', developer: '개발', reviewer: '리뷰어',
-  designer: '디자이너', devops: 'DevOps', qa: 'QA',
-};
+function getRoleLabel(role: string): string {
+  const key = `role.${role}`;
+  const val = tStatic(key);
+  return val === key ? role : val;
+}
 
 const ACTION_ICONS: Record<string, string> = {
   create_task: '📋', create_agent: '🤖', start_meeting: '🏛️', assign_task: '🔗',
 };
-const ACTION_LABELS: Record<string, string> = {
-  create_task: '작업 생성', create_agent: '에이전트 생성', start_meeting: '미팅 시작', assign_task: '작업 배정',
-};
+function getActionLabel(type: string): string {
+  const map: Record<string, string> = {
+    create_task: 'action.createTask',
+    create_agent: 'action.createAgent',
+    start_meeting: 'action.startMeeting',
+    assign_task: 'action.assignTask',
+  };
+  return map[type] ? tStatic(map[type]) : type;
+}
 const STAGE_STYLES: Record<string, { icon: string; border: string; bg: string }> = {
   planning: { icon: '📐', border: 'border-blue-500/40', bg: 'bg-blue-500/10' },
   progress: { icon: '📊', border: 'border-cyan-500/40', bg: 'bg-cyan-500/10' },
@@ -74,25 +82,25 @@ function getInlineActionCopy(action: ChiefInlineAction): { label: string; title?
   if (action.action === 'view_result') {
     if (action.params?.meetingId) {
       return {
-        label: '📊 결과 보기',
-        title: '회의 결과를 상세히 봅니다 (점수표, 참여자 의견 포함).',
+        label: tStatic('action.viewResult'),
+        title: tStatic('action.viewMeetingResult'),
       };
     }
     return {
-      label: '📊 결과 보기',
-      title: '결과를 확인합니다.',
+      label: tStatic('action.viewResult'),
+      title: tStatic('action.viewResultGeneric'),
     };
   }
   if (action.action === 'approve' || action.id.startsWith('approve')) {
     if (action.params?.mode === 'finalize_by_chief') {
       return {
-        label: '🧭 총괄자 최종안 작성',
-        title: '비교 가능한 후보가 없어 점수화 평가를 건너뛰고, 총괄자 취합 결정으로 진행합니다.',
+        label: tStatic('action.chiefFinalize'),
+        title: tStatic('action.chiefFinalizeDesc'),
       };
     }
     return {
-      label: '✅ 확정 · 다음 단계 실행',
-      title: '미리보기 내용을 승인하고 다음 단계를 실제로 진행합니다.',
+      label: tStatic('action.confirmNext'),
+      title: tStatic('action.confirmNextDesc'),
     };
   }
   return { label: action.label, title: undefined };
@@ -199,7 +207,7 @@ function ActionCard({ action, index, selectable, selected, onToggle }: {
       )}
       <span className="text-base flex-shrink-0">{ACTION_ICONS[action.type] || '⚡'}</span>
       <div className="flex-1 min-w-0">
-        <div className="font-semibold text-gray-200">{ACTION_LABELS[action.type] || action.type}</div>
+        <div className="font-semibold text-gray-200">{getActionLabel(action.type)}</div>
         <div className="text-gray-400 space-x-1">
           {Object.entries(action.params).map(([k, v]) => (
             <span key={k} className="inline-block bg-gray-700/40 rounded px-1">{k}: {v}</span>
@@ -261,7 +269,7 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
                 title={copy.title}
                 className="px-3 py-1.5 rounded-lg border border-gray-600 bg-gray-800/70 hover:bg-gray-700 text-sm text-gray-200 disabled:opacity-40 transition-colors"
               >
-                {acting === act.id ? '처리 중...' : copy.label}
+                {acting === act.id ? tStatic('action.actioning') : copy.label}
               </button>
             );
           })}
@@ -270,7 +278,7 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
               onClick={() => onPreviewHtml(previewableHtml)}
               className="px-3 py-1.5 rounded-lg border border-emerald-600 bg-emerald-800/70 hover:bg-emerald-700 text-sm text-gray-200 transition-colors"
             >
-              🖥️ 라이브 프리뷰
+              {tStatic('action.livePreview')}
             </button>
           )}
           {onSendMessage && /리뷰|review|FAIL|불합격|수정\s*필요|critical|major/i.test(notification.summary) && (
@@ -278,15 +286,15 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
               onClick={() => onSendMessage('리뷰 피드백 반영해줘')}
               className="px-3 py-1.5 rounded-lg border border-amber-600 bg-amber-800/70 hover:bg-amber-700 text-sm text-gray-200 transition-colors"
             >
-              🔧 수정 반영
+              {tStatic('action.applyFix')}
             </button>
           )}
         </div>
       )}
       <div className="text-xs text-gray-500 mt-1">
         {hasReviewAction
-          ? "💬 채팅으로 '확정', '후보 평가', '수정 요청' 등을 입력하세요"
-          : "💬 채팅으로 '확정', '총괄자 최종안', '수정 요청' 등을 입력하세요"}
+          ? tStatic('action.chatHintReview')
+          : tStatic('action.chatHintDecision')}
       </div>
     </div>
   );
@@ -309,7 +317,7 @@ function CheckInCard({ checkIn }: { checkIn: ChiefCheckIn }) {
     <div className={`rounded-xl border ${style.border} ${style.bg} p-3 space-y-2`}>
       <div className="flex items-center gap-2 text-sm font-semibold text-gray-200">
         <span>{style.icon}</span>
-        <span>총괄자 확인 요청</span>
+        <span>{tStatic('chief.checkInTitle')}</span>
         <button onClick={() => dismissCheckIn(checkIn.id)} className="ml-auto text-gray-500 hover:text-gray-300 text-xs">✕</button>
       </div>
       {checkIn.message && (
@@ -334,7 +342,7 @@ function CheckInCard({ checkIn }: { checkIn: ChiefCheckIn }) {
         <input
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder="추가 의견 (선택)"
+          placeholder={tStatic('chief.additionalComment')}
           className="flex-1 bg-gray-800/60 border border-gray-700/40 rounded px-2 py-1 text-xs"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && comment.trim()) {
@@ -350,9 +358,9 @@ function CheckInCard({ checkIn }: { checkIn: ChiefCheckIn }) {
 function ThinkingIndicator() {
   return (
     <div className="max-w-[85%] rounded-xl px-3 py-2 text-sm bg-gray-800/70 border border-gray-700/50 text-gray-100">
-      <div className="text-[11px] mb-1 opacity-70">총괄자</div>
+      <div className="text-[11px] mb-1 opacity-70">{tStatic('chief.chief')}</div>
       <div className="flex items-center gap-1">
-        <span className="animate-pulse">생각하는 중</span>
+        <span className="animate-pulse">{tStatic('chief.thinking')}</span>
         <span className="flex gap-0.5">
           <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
           <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -384,7 +392,7 @@ function ChatMessage({ m, checkIn, onViewMeetingResult, onPreviewHtml, onSendMes
             : 'bg-gray-800/70 border border-gray-700/50 text-gray-100'
         }`}>
           <div className="text-[11px] mb-1 opacity-70">
-            {isUser ? '나' : '총괄자'}
+            {isUser ? tStatic('chief.you') : tStatic('chief.chief')}
           </div>
           <MarkdownContent text={m.content} className="text-sm" />
         </div>
@@ -415,6 +423,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
 
   const [input, setInput] = useState('');
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const t = useT();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -436,7 +445,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
   const hasChainPlans = activeChainPlans.length > 0;
 
   const suggestionSummary = useMemo(
-    () => chiefSuggestions.map((s) => `${ROLE_LABELS[s.role] || s.role} ${s.count}명`).join(', '),
+    () => chiefSuggestions.map((s) => `${getRoleLabel(s.role)} ${s.count}`).join(', '),
     [chiefSuggestions],
   );
 
@@ -475,18 +484,18 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
       {/* Chat area — main interaction */}
       <div className={`flex-1 min-w-0 flex flex-col overflow-hidden ${panel ? '' : 'border border-gray-700/40 rounded-xl bg-surface'}`}>
         <div className="px-4 py-3 border-b border-gray-700/30 text-sm font-semibold text-gray-200 flex items-center gap-2">
-          🧠 총괄자 콘솔
-          {chiefThinking && <span className="text-xs text-accent animate-pulse">처리 중...</span>}
+          {t('chief.console')}
+          {chiefThinking && <span className="text-xs text-accent animate-pulse">{t('chief.processing')}</span>}
           {hasCheckIns && <span className="text-xs text-yellow-400">🔔 {chiefCheckIns.length}</span>}
         </div>
         <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
           {chiefMessages.length === 0 && (
             <div className="text-sm text-gray-500">
-              총괄자에게 자연스럽게 말해보세요. 모든 업무 지시, 결과 확인, 의사결정이 여기서 이루어집니다.
+              {t('chief.welcome')}
               <div className="mt-3 space-y-1 text-xs text-gray-600">
-                <div>💡 예: "웹사이트 만들어줘"</div>
-                <div>💡 예: "현재 진행 상황 알려줘"</div>
-                <div>💡 예: "PM 2명, 개발자 3명으로 팀 꾸려줘"</div>
+                <div>{t('chief.example1')}</div>
+                <div>{t('chief.example2')}</div>
+                <div>{t('chief.example3')}</div>
               </div>
             </div>
           )}
@@ -501,12 +510,12 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="총괄자에게 지시하세요..."
+            placeholder={t('chief.placeholder')}
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
           />
           <button type="submit" disabled={!input.trim() || loadingChat}
             className="px-4 py-2 bg-accent text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-            {loadingChat ? '...' : '전송'}
+            {loadingChat ? '...' : t('chief.send')}
           </button>
         </form>
       </div>
@@ -517,7 +526,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
         {/* Executed actions results */}
         {hasExecuted && (
           <div>
-            <h3 className="text-sm font-semibold text-emerald-300 mb-2">⚡ 실행 결과</h3>
+            <h3 className="text-sm font-semibold text-emerald-300 mb-2">{t('chief.executionResults')}</h3>
             <div className="space-y-2">
               {chiefExecutedActions.map((a, idx) => (
                 <ActionCard key={idx} action={a} index={idx} />
@@ -529,18 +538,18 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
         {/* Legacy keyword-mode suggestions */}
         {hasSuggestions && (
           <div>
-            <h3 className="text-sm font-semibold text-gray-200 mb-2">팀 편성 제안</h3>
+            <h3 className="text-sm font-semibold text-gray-200 mb-2">{t('chief.teamSuggestion')}</h3>
             <div className="space-y-2 mb-4">
               {chiefSuggestions.map((s, idx) => (
                 <div key={`${s.role}-${idx}`} className="flex items-center justify-between text-sm bg-gray-800/60 border border-gray-700/40 rounded-lg px-3 py-2">
-                  <span>{ROLE_LABELS[s.role] || s.role}</span>
+                  <span>{getRoleLabel(s.role)}</span>
                   <span className="font-semibold">{s.count}명</span>
                 </div>
               ))}
             </div>
             <button onClick={() => applyChiefPlan(chiefSuggestions)} disabled={!hasSuggestions || loadingApply}
               className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-40">
-              {loadingApply ? '적용 중...' : '✅ 적용'}
+              {loadingApply ? t('chief.applying') : t('chief.apply')}
             </button>
             <p className="mt-2 text-xs text-gray-400">{suggestionSummary}</p>
           </div>
@@ -548,11 +557,11 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
 
         {chiefMeetingDraft && (
           <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10">
-            <div className="text-sm font-semibold text-indigo-200 mb-1">킥오프 미팅</div>
+            <div className="text-sm font-semibold text-indigo-200 mb-1">{t('chief.kickoff')}</div>
             <button onClick={() => createMeeting(chiefMeetingDraft.title, chiefMeetingDraft.description, chiefMeetingDraft.participantIds, chiefMeetingDraft.character)}
               disabled={loadingMeeting}
               className="w-full px-3 py-2 rounded-lg bg-indigo-600 hover:bg-red-500 text-white text-sm font-semibold disabled:opacity-40">
-              {loadingMeeting ? '시작 중...' : '🏛️ 시작'}
+              {loadingMeeting ? t('chief.starting') : t('chief.startMeeting')}
             </button>
           </div>
         )}
@@ -560,7 +569,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
         {/* Chain Plan Editors */}
         {hasChainPlans && (
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-gray-200">🔗 체인 플랜</h3>
+            <h3 className="text-sm font-semibold text-gray-200">{t('chief.chainPlans')}</h3>
             {activeChainPlans.map(plan => (
               <ChainPlanEditor key={plan.id} plan={plan} />
             ))}
@@ -569,14 +578,14 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
 
         {!hasSuggestions && !hasExecuted && !hasChainPlans && !panel && (
           <div>
-            <h3 className="text-sm font-semibold text-gray-200 mb-2">💡 가이드</h3>
+            <h3 className="text-sm font-semibold text-gray-200 mb-2">{t('chief.guide')}</h3>
             <div className="text-xs text-gray-400 space-y-2">
-              <p>모든 업무가 Chief를 통해 이루어집니다:</p>
+              <p>{t('chief.guideDesc')}</p>
               <ul className="list-disc list-inside space-y-1 text-gray-500">
-                <li>🗣️ 자연어로 지시 → Chief가 계획 제안</li>
-                <li>✅ 결과 완료 → Chief가 알림 + 확정 요청</li>
-                <li>⚖️ 미팅 결과 → Chief가 선택지 제시</li>
-                <li>🔄 수정 필요 → Chief에게 말하면 재작업</li>
+                <li>{t('chief.guideInstruct')}</li>
+                <li>{t('chief.guideComplete')}</li>
+                <li>{t('chief.guideMeeting')}</li>
+                <li>{t('chief.guideRevise')}</li>
               </ul>
             </div>
           </div>
@@ -590,7 +599,7 @@ function ChiefConsoleInner({ panel = false }: { panel?: boolean }) {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setPreviewHtml(null)}>
           <div className="bg-gray-900 rounded-lg w-[90vw] h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center p-3 border-b border-gray-700">
-              <span className="text-white font-medium">🖥️ 라이브 프리뷰</span>
+              <span className="text-white font-medium">{t('action.livePreview')}</span>
               <button onClick={() => setPreviewHtml(null)} className="text-gray-400 hover:text-white">✕</button>
             </div>
             <iframe

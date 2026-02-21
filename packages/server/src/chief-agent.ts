@@ -1353,16 +1353,25 @@ export function summarizeOfficeState(): string {
   return lines.join('\n');
 }
 
-function buildChiefSystemPrompt(): string {
+function buildChiefSystemPrompt(language: 'en' | 'ko' = 'ko'): string {
   const state = summarizeOfficeState();
-  return `당신은 ClawHQ의 총괄자(Chief)입니다.
+
+  const langRule = language === 'en'
+    ? '5. Respond in English.'
+    : '5. 한국어로 대화하세요.';
+
+  const intro = language === 'en'
+    ? 'You are ClawHQ\'s Chief (총괄자).'
+    : '당신은 ClawHQ의 총괄자(Chief)입니다.';
+
+  return `${intro}
 
 규칙:
 1. 간결하게 답하세요. 기본은 1~2문장, 필요해도 3문장을 넘기지 마세요.
 2. 상태 조회, 삭제, 취소 같은 단순 작업은 바로 실행 제안하세요. 미팅을 제안하지 마세요.
 3. 복잡한 작업(새 프로젝트 시작, 팀 구성 등)에만 옵션을 제시하세요.
 4. 옵션을 제시할 때는 최대 2개까지만.
-5. 한국어로 대화하세요.
+${langRule}
 6. 실행 전에 반드시 사용자 승인을 받으세요.
 7. 아래 오피스 상태를 참고해 taskId, agentId 등을 직접 사용하세요.
 8. 단순/정의형 질문(예: "원칙 설명", "기준 요약", "체크리스트 n개")은 설명 모드로 짧게 직답하고, 불필요한 실행 제안/추가 액션 요청을 붙이지 마세요.
@@ -2510,7 +2519,7 @@ export function getChiefMessages(sessionId: string): ChiefChatMessage[] {
  * Chat with Chief. In LLM mode, returns messageId for async processing.
  * In demo/keyword mode, returns synchronous result.
  */
-export function chatWithChief(sessionId: string, userMessage: string): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
+export function chatWithChief(sessionId: string, userMessage: string, language: 'en' | 'ko' = 'ko'): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
   lastActiveChiefSessionId = sessionId || 'chief-default';
   const now = new Date().toISOString();
   pushMessage(sessionId, { id: `user-${Date.now()}`, role: 'user', content: userMessage, createdAt: now });
@@ -2740,7 +2749,7 @@ export function chatWithChief(sessionId: string, userMessage: string): { message
 
   // LLM mode
   if (!isDemoMode()) {
-    const systemPrompt = buildChiefSystemPrompt();
+    const systemPrompt = buildChiefSystemPrompt(language);
     const recentMessages = getSessionMessages(sessionId).slice(-10);
     const conversationContext = recentMessages
       .map(m => `${m.role === 'user' ? 'User' : 'Chief'}: ${m.content}`)

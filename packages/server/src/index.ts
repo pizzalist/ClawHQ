@@ -141,7 +141,7 @@ app.post('/api/agents', (req, res) => {
 });
 
 app.post('/api/chief/chat', (req, res) => {
-  const { message, sessionId } = req.body || {};
+  const { message, sessionId, language } = req.body || {};
   if (typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'message is required' });
   }
@@ -151,7 +151,9 @@ app.post('/api/chief/chat', (req, res) => {
       ? sessionId.trim()
       : (req.header('x-chief-session-id') || req.ip || 'default');
 
-  const result = chatWithChief(resolvedSessionId, message.trim());
+  const resolvedLang = (language === 'en' || language === 'ko') ? language : 'ko';
+
+  const result = chatWithChief(resolvedSessionId, message.trim(), resolvedLang);
 
   if (result.async) {
     // LLM mode: return immediately, results come via WebSocket

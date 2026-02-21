@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { ROLE_EMOJI } from '@clawhq/shared';
 import { utcDate } from '../utils/time';
+import { useT } from '../i18n';
 
 interface Failure {
   taskId: string;
@@ -19,6 +20,7 @@ export default function FailureTimeline() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const agents = useStore((s) => s.agents);
+  const t = useT();
 
   useEffect(() => {
     const load = () =>
@@ -47,7 +49,7 @@ export default function FailureTimeline() {
           onChange={(e) => setFilterAgent(e.target.value)}
           className="ml-auto bg-surface border border-gray-700/50 text-xs text-gray-300 rounded px-2 py-1"
         >
-          <option value="all">All Agents</option>
+          <option value="all">{t('failure.allAgents')}</option>
           {failingAgentIds.map((id) => {
             const a = agents.find((ag) => ag.id === id);
             return (
@@ -64,11 +66,11 @@ export default function FailureTimeline() {
           {failures.length === 0 ? (
             <div className="flex flex-col items-center py-16 text-center">
               <div className="text-5xl mb-4 opacity-60">🎉</div>
-              <h3 className="text-lg font-semibold text-gray-300 mb-1">No failures recorded</h3>
-              <p className="text-sm text-gray-500">Everything is running smoothly</p>
+              <h3 className="text-lg font-semibold text-gray-300 mb-1">{t('failure.noFailures')}</h3>
+              <p className="text-sm text-gray-500">{t('failure.allSmooth')}</p>
             </div>
           ) : (
-            <div className="text-gray-600 text-sm py-8 text-center">No failures for this agent</div>
+            <div className="text-gray-600 text-sm py-8 text-center">{t('failure.noFailuresAgent')}</div>
           )}
         </div>
       ) : (

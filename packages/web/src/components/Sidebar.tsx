@@ -5,6 +5,7 @@ import AgentModal from './AgentModal';
 import TeamPresets from './TeamPresets';
 import EmptyState from './EmptyState';
 import { SidebarSkeleton } from './Skeleton';
+import { useT } from '../i18n';
 
 export default function Sidebar() {
   const agents = useStore((s) => s.agents);
@@ -13,25 +14,26 @@ export default function Sidebar() {
   const setSelectedAgent = useStore((s) => s.setSelectedAgent);
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
+  const t = useT();
 
   return (
     <>
       <aside className="w-64 bg-panel border-r border-gray-700/50 flex flex-col shrink-0 h-full">
         <div className="p-3 border-b border-gray-700/30 flex items-center justify-between">
           <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Agents ({agents.length})
+            {t('sidebar.agents')} ({agents.length})
           </span>
           <button
             onClick={() => setShowAddAgent(true)}
             className="text-xs px-2 py-1 bg-accent/20 text-accent hover:bg-accent/30 rounded-md font-medium transition-all hover:scale-105 active:scale-95"
           >
-            + Add
+            {t('sidebar.add')}
           </button>
           <button
             onClick={() => setShowPresets(true)}
             className="text-xs px-2 py-1 bg-purple-500/15 text-purple-400 hover:bg-purple-500/25 rounded-md font-medium transition-all hover:scale-105 active:scale-95"
           >
-            🏗️ Presets
+            {t('sidebar.presets')}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -40,9 +42,9 @@ export default function Sidebar() {
           ) : agents.length === 0 ? (
             <EmptyState
               icon="👥"
-              title="No agents yet"
-              description="Add your first AI agent to get started"
-              action="+ Add Agent"
+              title={t('sidebar.noAgents')}
+              description={t('sidebar.noAgentsDesc')}
+              action={t('sidebar.addAgent')}
               onAction={() => setShowAddAgent(true)}
             />
           ) : (

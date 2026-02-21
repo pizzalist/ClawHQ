@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppEvent, Task } from '@clawhq/shared';
 import { utcDate } from '../utils/time';
+import { useT } from '../i18n';
 
 export default function HistoryReplay() {
+  const t = useT();
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -76,8 +78,8 @@ export default function HistoryReplay() {
       <div className="flex-1 flex items-center justify-center text-gray-500">
         <div className="text-center">
           <div className="text-4xl mb-3">🕐</div>
-          <div className="text-lg font-medium">No history yet</div>
-          <div className="text-sm mt-1">Events will appear here as agents work on tasks</div>
+          <div className="text-lg font-medium">{t('history.noHistory')}</div>
+          <div className="text-sm mt-1">{t('history.noHistoryDesc')}</div>
         </div>
       </div>
     );
@@ -96,7 +98,7 @@ export default function HistoryReplay() {
           onClick={() => setPlaying(!playing)}
           className="px-4 py-1.5 rounded-lg bg-accent/20 text-accent hover:bg-accent/30 font-semibold text-sm transition-colors"
         >
-          {playing ? '⏸ Pause' : '▶ Play'}
+          {playing ? t('history.pause') : t('history.play')}
         </button>
         <button
           onClick={() => setCursor(Math.min(cursor + 1, events.length - 1))}

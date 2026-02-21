@@ -3,22 +3,27 @@ import { useStore } from '../store';
 import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@clawhq/shared';
 import Spinner from './Spinner';
 import { MarkdownContent } from '../lib/format/markdown';
+import { useT, t as tStatic } from '../i18n';
 
-const MEETING_CHARACTER_LABELS: Record<MeetingCharacter, string> = {
-  brainstorm: '🧠 브레인스토밍 (자유 토론)',
-  planning: '📋 기획 회의',
-  review: '🔍 검토 회의',
-  retrospective: '🔄 회고',
-  kickoff: '🚀 프로젝트 킥오프',
-  architecture: '🏗️ 아키텍처 설계',
-  design: '🎨 UI/UX 설계',
-  'sprint-planning': '📅 스프린트 계획',
-  estimation: '📊 공수 산정',
-  demo: '🎬 데모/시연',
-  postmortem: '🔥 포스트모템',
-  'code-review': '💻 코드 리뷰',
-  daily: '☀️ 데일리 스탠드업',
+const MEETING_CHARACTER_KEYS: Record<MeetingCharacter, string> = {
+  brainstorm: 'meetingChar.brainstorm',
+  planning: 'meetingChar.planning',
+  review: 'meetingChar.review',
+  retrospective: 'meetingChar.retrospective',
+  kickoff: 'meetingChar.kickoff',
+  architecture: 'meetingChar.architecture',
+  design: 'meetingChar.design',
+  'sprint-planning': 'meetingChar.sprintPlanning',
+  estimation: 'meetingChar.estimation',
+  demo: 'meetingChar.demo',
+  postmortem: 'meetingChar.postmortem',
+  'code-review': 'meetingChar.codeReview',
+  daily: 'meetingChar.daily',
 };
+
+function getMeetingCharLabel(c: MeetingCharacter): string {
+  return tStatic(MEETING_CHARACTER_KEYS[c] || 'meetingChar.planning');
+}
 
 const ROLE_ICONS: Record<string, string> = {
   pm: '📋', developer: '💻', reviewer: '🔍', designer: '🎨', devops: '🛠️', qa: '🧪',
@@ -42,7 +47,7 @@ function ContributionCard({ contribution }: { contribution: MeetingProposal }) {
       </div>
       {contribution.content.length > 500 && (
         <button onClick={() => setExpanded(!expanded)} className="text-xs text-accent hover:underline mt-1">
-          {expanded ? '접기' : '더 보기...'}
+          {expanded ? tStatic('meeting.viewLess') : tStatic('meeting.viewMore')}
         </button>
       )}
     </div>
@@ -52,7 +57,7 @@ function ContributionCard({ contribution }: { contribution: MeetingProposal }) {
 function MeetingReport({ report }: { report: string }) {
   return (
     <div className="p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/5">
-      <h3 className="text-sm font-semibold text-indigo-300 mb-3">📝 회의 종합 결과</h3>
+      <h3 className="text-sm font-semibold text-indigo-300 mb-3">{tStatic('meeting.report')}</h3>
       <MarkdownContent text={report} className="text-sm text-gray-200" />
     </div>
   );
@@ -74,19 +79,19 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
 
   return (
     <div className="p-4 rounded-xl border border-purple-500/30 bg-purple-500/5 space-y-4">
-      <h3 className="text-sm font-semibold text-purple-300">📊 점수화 결과 (구조화 렌더)</h3>
+      <h3 className="text-sm font-semibold text-purple-300">{tStatic('meeting.scoringResult')}</h3>
 
       <div>
-        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">후보별 점수표</h4>
+        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{tStatic('meeting.candidateTable')}</h4>
         <div className="overflow-x-auto rounded-lg border border-gray-700/50">
           <table className="w-full text-xs">
             <thead className="bg-gray-800/70 text-gray-300">
               <tr>
-                <th className="text-left px-3 py-2">후보</th>
-                <th className="text-left px-3 py-2">설명</th>
-                <th className="text-left px-3 py-2">리뷰어 점수</th>
-                <th className="text-right px-3 py-2">총점</th>
-                <th className="text-right px-3 py-2">평균</th>
+                <th className="text-left px-3 py-2">{tStatic('meeting.candidate')}</th>
+                <th className="text-left px-3 py-2">{tStatic('meeting.description')}</th>
+                <th className="text-left px-3 py-2">{tStatic('meeting.reviewerScores')}</th>
+                <th className="text-right px-3 py-2">{tStatic('meeting.total')}</th>
+                <th className="text-right px-3 py-2">{tStatic('meeting.average')}</th>
               </tr>
             </thead>
             <tbody>
@@ -112,7 +117,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
                   {expandedCandidate === r.name && r.summary && (
                     <tr key={`${r.name}-detail`} className="bg-gray-800/30">
                       <td colSpan={5} className="px-4 py-3 text-xs text-gray-300 whitespace-pre-wrap">
-                        <span className="text-gray-500 font-semibold">📝 상세:</span> {r.summary}
+                        <span className="text-gray-500 font-semibold">{tStatic('meeting.detail')}</span> {r.summary}
                       </td>
                     </tr>
                   )}
@@ -125,7 +130,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-          <h4 className="text-xs font-semibold text-emerald-300 uppercase tracking-wider mb-1">1순위 추천</h4>
+          <h4 className="text-xs font-semibold text-emerald-300 uppercase tracking-wider mb-1">{tStatic('meeting.topRecommendation')}</h4>
           <div className="text-sm font-semibold text-emerald-200">{packet.recommendation?.name || '-'}</div>
           <div className="text-xs text-emerald-100/80 mt-1">평균 {Number(packet.recommendation?.score || 0).toFixed(2)}</div>
           {packet.recommendation?.summary && (
@@ -134,7 +139,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
         </div>
 
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-          <h4 className="text-xs font-semibold text-amber-300 uppercase tracking-wider mb-1">대안</h4>
+          <h4 className="text-xs font-semibold text-amber-300 uppercase tracking-wider mb-1">{tStatic('meeting.alternatives')}</h4>
           {packet.alternatives.length > 0 ? (
             <ul className="space-y-1 text-xs text-amber-100/90">
               {packet.alternatives.map((a, i) => (
@@ -144,7 +149,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
               ))}
             </ul>
           ) : (
-            <div className="text-xs text-amber-100/80">없음</div>
+            <div className="text-xs text-amber-100/80">{tStatic('meeting.none')}</div>
           )}
         </div>
       </div>
@@ -167,23 +172,23 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
       <div className="flex items-center gap-3">
         <h2 className="text-lg font-bold">{meeting.title}</h2>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[meeting.status] || ''}`}>
-          {meeting.status === 'active' ? '진행 중' : meeting.status === 'completed' ? '완료' : meeting.status}
+          {meeting.status === 'active' ? tStatic('meeting.active') : meeting.status === 'completed' ? tStatic('meeting.completed') : meeting.status}
         </span>
       </div>
       {meeting.description && <p className="text-sm text-gray-400">{meeting.description}</p>}
 
       <div className="text-xs text-gray-500">
-        참여자: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
+        {tStatic('meeting.participantsList')}: {meeting.participants.map(id => agentMap.get(id)?.name || id).join(', ')}
       </div>
       {meeting.character && (
-        <div className="text-xs text-indigo-300">유형: {MEETING_CHARACTER_LABELS[meeting.character]}</div>
+        <div className="text-xs text-indigo-300">{tStatic('meeting.type')}: {getMeetingCharLabel(meeting.character)}</div>
       )}
 
       {meeting.status === 'active' && meeting.proposals.length < meeting.participants.length && (
         <div className="flex items-center gap-2 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
           <Spinner />
           <span className="text-sm text-blue-300">
-            전문가 의견 수집 중... {meeting.proposals.length}/{meeting.participants.length}
+            {tStatic('meeting.collecting')} {meeting.proposals.length}/{meeting.participants.length}
           </span>
         </div>
       )}
@@ -200,7 +205,7 @@ function MeetingDetail({ meeting }: { meeting: Meeting }) {
       {meeting.proposals.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-            개별 의견 ({meeting.proposals.length}건)
+            {tStatic('meeting.contributions')} ({meeting.proposals.length})
           </h3>
           <div className="space-y-3">
             {meeting.proposals.map((p, i) => (
@@ -237,30 +242,30 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-surface border border-gray-700/50 rounded-xl p-6 w-full max-w-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold mb-4">🏛️ 새 회의 시작</h2>
+        <h2 className="text-lg font-bold mb-4">{tStatic('meeting.newTitle')}</h2>
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">회의 제목</label>
+            <label className="text-xs text-gray-400 mb-1 block">{tStatic('meeting.titleLabel')}</label>
             <input
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="예: 신규 프로젝트 기획 회의"
+              placeholder={tStatic('meeting.titlePlaceholder')}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">안건 / 설명</label>
+            <label className="text-xs text-gray-400 mb-1 block">{tStatic('meeting.descLabel')}</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="회의에서 다룰 내용을 적어주세요"
+              placeholder={tStatic('meeting.descPlaceholder')}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm h-24 resize-none"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">회의 성격</label>
+            <label className="text-xs text-gray-400 mb-1 block">{tStatic('meeting.characterLabel')}</label>
             <div className="grid grid-cols-2 gap-2">
-              {(Object.keys(MEETING_CHARACTER_LABELS) as MeetingCharacter[]).map((c) => (
+              {(Object.keys(MEETING_CHARACTER_KEYS) as MeetingCharacter[]).map((c) => (
                 <button
                   key={c}
                   onClick={() => setCharacter(c)}
@@ -268,13 +273,13 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
                     character === c ? 'border-indigo-400 bg-indigo-500/20 text-indigo-200' : 'border-gray-600 text-gray-300 hover:border-gray-500'
                   }`}
                 >
-                  {MEETING_CHARACTER_LABELS[c]}
+                  {getMeetingCharLabel(c)}
                 </button>
               ))}
             </div>
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">참여자 선택 (최소 2명)</label>
+            <label className="text-xs text-gray-400 mb-1 block">{tStatic('meeting.selectParticipants')}</label>
             <div className="flex flex-wrap gap-2">
               {candidates.map(a => (
                 <button
@@ -293,13 +298,13 @@ function NewMeetingForm({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="flex gap-2 mt-5 justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">취소</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">{tStatic('meeting.cancel')}</button>
           <button
             onClick={submit}
             disabled={!title.trim() || selected.length < 2 || loading}
             className="px-4 py-2 bg-accent hover:bg-accent/80 text-white text-sm font-semibold rounded-lg disabled:opacity-40 transition-all"
           >
-            {loading ? '시작 중...' : '🚀 회의 시작'}
+            {loading ? tStatic('meeting.startingMeeting') : tStatic('meeting.start')}
           </button>
         </div>
       </div>
@@ -329,12 +334,12 @@ export default function MeetingRoom() {
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/30">
-        <h2 className="text-sm font-semibold text-gray-300">🏛️ 회의실</h2>
+        <h2 className="text-sm font-semibold text-gray-300">{tStatic('meeting.room')}</h2>
         <button
           onClick={() => setShowNew(true)}
           className="px-3 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs font-semibold rounded-lg transition-all"
         >
-          + 새 회의
+          {tStatic('meeting.new')}
         </button>
       </div>
 
@@ -342,7 +347,7 @@ export default function MeetingRoom() {
         <div className="w-72 border-r border-gray-700/30 overflow-y-auto shrink-0">
           {meetings.length === 0 && (
             <div className="p-4 text-sm text-gray-500 text-center">
-              아직 회의가 없어요.<br />새 회의를 시작해보세요.
+              {tStatic('meeting.empty').split('\n')[0]}<br />{tStatic('meeting.empty').split('\n')[1]}
             </div>
           )}
           {meetings.map(m => (
@@ -358,7 +363,7 @@ export default function MeetingRoom() {
                   <span className="text-sm font-medium text-gray-200 truncate">{m.title}</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-0.5">
-                  {m.proposals.length}명 참여 · {m.status === 'active' ? '진행 중' : m.status === 'completed' ? '완료' : m.status}
+                  {m.proposals.length} {tStatic('meeting.participants')} · {m.status === 'active' ? tStatic('meeting.active') : m.status === 'completed' ? tStatic('meeting.completed') : m.status}
                 </div>
               </button>
               {m.status === 'completed' && (
@@ -366,7 +371,7 @@ export default function MeetingRoom() {
                   onClick={() => setSelectedMeetingId(m.id)}
                   className="mt-2 px-2 py-1 text-[11px] rounded border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10"
                 >
-                  결과 보기
+                  {tStatic('meeting.viewResult')}
                 </button>
               )}
             </div>
@@ -378,7 +383,7 @@ export default function MeetingRoom() {
             <MeetingDetail meeting={selectedMeeting} />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-              회의를 선택하거나 새로 시작하세요
+              {tStatic('meeting.select')}
             </div>
           )}
         </div>
