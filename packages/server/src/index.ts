@@ -4,10 +4,10 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { SERVER_PORT } from '@ai-office/shared';
-import type { WSMessage, InitialState, TeamPlanSuggestion } from '@ai-office/shared';
+import { SERVER_PORT } from '@clawhq/shared';
+import type { WSMessage, InitialState, TeamPlanSuggestion } from '@clawhq/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { TEAM_PRESETS } from '@ai-office/shared';
+import { TEAM_PRESETS } from '@clawhq/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp, syncRootTaskStates } from './task-queue.js';
 import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange, resetChainPlanState } from './chain-plan.js';
@@ -623,7 +623,7 @@ app.get('/api/export/json', (_req, res) => {
   const counts = stmts.taskCounts.get() as Record<string, number>;
   const avgRow = stmts.avgCompletionTime.get() as { avg_ms: number | null };
   const perAgent = stmts.perAgentStats.all();
-  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-export.json"');
+  res.setHeader('Content-Disposition', 'attachment; filename="clawhq-export.json"');
   res.json({ exportedAt: new Date().toISOString(), agents, tasks, events, stats: { ...counts, avgCompletionMs: avgRow.avg_ms || 0, perAgent } });
 });
 
@@ -638,7 +638,7 @@ app.get('/api/export/markdown', (_req, res) => {
   const failed = (counts.failed as number) || 0;
   const pending = (counts.pending as number) || 0;
 
-  let md = `# AI Office Report\n\n`;
+  let md = `# ClawHQ Report\n\n`;
   md += `**Generated:** ${new Date().toISOString()}\n\n`;
   md += `## Summary\n\n`;
   md += `| Metric | Value |\n|--------|-------|\n`;
@@ -669,7 +669,7 @@ app.get('/api/export/markdown', (_req, res) => {
   }
 
   res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-report.md"');
+  res.setHeader('Content-Disposition', 'attachment; filename="clawhq-report.md"');
   res.send(md);
 });
 
@@ -684,13 +684,13 @@ app.get('/api/export/csv', (_req, res) => {
     csv += `${t.id},${escape(t.title)},${t.status},${escape(agent?.name || '')},${t.createdAt},${t.updatedAt},${escape(((t.result as string) || '').slice(0, 100))}\n`;
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="ai-office-tasks.csv"');
+  res.setHeader('Content-Disposition', 'attachment; filename="clawhq-tasks.csv"');
   res.send(csv);
 });
 
 // ---- Decision API ----
 import { randomUUID } from 'crypto';
-import type { DecisionItem, Proposal, ReviewScore } from '@ai-office/shared';
+import type { DecisionItem, Proposal, ReviewScore } from '@clawhq/shared';
 
 function hydrateDecisionItem(row: Record<string, unknown>): DecisionItem {
   const id = row.id as string;
@@ -1170,7 +1170,7 @@ async function main() {
   setTimeout(() => processQueue(), 2000);
 
   server.listen(SERVER_PORT, () => {
-    console.log(`[server] AI Office server running on http://localhost:${SERVER_PORT}`);
+    console.log(`[server] ClawHQ server running on http://localhost:${SERVER_PORT}`);
     console.log(`[server] WebSocket available at ws://localhost:${SERVER_PORT}/ws`);
   });
 }

@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
-import type { Task, TaskStatus, AppEvent, AgentRole, DeliverableType } from '@ai-office/shared';
-import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
-import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
+import type { Task, TaskStatus, AppEvent, AgentRole, DeliverableType } from '@clawhq/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@clawhq/shared';
+import { detectDeliverableType, detectDeliverableTypeForRole } from '@clawhq/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, getAgentRun, type AgentRun } from './openclaw-adapter.js';
@@ -255,7 +255,7 @@ function assignTask(agentId: string, task: Task) {
   const agent = getAgent(agentId);
   if (!agent) return;
 
-  const sessionId = `ai-office-${agent.name.toLowerCase()}-${task.id.slice(0, 8)}-${Date.now()}`;
+  const sessionId = `clawhq-${agent.name.toLowerCase()}-${task.id.slice(0, 8)}-${Date.now()}`;
 
   // Mark task in-progress and agent working
   stmts.updateTask.run(agent.id, 'in-progress', null, task.id);
@@ -308,7 +308,7 @@ function buildPrompt(name: string, role: string, task: Task): string {
   const roleInstruction = ROLE_INSTRUCTIONS[role] || `Complete this task concisely and report what you did.`;
   const isFixTask = /^\[fix\]/i.test(task.title) || /(수정|fix|피드백\s*반영)/i.test(`${task.title}\n${task.description}`);
   const parts = [
-    `You are ${name}, a ${role} in the AI Office.`,
+    `You are ${name}, a ${role} in the ClawHQ.`,
     roleInstruction,
     ``,
     `## Task: ${task.title}`,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DecisionItem } from '@ai-office/shared';
+import type { DecisionItem } from '@clawhq/shared';
 
 const PRIORITY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   critical: { bg: 'bg-red-500/20 border-red-500/40', text: 'text-red-400', label: '🔴 Critical' },

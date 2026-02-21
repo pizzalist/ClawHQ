@@ -1,4 +1,4 @@
-import type { ReviewScore } from '@ai-office/shared';
+import type { ReviewScore } from '@clawhq/shared';
 
 const SENTIMENT_STYLES: Record<string, { border: string; bg: string; text: string }> = {
   positive: { border: 'border-green-500/40', bg: 'bg-green-500/10', text: 'text-green-400' },

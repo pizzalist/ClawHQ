@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { Deliverable } from '@ai-office/shared';
+import type { Deliverable } from '@clawhq/shared';
 
 interface Props {
   deliverable: Deliverable;

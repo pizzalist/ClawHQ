@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import { ROLE_EMOJI } from '@ai-office/shared';
+import { ROLE_EMOJI } from '@clawhq/shared';
 import { utcDate } from '../utils/time';
 
 interface Failure {

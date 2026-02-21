@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
-const sessionId = process.env.AI_OFFICE_DEMO_SESSION || `demo-scenarios-${Date.now()}`;
+const baseUrl = process.env.CLAWHQ_URL || 'http://localhost:3001';
+const sessionId = process.env.CLAWHQ_DEMO_SESSION || `demo-scenarios-${Date.now()}`;
 
 const scenarios = [
   { name: 'MVP planning chain', prompt: 'B2B SaaS MVP 기획서 만들어줘' },
@@ -10,7 +10,7 @@ const scenarios = [
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const RUN_TIMEOUT_SECONDS = Number(process.env.AI_OFFICE_SCENARIO_TIMEOUT_SEC || 120);
+const RUN_TIMEOUT_SECONDS = Number(process.env.CLAWHQ_SCENARIO_TIMEOUT_SEC || 120);
 
 async function call(path, method = 'GET', body) {
   const res = await fetch(`${baseUrl}${path}`, {

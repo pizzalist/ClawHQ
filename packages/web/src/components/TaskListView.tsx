@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../store';
-import type { TaskStatus, Deliverable, Task } from '@ai-office/shared';
-import { DELIVERABLE_LABELS } from '@ai-office/shared';
+import type { TaskStatus, Deliverable, Task } from '@clawhq/shared';
+import { DELIVERABLE_LABELS } from '@clawhq/shared';
 import { utcDate, formatDuration } from '../utils/time';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 

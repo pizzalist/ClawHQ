@@ -129,7 +129,7 @@ async function run() {
   const failed = results.filter(r => !r.pass);
 
   const lines = [
-    '# AI Office QC Report (32 cases)',
+    '# ClawHQ QC Report (32 cases)',
     '',
     `- Total: ${total}`,
     `- PASS: ${passed}`,

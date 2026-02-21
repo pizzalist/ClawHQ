@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { utcDate } from '../utils/time';
-import { ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
-import type { Task } from '@ai-office/shared';
+import { ROLE_EMOJI, ROLE_LABELS } from '@clawhq/shared';
+import type { Task } from '@clawhq/shared';
 import TaskModal from './TaskModal';
 import Spinner from './Spinner';
 

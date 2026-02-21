@@ -8,8 +8,8 @@
  */
 
 import { v4 as uuid } from 'uuid';
-import type { AgentRole, DeliverableType } from '@ai-office/shared';
-import { CHAIN_STEP_LABELS } from '@ai-office/shared';
+import type { AgentRole, DeliverableType } from '@clawhq/shared';
+import { CHAIN_STEP_LABELS } from '@clawhq/shared';
 import { decideNextRoleByIntent } from './task-queue.js';
 
 export interface ChainStep {

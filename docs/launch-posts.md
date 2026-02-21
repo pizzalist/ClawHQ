@@ -2,7 +2,7 @@
 
 ## X (short)
 
-We built **AI Office**: an open-source AI Team Operating System.
+We built **ClawHQ**: an open-source AI Team Operating System.
 
 Not just output generation.
 Track plan → execute → decide → review with decision history and failure timeline.
@@ -15,14 +15,14 @@ Title:
 Open-source "AI Team Operating System" (PM/Dev/Reviewer workflow + failure timeline)
 
 Body:
-I built AI Office to solve a different problem than code copilots.
+I built ClawHQ to solve a different problem than code copilots.
 
 Most tools generate output, but teams still struggle with:
 - decision traceability
 - operational visibility
 - quality control across multiple agents
 
-AI Office focuses on team operations:
+ClawHQ focuses on team operations:
 - role-based multi-agent flow
 - chain execution (plan → implement → review)
 - meeting/decision/task history
@@ -33,10 +33,10 @@ If you test it, I’d love blunt feedback on onboarding and real-world usefulnes
 ## Hacker News (Show HN style)
 
 Title:
-Show HN: AI Office – an open-source operating layer for AI agent teams
+Show HN: ClawHQ – an open-source operating layer for AI agent teams
 
 Body:
-AI Office is an attempt to make AI agents usable as a real team, not isolated prompts.
+ClawHQ is an attempt to make AI agents usable as a real team, not isolated prompts.
 
 Core idea:
 Plan, execute, decide, review — with traceability.

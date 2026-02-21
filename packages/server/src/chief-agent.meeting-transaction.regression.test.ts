@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { listAgents, createAgent, deleteAllAgents } from './agent-manager.js';
 import { listMeetings } from './meetings.js';
-import type { ChiefAction } from '@ai-office/shared';
+import type { ChiefAction } from '@clawhq/shared';
 import { approveProposal, __unsafeSetPendingProposalForTest } from './chief-agent.js';
 import { stmts } from './db.js';
 

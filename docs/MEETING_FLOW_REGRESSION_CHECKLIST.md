@@ -6,7 +6,7 @@
 
 ## 테스트 환경
 
-- Build: `npm run build -w @ai-office/server && npm run build -w @ai-office/web`
+- Build: `npm run build -w @clawhq/server && npm run build -w @clawhq/web`
 - Server: `http://127.0.0.1:3001` (또는 운영 URL)
 - 기준 커밋:
   - `c865a73` `fix(meeting): gate review scoring to explicit comparable candidates`

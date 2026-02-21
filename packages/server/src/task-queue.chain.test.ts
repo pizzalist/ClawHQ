@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { DeliverableType } from '@ai-office/shared';
+import type { DeliverableType } from '@clawhq/shared';
 import { decideNextRoleByIntent } from './task-queue.js';
 
 type Case = {

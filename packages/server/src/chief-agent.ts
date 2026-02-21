@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@ai-office/shared';
+import type { AgentRole, AgentModel, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefCheckInOption, ChiefNotification, Meeting, TeamPlanSuggestion, AppEvent, Task } from '@clawhq/shared';
 import { listAgents, createAgent, getAgent, suggestFriendlyAgentName } from './agent-manager.js';
 import { listTasks, createTask, processQueue, isBatchComplete, getBatchResults, getTasksByBatchId, findRootTask } from './task-queue.js';
 import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMeeting, startReviewMeetingFromSource, getChildMeetings, deleteMeeting, deleteAllMeetings } from './meetings.js';
@@ -185,17 +185,17 @@ function parseRecommendation(content: string): { recommendation: string; reason:
  * Generate a standardized decision packet from a review meeting's proposals.
  * Extracts structured [SCORE] lines, produces recommendation + alternatives.
  */
-function generateDecisionPacket(meeting: Meeting): import('@ai-office/shared').DecisionPacket | null {
+function generateDecisionPacket(meeting: Meeting): import('@clawhq/shared').DecisionPacket | null {
   if (meeting.decisionPacket) return meeting.decisionPacket;
   if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0) return null;
   if (meeting.proposals.length === 0) return null;
 
   const candidateNames = meeting.sourceCandidates.map(c => c.name);
-  const reviewerScoreCards: import('@ai-office/shared').ReviewerScoreCard[] = [];
+  const reviewerScoreCards: import('@clawhq/shared').ReviewerScoreCard[] = [];
 
   for (const proposal of meeting.proposals) {
     const parsed = parseStructuredScores(proposal.content, candidateNames);
-    const scores: import('@ai-office/shared').ReviewerScoreCard['scores'] = [];
+    const scores: import('@clawhq/shared').ReviewerScoreCard['scores'] = [];
 
     for (const candidate of meeting.sourceCandidates) {
       const found = parsed.find(p => p.candidateName === candidate.name);
@@ -608,7 +608,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         // Only the "✅ 확정되었습니다." line — need to add next step
         // No chain plan — derive next step from task context
         const taskTitle = task.title.toLowerCase();
-        let nextRole: import('@ai-office/shared').AgentRole = 'developer';
+        let nextRole: import('@clawhq/shared').AgentRole = 'developer';
         let nextLabel = '개발 실행';
         if (/(기획|명세|spec|plan)/i.test(taskTitle)) {
           nextRole = 'developer';
@@ -1264,11 +1264,11 @@ export function summarizeOfficeState(): string {
       // Re-check actual DB status to catch race with completion
       const freshRow = stmts.getTask.get(t.id) as Record<string, unknown> | undefined;
       if (freshRow && (freshRow.status as string) === 'completed') {
-        return { ...t, status: 'completed' as import('@ai-office/shared').TaskStatus, result: (freshRow.result as string) ?? t.result };
+        return { ...t, status: 'completed' as import('@clawhq/shared').TaskStatus, result: (freshRow.result as string) ?? t.result };
       }
       const plan = getChainPlanForTask(t.id);
       if (plan && (plan.status === 'completed' || plan.currentStep >= plan.steps.length - 1)) {
-        return { ...t, status: 'completed' as import('@ai-office/shared').TaskStatus };
+        return { ...t, status: 'completed' as import('@clawhq/shared').TaskStatus };
       }
     }
     return t;
@@ -1355,7 +1355,7 @@ export function summarizeOfficeState(): string {
 
 function buildChiefSystemPrompt(): string {
   const state = summarizeOfficeState();
-  return `당신은 AI Office의 총괄자(Chief)입니다.
+  return `당신은 ClawHQ의 총괄자(Chief)입니다.
 
 규칙:
 1. 간결하게 답하세요. 기본은 1~2문장, 필요해도 3문장을 넘기지 마세요.

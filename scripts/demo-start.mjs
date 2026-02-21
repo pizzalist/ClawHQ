@@ -3,9 +3,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 
-const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
-const waitMs = Number(process.env.AI_OFFICE_BOOT_WAIT_MS || 6000);
-const autoInstall = process.env.AI_OFFICE_AUTO_INSTALL_OPENCLAW !== '0';
+const baseUrl = process.env.CLAWHQ_URL || 'http://localhost:3001';
+const waitMs = Number(process.env.CLAWHQ_BOOT_WAIT_MS || 6000);
+const autoInstall = process.env.CLAWHQ_AUTO_INSTALL_OPENCLAW !== '0';
 
 function log(msg) {
   console.log(`[demo:start] ${msg}`);
@@ -93,7 +93,7 @@ if (await isHealthy()) {
   process.exit(0);
 }
 
-log('Starting AI Office dev environment...');
+log('Starting ClawHQ dev environment...');
 log('This runs server + web in parallel and streams logs below.');
 log('Press Ctrl+C to stop.');
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { TEAM_PRESETS, ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
+import { TEAM_PRESETS, ROLE_EMOJI, ROLE_LABELS } from '@clawhq/shared';
 import { useStore } from '../store';
 
 export default function TeamPresets({ onClose }: { onClose: () => void }) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
-const presetId = process.env.AI_OFFICE_PRESET || 'full-stack';
+const baseUrl = process.env.CLAWHQ_URL || 'http://localhost:3001';
+const presetId = process.env.CLAWHQ_PRESET || 'full-stack';
 
 async function call(path, method = 'GET', body) {
   const res = await fetch(`${baseUrl}${path}`, {

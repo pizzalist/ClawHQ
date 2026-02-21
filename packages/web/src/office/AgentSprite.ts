@@ -1,6 +1,6 @@
 import * as PIXI from 'pixi.js';
-import type { Agent, AgentRole, AgentState } from '@ai-office/shared';
-import { STATE_COLORS, OFFICE_CHARACTER_EMOJI } from '@ai-office/shared';
+import type { Agent, AgentRole, AgentState } from '@clawhq/shared';
+import { STATE_COLORS, OFFICE_CHARACTER_EMOJI } from '@clawhq/shared';
 
 const ROLE_BODY_COLORS: Record<AgentRole, number> = {
   pm: 0x6366f1,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { DecisionItem } from '@ai-office/shared';
+import type { DecisionItem } from '@clawhq/shared';
 import DecisionQueue from './DecisionQueue';
 import ProposalCompare from './ProposalCompare';
 import DecisionHistory from './DecisionHistory';

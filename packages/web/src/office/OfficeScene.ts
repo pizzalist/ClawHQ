@@ -1,5 +1,5 @@
 import * as PIXI from 'pixi.js';
-import type { Agent } from '@ai-office/shared';
+import type { Agent } from '@clawhq/shared';
 import { Floor, gridToIso } from './Floor';
 import { Desk } from './Desk';
 import { AgentSprite } from './AgentSprite';

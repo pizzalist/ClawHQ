@@ -2,9 +2,9 @@
  * Post-deployment QA revalidation script.
  *
  * Usage:
- *   npm run qa:post-deploy -w @ai-office/server
- *   QA_BASE_URL=http://localhost:3001 npm run qa:post-deploy -w @ai-office/server
- *   QA_OUT=./POST_DEPLOY_QA_REPORT.md npm run qa:post-deploy -w @ai-office/server
+ *   npm run qa:post-deploy -w @clawhq/server
+ *   QA_BASE_URL=http://localhost:3001 npm run qa:post-deploy -w @clawhq/server
+ *   QA_OUT=./POST_DEPLOY_QA_REPORT.md npm run qa:post-deploy -w @clawhq/server
  */
 import { writeFile } from 'node:fs/promises';
 

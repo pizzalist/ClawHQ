@@ -288,6 +288,7 @@ CRITICAL RULES for web deliverables (HTML):
 };
 function buildPrompt(name, role, task) {
     const roleInstruction = ROLE_INSTRUCTIONS[role] || `Complete this task concisely and report what you did.`;
+    const isFixTask = /^\[fix\]/i.test(task.title) || /(수정|fix|피드백\s*반영)/i.test(`${task.title}\n${task.description}`);
     const parts = [
         `You are ${name}, a ${role} in the AI Office.`,
         roleInstruction,
@@ -295,6 +296,9 @@ function buildPrompt(name, role, task) {
         `## Task: ${task.title}`,
         task.description ? `\n${task.description}` : '',
     ];
+    if (role === 'developer' && isFixTask) {
+        parts.push('', '## FIX MODE (MANDATORY)', '- This is a PATCH task. Modify the EXISTING code from the context, do NOT replace with an unrelated rewrite.', '- Keep original architecture, identifiers, and behavior unless the review explicitly asks to change them.', '- Reflect reviewer feedback item-by-item.', '- Output format must be:', '  1) "### 변경 요약" (bullet list)', '  2) "### 반영 체크리스트" (리뷰 피드백별 반영 여부)', '  3) "### 수정된 코드" (patched full code)', '- If required context is missing, explicitly state what is missing instead of fabricating a new project.');
+    }
     if (task.expectedDeliverables && task.expectedDeliverables.length > 0) {
         const formatHints = {
             web: 'a complete HTML page (use ```html code block)',

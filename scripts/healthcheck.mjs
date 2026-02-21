@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
+const baseUrl = process.env.CLAWHQ_URL || 'http://localhost:3001';
 
 const checks = [
   { name: 'GET /api/agents', method: 'GET', path: '/api/agents' },

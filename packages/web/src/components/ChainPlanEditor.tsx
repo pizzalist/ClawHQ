@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import type { ChainPlan, ChainStep, AgentRole } from '@ai-office/shared';
+import type { ChainPlan, ChainStep, AgentRole } from '@clawhq/shared';
 
 const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; emoji: string }> = [
   { value: 'pm', label: 'PM (기획)', emoji: '📋' },

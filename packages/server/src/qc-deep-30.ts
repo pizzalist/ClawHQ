@@ -1,5 +1,5 @@
 /**
- * AI Office Deep E2E QC: 30 Cases (기획10 + 설계10 + 개발10)
+ * ClawHQ Deep E2E QC: 30 Cases (기획10 + 설계10 + 개발10)
  * 
  * Tests the full Plan→Design→Implement→Review pipeline
  * with quality scoring on content, Korean naturalness, actionability.
@@ -10,7 +10,7 @@ import { checkOpenClaw } from './openclaw-adapter.js';
 import { chatWithChief, generatePlanFromPrompt, getChiefMessages } from './chief-agent.js';
 import { decideNextRoleByIntent, createTask, listTasks, processQueue } from './task-queue.js';
 import { createAgent, deleteAllAgents, listAgents } from './agent-manager.js';
-import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
+import { detectDeliverableType, detectDeliverableTypeForRole } from '@clawhq/shared';
 import { parseResultToArtifacts, createDeliverablesFromResult } from './deliverables.js';
 import { startPlanningMeeting, listMeetings } from './meetings.js';
 import { stmts } from './db.js';
@@ -407,7 +407,7 @@ async function run() {
   }
   const topFailures = [...failReasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  const report = `# AI Office 심층 E2E QC 보고서 (30 Cases)
+  const report = `# ClawHQ 심층 E2E QC 보고서 (30 Cases)
 
 > 생성일: ${new Date().toISOString()}
 > 모드: Demo (keyword fallback) — 실 LLM 미연결 시 demo 모드로 전환됨

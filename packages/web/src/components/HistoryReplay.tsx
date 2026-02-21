@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppEvent, Task } from '@ai-office/shared';
+import type { AppEvent, Task } from '@clawhq/shared';
 import { utcDate } from '../utils/time';
 
 export default function HistoryReplay() {

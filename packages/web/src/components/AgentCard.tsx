@@ -1,5 +1,5 @@
-import type { Agent } from '@ai-office/shared';
-import { ROLE_EMOJI, ROLE_LABELS } from '@ai-office/shared';
+import type { Agent } from '@clawhq/shared';
+import { ROLE_EMOJI, ROLE_LABELS } from '@clawhq/shared';
 
 const STATE_STYLES: Record<string, { bg: string; text: string; dot: string; pulse: boolean }> = {
   idle: { bg: 'bg-gray-500/15', text: 'text-gray-400', dot: 'bg-gray-500', pulse: false },

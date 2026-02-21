@@ -16,8 +16,8 @@ import type {
   TechSpecMeetingData,
   TechSpecConflict,
   AgentRole,
-} from '@ai-office/shared';
-import { TECH_SPEC_ROLES, TECH_SPEC_SYNTHESIS_PROMPT } from '@ai-office/shared';
+} from '@clawhq/shared';
+import { TECH_SPEC_ROLES, TECH_SPEC_SYNTHESIS_PROMPT } from '@clawhq/shared';
 import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent } from './agent-manager.js';
 import { spawnAgentSession, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';

@@ -1,10 +1,10 @@
-# AI Office v0.1.0
+# ClawHQ v0.1.0
 
 Release date: 2026-02-17
 
 ## TL;DR
 
-AI Office v0.1.0 establishes the **AI Team Operating System** baseline:
+ClawHQ v0.1.0 establishes the **AI Team Operating System** baseline:
 - plan → execute → decide → review workflow
 - deterministic demo fixture + scripted scenarios
 - automated healthcheck + demo report + media generation

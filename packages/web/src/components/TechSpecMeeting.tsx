@@ -6,8 +6,8 @@
  */
 
 import { useState } from 'react';
-import type { Meeting, TechSpecMeetingData, TechSpecRole, TechSpecConflict } from '@ai-office/shared';
-import { TECH_SPEC_ROLES } from '@ai-office/shared';
+import type { Meeting, TechSpecMeetingData, TechSpecRole, TechSpecConflict } from '@clawhq/shared';
+import { TECH_SPEC_ROLES } from '@clawhq/shared';
 import Spinner from './Spinner';
 
 interface Props {

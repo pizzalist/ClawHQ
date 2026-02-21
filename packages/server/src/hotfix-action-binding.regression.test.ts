@@ -5,7 +5,7 @@
 
 import { __unsafeSetPendingProposalForTest, approveProposal, handleChiefAction } from './chief-agent.js';
 import { listAgents, createAgent } from './agent-manager.js';
-import type { ChiefAction } from '@ai-office/shared';
+import type { ChiefAction } from '@clawhq/shared';
 
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(msg);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@ai-office/shared';
+import type { Meeting, MeetingProposal, MeetingCharacter, DecisionPacket } from '@clawhq/shared';
 import Spinner from './Spinner';
 import { MarkdownContent } from '../lib/format/markdown';
 

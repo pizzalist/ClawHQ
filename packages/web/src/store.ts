@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefNotification, TeamPlanSuggestion, ChainPlan, ChainStep } from '@ai-office/shared';
+import type { Agent, Task, AppEvent, WSMessage, InitialState, Meeting, MeetingCharacter, ChiefChatMessage, ChiefAction, ChiefResponse, ChiefCheckIn, ChiefNotification, TeamPlanSuggestion, ChainPlan, ChainStep } from '@clawhq/shared';
 import { toast } from './components/Toast';
 
 const API = '';
-const CHIEF_STORAGE_KEY = 'ai-office-chief-state-v1';
+const CHIEF_STORAGE_KEY = 'clawhq-chief-state-v1';
 
 type PersistedChiefState = {
   chiefMessages: ChiefChatMessage[];

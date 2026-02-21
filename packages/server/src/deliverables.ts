@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { Deliverable, DeliverableType } from '@ai-office/shared';
+import type { Deliverable, DeliverableType } from '@clawhq/shared';
 import { stmts } from './db.js';
 
 interface ParsedArtifact {

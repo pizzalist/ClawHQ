@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import type { Deliverable } from '@ai-office/shared';
-import { DELIVERABLE_LABELS } from '@ai-office/shared';
+import type { Deliverable } from '@clawhq/shared';
+import { DELIVERABLE_LABELS } from '@clawhq/shared';
 import WebViewer from './WebViewer';
 import ReportViewer from './ReportViewer';
 import CodeViewer from './CodeViewer';

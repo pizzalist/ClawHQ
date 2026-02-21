@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal, MeetingCandidate, DecisionPacket } from '@ai-office/shared';
+import type { Meeting, MeetingType, MeetingCharacter, MeetingProposal, MeetingCandidate, DecisionPacket } from '@clawhq/shared';
 import { stmts } from './db.js';
 import { getAgent, listAgents, transitionAgent, resetAgent, createAgent } from './agent-manager.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
@@ -496,7 +496,7 @@ function buildReviewDecisionPacket(meeting: Meeting): DecisionPacket | null {
   if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0) return null;
   if (!meeting.proposals || meeting.proposals.length === 0) return null;
 
-  const reviewerScoreCards: import('@ai-office/shared').ReviewerScoreCard[] = meeting.proposals.map((proposal) => ({
+  const reviewerScoreCards: import('@clawhq/shared').ReviewerScoreCard[] = meeting.proposals.map((proposal) => ({
     reviewerName: proposal.agentName,
     reviewerRole: 'reviewer',
     scores: meeting.sourceCandidates!.map((candidate) => ({

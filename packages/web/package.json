@@ -1,5 +1,5 @@
 {
-  "name": "@ai-office/web",
+  "name": "@clawhq/web",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@ai-office/shared": "*",
+    "@clawhq/shared": "*",
     "pixi.js": "^7.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",

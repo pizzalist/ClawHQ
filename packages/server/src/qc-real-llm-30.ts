@@ -208,7 +208,7 @@ async function run() {
   out.push(`- 요청→최종 결과물 일치: ${rows.filter(r => r.pass).length >= 24 ? 'PASS' : 'FAIL'}`);
   out.push(`- 취소/리셋/역할추가 동작: ${rows.find(r => r.id === 'P02')?.pass && rows.find(r => r.id === 'P03')?.pass && rows.find(r => r.id === 'P04')?.pass ? 'PASS' : 'FAIL'}`);
 
-  const path = '/home/noah/.openclaw/workspace/company/ai-office/app/QC_REAL_LLM_30.md';
+  const path = '/home/noah/.openclaw/workspace/company/clawhq/app/QC_REAL_LLM_30.md';
   writeFileSync(path, out.join('\n'));
   console.log(`✅ Wrote ${path}`);
   console.log(`PASS=${passCount}/30, AVG=${avg}`);

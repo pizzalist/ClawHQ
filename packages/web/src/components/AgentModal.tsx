@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { AGENT_ROLES, AGENT_MODELS, ROLE_LABELS } from '@ai-office/shared';
+import { AGENT_ROLES, AGENT_MODELS, ROLE_LABELS } from '@clawhq/shared';
 import Spinner from './Spinner';
 
 export default function AgentModal({ onClose }: { onClose: () => void }) {

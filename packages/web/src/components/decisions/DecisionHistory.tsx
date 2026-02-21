@@ -1,4 +1,4 @@
-import type { DecisionItem } from '@ai-office/shared';
+import type { DecisionItem } from '@clawhq/shared';
 
 const STATUS_STYLES: Record<string, { icon: string; text: string; bg: string }> = {
   approved: { icon: '✅', text: 'text-green-400', bg: 'bg-green-500/10' },

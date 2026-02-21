@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { generatePlanFromPrompt } from './chief-agent.js';
 import { decideNextRoleByIntent } from './task-queue.js';
-import type { DeliverableType } from '@ai-office/shared';
+import type { DeliverableType } from '@clawhq/shared';
 
 let passed = 0;
 let failed = 0;

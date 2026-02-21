@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
-import type { Task, Agent } from '@ai-office/shared';
+import type { Task, Agent } from '@clawhq/shared';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: '#6b7280',

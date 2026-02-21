@@ -1,10 +1,10 @@
 services:
-  ai-office:
+  clawhq:
     build: .
     ports:
       - "3001:3001"
     volumes:
-      - ai-office-data:/app/data
+      - clawhq-data:/app/data
       # Optional: mount OpenClaw config for live integration
       # - ~/.openclaw:/root/.openclaw:ro
     environment:
@@ -13,4 +13,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  ai-office-data:
+  clawhq-data:

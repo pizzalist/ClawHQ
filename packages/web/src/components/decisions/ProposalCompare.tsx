@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DecisionItem, Proposal, ReviewScore } from '@ai-office/shared';
+import type { DecisionItem, Proposal, ReviewScore } from '@clawhq/shared';
 import ReviewSummaryCard from './ReviewSummaryCard';
 
 interface Props {

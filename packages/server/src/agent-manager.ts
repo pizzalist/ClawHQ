@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
-import type { Agent, AgentRole, AgentModel, AgentState, AppEvent } from '@ai-office/shared';
-import { STATE_TRANSITIONS } from '@ai-office/shared';
+import type { Agent, AgentRole, AgentModel, AgentState, AppEvent } from '@clawhq/shared';
+import { STATE_TRANSITIONS } from '@clawhq/shared';
 import { stmts } from './db.js';
 
 type Listener = (event: AppEvent) => void;

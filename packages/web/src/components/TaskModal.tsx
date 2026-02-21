@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { ROLE_EMOJI, DELIVERABLE_LABELS } from '@ai-office/shared';
-import type { DeliverableType } from '@ai-office/shared';
+import { ROLE_EMOJI, DELIVERABLE_LABELS } from '@clawhq/shared';
+import type { DeliverableType } from '@clawhq/shared';
 import Spinner from './Spinner';
 
 const DELIVERABLE_TYPES: DeliverableType[] = ['web', 'report', 'code', 'api', 'design', 'data', 'document'];

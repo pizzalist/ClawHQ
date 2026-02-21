@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import type { Task, Deliverable } from '@ai-office/shared';
+import type { Task, Deliverable } from '@clawhq/shared';
 import LivePreview, { extractPreviewableCode, isPreviewable } from './LivePreview';
 import DeliverableList from './deliverables/DeliverableList';
 import { MarkdownContent } from '../lib/format/markdown';

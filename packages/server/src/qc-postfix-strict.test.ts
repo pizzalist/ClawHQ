@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { listAgents, createAgent, deleteAllAgents, resetAgent, listTestAgents, cleanupTestAgents, getAgent } from './agent-manager.js';
 import { listMeetings } from './meetings.js';
-import type { ChiefAction, ChiefChatMessage } from '@ai-office/shared';
+import type { ChiefAction, ChiefChatMessage } from '@clawhq/shared';
 import { approveProposal, __unsafeSetPendingProposalForTest, chatWithChief, getChiefMessages } from './chief-agent.js';
 import { listActiveChainPlans, listAllChainPlans, suggestChainPlan, markChainCompleted, cancelChainPlan, getChainPlanForTask } from './chain-plan.js';
 import { listTasks, createTask } from './task-queue.js';
@@ -646,5 +646,5 @@ if (failed > 0) {
 // Export results for report generation
 const resultJson = JSON.stringify(results, null, 2);
 import { writeFileSync } from 'node:fs';
-writeFileSync('/home/noah/.openclaw/workspace/company/ai-office/app/qc-postfix-strict-results.json', resultJson);
+writeFileSync('/home/noah/.openclaw/workspace/company/clawhq/app/qc-postfix-strict-results.json', resultJson);
 console.log('\nResults saved to qc-postfix-strict-results.json');

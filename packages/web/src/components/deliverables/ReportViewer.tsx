@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { Deliverable } from '@ai-office/shared';
+import type { Deliverable } from '@clawhq/shared';
 import { MarkdownContent } from '../../lib/format/markdown';
 
 interface Props {

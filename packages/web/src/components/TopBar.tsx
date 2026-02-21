@@ -72,7 +72,7 @@ export default function TopBar() {
                 const r = await fetch('/api/reset-all', { method: 'POST' });
                 if (r.ok) {
                   // Clear all app-related localStorage
-                  const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('ai-office'));
+                  const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('clawhq'));
                   keysToRemove.forEach(k => localStorage.removeItem(k));
                   // Force hard reload to reset all in-memory state
                   window.location.href = window.location.pathname;

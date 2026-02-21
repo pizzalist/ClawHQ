@@ -1,204 +1,130 @@
 <div align="center">
 
-# AI Office
+# ClawHQ
 
-### Plan, Execute, Decide, Review — your AI team operating system.
+### Your AI team, one office. Plan, execute, decide, review.
 
-AI Office is an open-source platform for running AI agents as a real team on top of OpenClaw.
-Not just task execution — decision history, failure timeline, and team-level observability.
+An open-source AI team operating system built on [OpenClaw](https://github.com/openclaw/openclaw).
+Not just task execution — full decision history, failure debugging, and team-level observability.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-![AI Office Dashboard](docs/media/main-dashboard.png)
-
-![AI Office Demo Flow](docs/media/demo-flow.gif)
+![ClawHQ Dashboard](docs/media/main-dashboard.png)
 
 </div>
 
 ---
 
-## Why AI Office?
+## 🤔 Why ClawHQ?
 
-Most agent tools can generate outputs.
-Few help teams answer:
+Most agent tools generate outputs. Few answer the questions that actually matter:
 
-- Who decided what?
-- Why did this fail?
-- Which task passed quality gate and why?
+- **Who decided what?** — Full decision audit trail with reviewer scorecards
+- **Why did this fail?** — Failure timeline for debugging operational issues
+- **Which task passed QC?** — Quality gates with traceability at every step
 
-AI Office focuses on **team operations**, not just single-shot generation.
-
----
-
-## What you get
-
-- Multi-agent team orchestration (PM / Dev / Reviewer)
-- Task chain workflow (plan → implement → review)
-- Chief chat for natural-language control
-- Decision / meeting / task history tracking
-- Failure timeline for debugging operational issues
-- Real-time office dashboard (agent states, task flow)
+ClawHQ focuses on **team operations** — not single-shot generation.
 
 ---
 
-## Runtime requirement (important)
+## ✨ Features
 
-- **Full mode (recommended): OpenClaw required**
-  - real agent orchestration
-  - real task execution chain quality
-- **Demo mode (fallback): OpenClaw optional**
-  - UI + simulated flow for product preview
-  - not equivalent to full production behavior
+- 🏢 **Isometric Office View** — PixiJS 2.5D office with agent sprites, desks, meeting room, and decorations
+- 🧠 **Chief Chat** — Natural language control, proactive check-ins, inline actions, notifications
+- 👥 **Multi-Agent Teams** — 6 roles: PM, Developer, Reviewer, Designer, DevOps, QA
+- ⛓️ **Chain Plans** — Editable task pipeline (plan → implement → review) with visual chain editor
+- 🏗️ **Team Presets** — Pre-configured team templates for common workflows
+- 📋 **13 Meeting Types** — brainstorm, planning, review, retrospective, kickoff, architecture, design, sprint-planning, estimation, demo, postmortem, code-review, daily
+- 🔬 **Tech Spec Meeting** — 4-panel discussion (CTO / Frontend Lead / Backend Lead / QA) with conflict detection and synthesis
+- ⚖️ **Decision System** — Proposal comparison, reviewer scorecards, Devil's Advocate, approve/revise/reject
+- 📦 **Deliverables** — 6 types (Web / Code / Report / Data / Document / API) with live preview
+- ⏪ **History Replay** — Event timeline playback for full session audit
+- 📊 **Monitoring Dashboard** — KPI metrics, time series charts, alert system
+- 🔥 **Failure Timeline** — Debug operational issues with full event context
+- 🏢 **Meeting Lineage** — Parent-child meeting relationships, candidate inheritance
 
-If your goal is real usage, connect/install OpenClaw.
+---
 
-## 5-minute quickstart
-
-### 1) Install
+## 🚀 Quickstart
 
 ```bash
-git clone <your-repo-url>
-cd app
+git clone https://github.com/pizzalist/Openclaw-ai-office.git
+cd Openclaw-ai-office/app
 npm install
-```
-
-### 2) Run
-
-```bash
 npm run demo:start
 ```
 
 `demo:start` behavior:
-- If OpenClaw exists: uses **full runtime mode** (real usage)
-- If OpenClaw is missing: tries auto-install (`npm install -g openclaw`)
-- If install fails: falls back to **demo mode** (preview only)
+- If OpenClaw is installed → **full runtime mode** (real agent orchestration)
+- If OpenClaw is missing → attempts auto-install, then falls back to **demo mode** (UI preview)
 
-(or `npm run dev` if you want raw logs immediately)
+Disable auto-install: `CLAWHQ_AUTO_INSTALL_OPENCLAW=0 npm run demo:start`
 
-Tip: disable auto-install with `AI_OFFICE_AUTO_INSTALL_OPENCLAW=0 npm run demo:start`
-
-### 3) Verify
-
-```bash
-npm run healthcheck
-```
-
-### 4) Seed demo fixture (optional but recommended)
-
-```bash
-npm run demo:fixture
-```
-
-### 5) Run scripted demo scenarios (optional)
-
-```bash
-npm run demo:scenarios
-```
-
-### 6) Generate latest demo report (optional)
-
-```bash
-npm run demo:report
-```
-
-### 7) Open
-
-- Web/API server: `http://localhost:3001`
+Open **http://localhost:3001** and try Chief Chat:
+1. `AI 챗봇 MVP 기획서 만들어줘` → PM creates a plan
+2. `응` → Dev implements, Reviewer evaluates
+3. `확정` → Decision finalized, visible in dashboard
 
 ---
 
-## First demo scenario (30~60s)
+## ⚙️ Runtime
 
-Try this in Chief chat:
-
-1. `AI 챗봇 MVP 기획서 만들어줘`
-2. `응`
-3. wait for execution
-4. `확정`
-
-Expected:
-
-- PM creates plan
-- Dev implements
-- Reviewer evaluates
-- final result + history are visible in dashboard
+- **Full mode (recommended):** [OpenClaw](https://github.com/openclaw/openclaw) required — real agent orchestration, task execution, quality gates
+- **Demo mode (fallback):** OpenClaw optional — UI + simulated flow for product preview
 
 ---
 
-## Product positioning
+## 🏗️ Architecture
 
-AI Office is **not** a code-only assistant.
-It is an **AI Team Operating System** for:
-
-- execution visibility
-- decision traceability
-- operational quality control
-
----
-
-## Architecture (high-level)
-
-- Frontend: React + PixiJS + Zustand
-- Backend: Express + WebSocket + SQLite
-- Runtime orchestration: OpenClaw sessions
-
-Flow:
+```
+Frontend: React + PixiJS + Zustand
+Backend:  Express + WebSocket + SQLite
+Runtime:  OpenClaw sessions
 
 UI ↔ WebSocket/API ↔ Task Queue ↔ Agent Runtime ↔ Results/Events
+```
+
+**Tech Stack:** React · PixiJS · Zustand · Express · WebSocket · SQLite · TypeScript
 
 ---
 
-## Project structure
+## 📁 Project Structure
 
 ```text
 app/
 ├── packages/
 │   ├── web/      # React + PixiJS UI
 │   ├── server/   # Express + task orchestration + DB
-│   └── shared/   # shared types
-├── scripts/
+│   └── shared/   # Shared types
+├── scripts/      # Demo, fixture, healthcheck scripts
+├── docs/         # Scenarios, release notes, checklists
 ├── README.md
 └── package.json
 ```
 
 ---
 
-## Demo artifacts
+## 🤝 Contributing
 
-- Scenario script: `docs/demo-scenarios.md`
-- Latest demo report: `docs/demo-latest-report.md`
-- Launch checklist: `docs/launch-day-checklist.md`
-- Good first issues: `docs/good-first-issues.md`
-
----
-
-## Current status
-
-- Core E2E flow is operational
-- 10-scenario pipeline executed with completed outputs
-- Remaining focus: consistency hardening, UX polish, contributor onboarding
-
----
-
-## Contributing
-
-PRs are welcome.
+PRs welcome! Good starting points:
 
 - Fix bugs and add tests
 - Improve scenario templates
-- Improve docs and onboarding
 - Add observability and quality gates
-
-If you want a good starting point, search issues tagged `good first issue`.
+- Improve docs and onboarding
 
 ---
 
-## License
+## 📄 License
 
 MIT
 
 ---
 
+<div align="center">
+
 If this project is useful, consider giving it a ⭐
+
+</div>

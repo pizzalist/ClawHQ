@@ -6,7 +6,7 @@
 import { handleChiefAction, chatWithChief, getChiefMessages, approveProposal, __unsafeSetPendingProposalForTest } from './chief-agent.js';
 import { listMeetings, getMeeting, startPlanningMeeting, createMeeting, extractCandidatesFromMeeting, getChildMeetings, buildReviewScoringReport } from './meetings.js';
 import { listAgents, createAgent } from './agent-manager.js';
-import type { ChiefAction, MeetingCandidate } from '@ai-office/shared';
+import type { ChiefAction, MeetingCandidate } from '@clawhq/shared';
 
 let pass = 0;
 let fail = 0;
@@ -126,7 +126,7 @@ test('T09: sourceCandidates are bounded (no full text leak)', () => {
 console.log('\n--- D) Decision Packet ---');
 
 test('T10: DecisionPacket type structure', () => {
-  const packet: import('@ai-office/shared').DecisionPacket = {
+  const packet: import('@clawhq/shared').DecisionPacket = {
     reviewerScoreCards: [{
       reviewerName: 'R1', reviewerRole: 'reviewer',
       scores: [{ candidateName: 'A', score: 8, weight: 1, rationale: 'good' }],

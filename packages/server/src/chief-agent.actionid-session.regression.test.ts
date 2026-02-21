@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { ChiefAction } from '@ai-office/shared';
+import type { ChiefAction } from '@clawhq/shared';
 import { stmts } from './db.js';
 import { createAgent, deleteAllAgents, listAgents } from './agent-manager.js';
 import { startPlanningMeeting } from './meetings.js';

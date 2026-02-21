@@ -1,6 +1,6 @@
 # Demo Scenarios (Run in Chief Chat)
 
-Use these scripts to show AI Office value quickly.
+Use these scripts to show ClawHQ value quickly.
 
 ## Scenario 1 — Product planning chain
 

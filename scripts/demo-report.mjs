@@ -2,8 +2,8 @@
 
 import { writeFile } from 'node:fs/promises';
 
-const baseUrl = process.env.AI_OFFICE_URL || 'http://localhost:3001';
-const outPath = process.env.AI_OFFICE_REPORT_PATH || 'docs/demo-latest-report.md';
+const baseUrl = process.env.CLAWHQ_URL || 'http://localhost:3001';
+const outPath = process.env.CLAWHQ_REPORT_PATH || 'docs/demo-latest-report.md';
 
 async function call(path) {
   const res = await fetch(`${baseUrl}${path}`);

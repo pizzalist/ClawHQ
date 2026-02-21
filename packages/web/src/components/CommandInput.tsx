@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import Spinner from './Spinner';
-import { detectDeliverableType, DELIVERABLE_LABELS, type DeliverableType } from '@ai-office/shared';
+import { detectDeliverableType, DELIVERABLE_LABELS, type DeliverableType } from '@clawhq/shared';
 
 const ALL_TYPES: DeliverableType[] = ['web', 'report', 'code', 'data', 'design', 'document'];
 

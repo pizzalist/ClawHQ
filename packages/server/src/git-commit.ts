@@ -8,17 +8,17 @@ import { execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { Deliverable, DeliverableType } from '@ai-office/shared';
+import type { Deliverable, DeliverableType } from '@clawhq/shared';
 import { getDeliverable, listDeliverablesByTask } from './deliverables.js';
 import { stmts } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Default output repo path — can be overridden via AI_OFFICE_REPO_PATH env */
+/** Default output repo path — can be overridden via CLAWHQ_REPO_PATH env */
 const DEFAULT_REPO_PATH = path.join(__dirname, '..', 'output-repo');
 
 function getRepoPath(): string {
-  return process.env.AI_OFFICE_REPO_PATH || DEFAULT_REPO_PATH;
+  return process.env.CLAWHQ_REPO_PATH || DEFAULT_REPO_PATH;
 }
 
 /** File extension mapping by deliverable type + language */
@@ -93,12 +93,12 @@ function ensureRepo(): string {
 
   if (!existsSync(path.join(repoPath, '.git'))) {
     execFileSync('git', ['init'], { cwd: repoPath, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.name', 'AI Office'], { cwd: repoPath, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.email', 'ai-office@localhost'], { cwd: repoPath, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'ClawHQ'], { cwd: repoPath, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 'clawhq@localhost'], { cwd: repoPath, stdio: 'pipe' });
     // Initial commit
-    writeFileSync(path.join(repoPath, 'README.md'), '# AI Office Output Repository\n\nAuto-committed deliverables from AI Office agents.\n');
+    writeFileSync(path.join(repoPath, 'README.md'), '# ClawHQ Output Repository\n\nAuto-committed deliverables from ClawHQ agents.\n');
     execFileSync('git', ['add', '.'], { cwd: repoPath, stdio: 'pipe' });
-    execFileSync('git', ['commit', '-m', 'init: AI Office output repository'], { cwd: repoPath, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'init: ClawHQ output repository'], { cwd: repoPath, stdio: 'pipe' });
   }
 
   return repoPath;

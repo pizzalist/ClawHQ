@@ -1,7 +1,7 @@
 import { Component, useEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { useStore } from '../store';
-import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, ChiefInlineAction, Meeting } from '@ai-office/shared';
+import type { ChiefAction, ChiefCheckIn, ChiefNotification, ChiefChatMessage, ChiefInlineAction, Meeting } from '@clawhq/shared';
 import { MarkdownContent } from '../lib/format/markdown';
 import ChainPlanEditor from './ChainPlanEditor';
 
