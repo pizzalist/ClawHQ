@@ -50,8 +50,8 @@ ClawHQ focuses on **team operations** — not single-shot generation.
 ## 🚀 Quickstart
 
 ```bash
-git clone https://github.com/pizzalist/Openclaw-ai-office.git
-cd Openclaw-ai-office/app
+git clone https://github.com/pizzalist/ClawHQ.git
+cd ClawHQ/app
 npm install
 npm run demo:start
 ```
