@@ -972,10 +972,10 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     emitCheckIn({
       id: `checkin-chain-${event.taskId}-${Date.now()}`,
       stage: 'progress',
-      message: `🔗 **추천:** 다음 단계로 진행하는 것을 권장합니다.\n현재 단계 결과를 바탕으로 자동 시작했습니다. 원치 않으면 멈출 수 있습니다.\n\n${event.message}`,
+      message: L(lang, `🔗 **Recommendation:** Proceeding to the next step.\nAuto-started based on current step results. You can stop if needed.\n\n${event.message}`, `🔗 **추천:** 다음 단계로 진행하는 것을 권장합니다.\n현재 단계 결과를 바탕으로 자동 시작했습니다. 원치 않으면 멈출 수 있습니다.\n\n${event.message}`),
       options: [
-        { id: 'ok', label: '👍 계속 진행', description: '자동 체인 진행을 유지합니다' },
-        { id: 'pause', label: '⏸️ 멈춤', description: '현재 체인을 일시중지합니다' },
+        { id: 'ok', label: L(lang, '👍 Continue', '👍 계속 진행'), description: L(lang, 'Keep auto-chain running', '자동 체인 진행을 유지합니다') },
+        { id: 'pause', label: L(lang, '⏸️ Pause', '⏸️ 멈춤'), description: L(lang, 'Pause the current chain', '현재 체인을 일시중지합니다') },
       ],
       taskId: event.taskId,
       createdAt: new Date().toISOString(),
@@ -1111,8 +1111,8 @@ export function chiefHandleTaskEvent(event: AppEvent) {
         `❌ [Task Failed] "${task.title}"\nAssigned: ${assignee?.name || 'Unassigned'} (${assignee?.role || '-'})\nError: ${(task.result || event.message || 'Unknown error').slice(0, 200)}`,
         `❌ [태스크 실패] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n오류: ${(task.result || event.message || '알 수 없는 오류').slice(0, 200)}`),
       actions: [
-        { id: `view-${event.taskId}`, label: '📄 상세 보기', action: 'view_result', params: { taskId: event.taskId } },
-        { id: `retry-${event.taskId}`, label: '🔄 재시도', action: 'custom', params: { taskId: event.taskId, command: 'retry' } },
+        { id: `view-${event.taskId}`, label: L(lang, '📄 View Details', '📄 상세 보기'), action: 'view_result', params: { taskId: event.taskId } },
+        { id: `retry-${event.taskId}`, label: L(lang, '🔄 Retry', '🔄 재시도'), action: 'custom', params: { taskId: event.taskId, command: 'retry' } },
       ],
       taskId: event.taskId,
       createdAt: new Date().toISOString(),
@@ -1812,7 +1812,7 @@ function classifyIntent(userMessage: string): 'status' | 'other' {
 function toConciseModeReply(userMessage: string, reply: string): string {
   const intent = classifyIntent(userMessage);
   const normalized = (reply || '').replace(/\n{3,}/g, '\n\n').trim();
-  if (!normalized) return '처리가 완료되었습니다.';
+  if (!normalized) return 'Processing complete.';
 
   if (intent === 'status') {
     const oneLine = normalized.split('\n').map(s => s.trim()).filter(Boolean).join(' ');
@@ -2019,6 +2019,7 @@ function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { par
 /** Execute a single parsed action. Called only after user approval. */
 function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
   console.log(`[chief] executeAction: type=${action.type}, params=${JSON.stringify(action.params).slice(0, 200)}`);
+  const lang = getSessionLang(sessionId);
   try {
     switch (action.type) {
       case 'create_task': {
@@ -2057,7 +2058,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         // Check for duplicate task
         const duplicate = allTasks.find(t => t.title === taskTitle && (t.status === 'in-progress' || t.status === 'pending'));
         if (duplicate) {
-          return { ...action, result: { ok: false, message: `동일한 작업 "${taskTitle}"이(가) 이미 진행 중입니다 (ID: ${duplicate.id.slice(0, 8)})` } };
+          return { ...action, result: { ok: false, message: L(lang, `Duplicate task "${taskTitle}" is already in progress (ID: ${duplicate.id.slice(0, 8)})`, `동일한 작업 "${taskTitle}"이(가) 이미 진행 중입니다 (ID: ${duplicate.id.slice(0, 8)})`) } };
         }
 
         // Auto-attach original code + review feedback for fix tasks
@@ -2125,7 +2126,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
 
         return { ...action, result: {
           ok: true,
-          message: `작업 "${task.title}" 생성됨 (taskId: ${task.id}, runId: pending)\n\n📋 추천 체인 (${plan.steps.length}단계):\n${planSummary}\n\n필요하면 단계 추가/삭제/순서 변경 후 확정하세요.`,
+          message: L(lang, `Task "${task.title}" created (taskId: ${task.id}, runId: pending)\n\n📋 Recommended chain (${plan.steps.length} steps):\n${planSummary}\n\nYou can add/remove/reorder steps before confirming.`, `작업 "${task.title}" 생성됨 (taskId: ${task.id}, runId: pending)\n\n📋 추천 체인 (${plan.steps.length}단계):\n${planSummary}\n\n필요하면 단계 추가/삭제/순서 변경 후 확정하세요.`),
           id: task.id,
         }};
       }
@@ -2135,7 +2136,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
         const safeName = name || suggestFriendlyAgentName(agentRole);
         const agent = createAgent(safeName, agentRole, agentModel);
-        return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 생성됨`, id: agent.id } };
+        return { ...action, result: { ok: true, message: L(lang, `Agent "${agent.name}" created`, `에이전트 "${agent.name}" 생성됨`), id: agent.id } };
       }
       case 'start_meeting': {
         const { title, participants, character, participantCount: participantCountRaw } = action.params;
@@ -2145,7 +2146,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
             ...action,
             result: {
               ok: false,
-              message: '점수화 리뷰 미팅은 sourceCandidates가 필요합니다. 완료된 기획/브레인스토밍 미팅에서 "후보 순위 평가" 버튼으로 생성해주세요.',
+              message: L(lang, 'Scoring review meetings require sourceCandidates. Please create one via the "Rank Candidates" button from a completed planning/brainstorming meeting.', '점수화 리뷰 미팅은 sourceCandidates가 필요합니다. 완료된 기획/브레인스토밍 미팅에서 "후보 순위 평가" 버튼으로 생성해주세요.'),
             },
           };
         }
@@ -2183,7 +2184,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         }
 
         if (participantIds.length < 2) {
-          return { ...action, result: { ok: false, message: '미팅 참여자 자동 구성 실패 (최소 2명 필요)' } };
+          return { ...action, result: { ok: false, message: L(lang, 'Failed to auto-configure meeting participants (minimum 2 required)', '미팅 참여자 자동 구성 실패 (최소 2명 필요)') } };
         }
 
         // Build contextual description from recent session messages
@@ -2217,54 +2218,54 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         );
 
         const createdMsg = createdAgentNames.length > 0
-          ? ` (부족 인원 자동 생성: ${createdAgentNames.join(', ')})`
+          ? L(lang, ` (auto-created to fill shortage: ${createdAgentNames.join(', ')})`, ` (부족 인원 자동 생성: ${createdAgentNames.join(', ')})`)
           : '';
 
-        return { ...action, result: { ok: true, message: `미팅 "${meeting.title}" 시작됨${createdMsg}`, id: meeting.id } };
+        return { ...action, result: { ok: true, message: L(lang, `Meeting "${meeting.title}" started${createdMsg}`, `미팅 "${meeting.title}" 시작됨${createdMsg}`), id: meeting.id } };
       }
       case 'assign_task': {
         const taskId = normalizeTaskId(action.params.taskId);
         const agentId = String(action.params.agentId ?? '').trim();
         if (!taskId || !agentId) {
-          return { ...action, result: { ok: false, message: 'taskId와 agentId가 필요합니다' } };
+          return { ...action, result: { ok: false, message: L(lang, 'taskId and agentId are required', 'taskId와 agentId가 필요합니다') } };
         }
         if (isTaskIdPlaceholder(taskId)) {
-          return { ...action, result: { ok: false, message: 'taskId placeholder는 실행할 수 없습니다. create_task의 실제 id를 사용하세요.' } };
+          return { ...action, result: { ok: false, message: L(lang, 'Cannot execute a taskId placeholder. Use the actual id from create_task.', 'taskId placeholder는 실행할 수 없습니다. create_task의 실제 id를 사용하세요.') } };
         }
 
         const task = stmts.getTask.get(taskId) as any;
         if (!task) {
-          return { ...action, result: { ok: false, message: `작업을 찾을 수 없습니다: ${taskId}` } };
+          return { ...action, result: { ok: false, message: L(lang, `Task not found: ${taskId}`, `작업을 찾을 수 없습니다: ${taskId}`) } };
         }
 
         const agent = stmts.getAgent.get(agentId) as any;
         if (!agent) {
-          return { ...action, result: { ok: false, message: `에이전트를 찾을 수 없습니다: ${agentId}` } };
+          return { ...action, result: { ok: false, message: L(lang, `Agent not found: ${agentId}`, `에이전트를 찾을 수 없습니다: ${agentId}`) } };
         }
 
         if (task.status === 'in-progress') {
-          return { ...action, result: { ok: false, message: '진행 중 작업은 재배정할 수 없습니다. 먼저 중지/취소 후 재배정하세요.' } };
+          return { ...action, result: { ok: false, message: L(lang, 'Cannot reassign an in-progress task. Stop/cancel it first.', '진행 중 작업은 재배정할 수 없습니다. 먼저 중지/취소 후 재배정하세요.') } };
         }
 
         stmts.updateTask.run(agentId, 'pending', task.result || null, taskId);
         setTimeout(() => processQueue(), 100);
-        return { ...action, result: { ok: true, message: `작업 "${task.title}"를 ${agent.name}에게 배정했습니다. (taskId: ${taskId}, runId: pending)` } };
+        return { ...action, result: { ok: true, message: L(lang, `Task "${task.title}" assigned to ${agent.name}. (taskId: ${taskId}, runId: pending)`, `작업 "${task.title}"를 ${agent.name}에게 배정했습니다. (taskId: ${taskId}, runId: pending)`) } };
       }
       case 'cancel_task': {
         const taskId = normalizeTaskId(action.params.taskId);
         if (!taskId) {
-          return { ...action, result: { ok: false, message: 'taskId가 필요합니다' } };
+          return { ...action, result: { ok: false, message: L(lang, 'taskId is required', 'taskId가 필요합니다') } };
         }
         const task = stmts.getTask.get(taskId) as any;
         if (!task) {
-          return { ...action, result: { ok: false, message: `작업을 찾을 수 없습니다: ${taskId}` } };
+          return { ...action, result: { ok: false, message: L(lang, `Task not found: ${taskId}`, `작업을 찾을 수 없습니다: ${taskId}`) } };
         }
         // Kill running agent process if in-progress
         if (task.status === 'in-progress' && task.session_id) {
           killAgentRun(task.session_id);
         }
         stmts.cancelTask.run(taskId);
-        return { ...action, result: { ok: true, message: `작업 "${task.title}" 취소됨` } };
+        return { ...action, result: { ok: true, message: L(lang, `Task "${task.title}" cancelled`, `작업 "${task.title}" 취소됨`) } };
       }
       case 'cancel_all_pending': {
         // Also kill in-progress tasks
@@ -2281,14 +2282,14 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
       case 'reset_agent': {
         const { agentId } = action.params;
         if (!agentId) {
-          return { ...action, result: { ok: false, message: 'agentId가 필요합니다' } };
+          return { ...action, result: { ok: false, message: L(lang, 'agentId is required', 'agentId가 필요합니다') } };
         }
         const agent = stmts.getAgent.get(agentId) as any;
         if (!agent) {
-          return { ...action, result: { ok: false, message: `에이전트를 찾을 수 없습니다: ${agentId}` } };
+          return { ...action, result: { ok: false, message: L(lang, 'Agent not found', '에이전트를 찾을 수 없습니다') } };
         }
         stmts.updateAgentState.run('idle', null, null, agentId);
-        return { ...action, result: { ok: true, message: `에이전트 "${agent.name}" 상태 초기화됨` } };
+        return { ...action, result: { ok: true, message: L(lang, `Agent "${agent.name}" state reset`, `에이전트 "${agent.name}" 상태 초기화됨`) } };
       }
       case 'confirm_meeting': {
         // Confirm/approve a completed meeting and trigger next steps
@@ -2300,7 +2301,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
           )[0];
           if (!latestCompleted) {
-            return { ...action, result: { ok: false, message: '확정할 완료된 미팅이 없습니다' } };
+            return { ...action, result: { ok: false, message: L(lang, 'No completed meeting to confirm', '확정할 완료된 미팅이 없습니다') } };
           }
           // Delegate to handleChiefAction with a synthetic notification
           const notifId = `synthetic-confirm-${latestCompleted.id}-${Date.now()}`;
@@ -2314,7 +2315,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           meeting = allMeetings.find(m => m.id.startsWith(meetingId)) || null;
         }
         if (!meeting) {
-          return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+          return { ...action, result: { ok: false, message: L(lang, `Meeting not found: ${meetingId}`, `미팅을 찾을 수 없습니다: ${meetingId}`) } };
         }
         const resolvedMeetingId = meeting.id;
         const notifId = `synthetic-confirm-${resolvedMeetingId}-${Date.now()}`;
@@ -2330,7 +2331,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
             m.status === 'completed' && (m.character === 'brainstorm' || m.character === 'planning') && !m.sourceMeetingId
           ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
           if (!latestBrainstorm) {
-            return { ...action, result: { ok: false, message: '리뷰할 미팅이 없습니다' } };
+            return { ...action, result: { ok: false, message: L(lang, 'No meeting to review', '리뷰할 미팅이 없습니다') } };
           }
           const notifId = `synthetic-review-${latestBrainstorm.id}-${Date.now()}`;
           const r = handleChiefAction(notifId, `start-review-${latestBrainstorm.id}`, { meetingId: latestBrainstorm.id }, sessionId);
@@ -2342,7 +2343,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           const allMeetings = listMeetings();
           const found = allMeetings.find(m => m.id.startsWith(meetingId));
           if (found) resolvedId = found.id;
-          else return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+          else return { ...action, result: { ok: false, message: L(lang, `Meeting not found: ${meetingId}`, `미팅을 찾을 수 없습니다: ${meetingId}`) } };
         }
         const notifId = `synthetic-review-${resolvedId}-${Date.now()}`;
         const r = handleChiefAction(notifId, `start-review-${resolvedId}`, { meetingId: resolvedId }, sessionId);
@@ -2357,7 +2358,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
           )[0];
           if (!latestCompleted) {
-            return { ...action, result: { ok: false, message: '확정할 완료된 태스크가 없습니다' } };
+            return { ...action, result: { ok: false, message: L(lang, 'No completed task to confirm', '확정할 완료된 태스크가 없습니다') } };
           }
           const notifId = `synthetic-confirm-task-${latestCompleted.id}-${Date.now()}`;
           const result = handleChiefAction(notifId, `approve-${latestCompleted.id}`, { taskId: latestCompleted.id }, sessionId);
@@ -2371,7 +2372,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
       case 'delete_meeting': {
         const { meetingId } = action.params;
         if (!meetingId) {
-          return { ...action, result: { ok: false, message: 'meetingId가 필요합니다' } };
+          return { ...action, result: { ok: false, message: L(lang, 'meetingId is required', 'meetingId가 필요합니다') } };
         }
         let meeting = getMeeting(meetingId);
         if (!meeting) {
@@ -2380,14 +2381,14 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           meeting = allMeetings.find(m => m.id.startsWith(meetingId)) || null;
         }
         if (!meeting) {
-          return { ...action, result: { ok: false, message: `미팅을 찾을 수 없습니다: ${meetingId}` } };
+          return { ...action, result: { ok: false, message: L(lang, `Meeting not found: ${meetingId}`, `미팅을 찾을 수 없습니다: ${meetingId}`) } };
         }
         const deleted = deleteMeeting(meeting.id);
-        return { ...action, result: { ok: deleted, message: deleted ? `미팅 "${meeting.title}" 삭제됨` : '미팅 삭제 실패' } };
+        return { ...action, result: { ok: deleted, message: deleted ? L(lang, `Meeting "${meeting.title}" deleted`, `미팅 "${meeting.title}" 삭제됨`) : L(lang, 'Failed to delete meeting', '미팅 삭제 실패') } };
       }
       case 'delete_all_meetings': {
         const count = deleteAllMeetings();
-        return { ...action, result: { ok: true, message: `미팅 ${count}건 삭제됨` } };
+        return { ...action, result: { ok: true, message: L(lang, `${count} meeting(s) deleted`, `미팅 ${count}건 삭제됨`) } };
       }
       case 'view_task_result': {
         const { taskId } = action.params;
@@ -2395,11 +2396,11 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         const task = taskId
           ? tasks.find(t => t.id === taskId || t.id.startsWith(taskId))
           : tasks.filter(t => t.status === 'completed').sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
-        if (!task) return { ...action, result: { ok: false, message: '태스크를 찾을 수 없습니다' } };
-        return { ...action, result: { ok: true, message: `📋 "${task.title}" 결과:\n\n${task.result || '결과 없음'}` } };
+        if (!task) return { ...action, result: { ok: false, message: L(lang, 'Task not found', '태스크를 찾을 수 없습니다') } };
+        return { ...action, result: { ok: true, message: `📋 "${task.title}" ${L(lang, 'result', '결과')}:\n\n${task.result || L(lang, 'No result', '결과 없음')}` } };
       }
       default:
-        return { ...action, result: { ok: false, message: `알 수 없는 액션: ${action.type}` } };
+        return { ...action, result: { ok: false, message: L(lang, `Unknown action: ${action.type}`, `알 수 없는 액션: ${action.type}`) } };
     }
   } catch (err: unknown) {
     return { ...action, result: { ok: false, message: err instanceof Error ? err.message : String(err) } };
@@ -2430,6 +2431,7 @@ export function approveProposal(
   }
 
   const scopedSessionId = (sessionId || lastActiveChiefSessionId || 'chief-default').trim() || 'chief-default';
+  const lang = getSessionLang(scopedSessionId);
 
   const continueOnError = options?.continueOnError === true;
   const base = overrideActions && overrideActions.length > 0 ? overrideActions : actions;
@@ -2470,7 +2472,7 @@ export function approveProposal(
     pushMessage(scopedSessionId, {
       id: `exec-start-${Date.now()}-${i}`,
       role: 'chief',
-      content: `⏳ ${stepLabel} 실행 중: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`,
+      content: L(lang, `⏳ ${stepLabel} Executing: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`, `⏳ ${stepLabel} 실행 중: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`),
       createdAt: new Date().toISOString(),
     });
 
@@ -2487,13 +2489,13 @@ export function approveProposal(
       id: `exec-result-${Date.now()}-${i}`,
       role: 'chief',
       content: ok
-        ? `✅ ${stepLabel} 완료: ${executed.result!.message}`
-        : `❌ ${stepLabel} 실패: ${executed.result?.message || '알 수 없는 오류'}`,
+        ? L(lang, `✅ ${stepLabel} Done: ${executed.result!.message}`, `✅ ${stepLabel} 완료: ${executed.result!.message}`)
+        : L(lang, `❌ ${stepLabel} Failed: ${executed.result?.message || 'Unknown error'}`, `❌ ${stepLabel} 실패: ${executed.result?.message || '알 수 없는 오류'}`),
       createdAt: new Date().toISOString(),
     });
 
     if (!ok && !continueOnError) {
-      stoppedReason = `${stepLabel} 실패로 인해 후속 액션 중단 (${executed.result?.message || '알 수 없는 오류'})`;
+      stoppedReason = L(lang, `${stepLabel} Failed — subsequent actions stopped (${executed.result?.message || 'Unknown error'})`, `${stepLabel} 실패로 인해 후속 액션 중단 (${executed.result?.message || '알 수 없는 오류'})`);
       stopIndex = i;
       break;
     }
@@ -3073,13 +3075,13 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
           const autoExecTypes = new Set(['start_review', 'view_task_result', 'confirm_meeting', 'confirm_task']);
           const allAutoExec = proposedActions.length > 0 && proposedActions.every(a => autoExecTypes.has(a.type));
           if (allAutoExec) {
-            const results: string[] = [`⚡ 즉시 실행 — ${proposedActions.length}건`];
+            const results: string[] = [L(lang, `⚡ Auto-executing — ${proposedActions.length} action(s)`, `⚡ 즉시 실행 — ${proposedActions.length}건`)];
             for (const action of proposedActions) {
               try {
                 const r = executeAction(action, sessionId);
-                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || '완료'}`);
+                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || L(lang, 'Done', '완료')}`);
               } catch (e) {
-                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : '실패'}`);
+                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
               }
             }
             const autoReply = `${cleanText ? cleanText + '\n\n' : ''}${results.join('\n')}`;
@@ -3100,13 +3102,13 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
           const allCancelActions = proposedActions.length > 0 && proposedActions.every(a => a.type === 'cancel_task' || a.type === 'cancel_all_pending' || a.type === 'cancel_meeting');
           if (isEmergencyStop && allCancelActions) {
             // Execute immediately without approval
-            const results: string[] = [`🛑 긴급 중지 — ${proposedActions.length}건 즉시 실행`];
+            const results: string[] = [L(lang, `🛑 Emergency stop — executing ${proposedActions.length} action(s) immediately`, `🛑 긴급 중지 — ${proposedActions.length}건 즉시 실행`)];
             for (const action of proposedActions) {
               try {
                 const r = executeAction(action, sessionId);
-                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || '완료'}`);
+                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || L(lang, 'Done', '완료')}`);
               } catch (e) {
-                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : '실패'}`);
+                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
               }
             }
             const emergencyReply = results.join('\n');
@@ -3123,7 +3125,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
             return;
           }
 
-          const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
+          const conciseBaseReply = toConciseModeReply(userMessage, cleanText || L(lang, 'Processing complete.', '처리가 완료되었습니다.'));
           const compactActionList = proposedActions.length > 5
             ? L(language, `\n\n${proposedActions.length} proposed actions ready. Approve to execute in order.`, `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`)
             : formatActionList(proposedActions, language);
