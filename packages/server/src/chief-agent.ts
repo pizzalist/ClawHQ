@@ -1547,6 +1547,12 @@ Decision actions:
 - When user says "review", "score", "evaluate candidates", suggest start_review.
 - view_task_result: Retrieve and display detailed results of a completed task
 
+Cancel/Stop actions:
+- cancel_task: Cancel a specific task (works for both pending AND in-progress tasks, kills running agent)
+- cancel_all_pending: Cancel ALL tasks (pending + in-progress) and kill running agents
+- cancel_meeting / delete_meeting / delete_all_meetings: Remove meetings
+- When user says "stop", "cancel", "kill", "종료", "멈춰", "전체 종료", "stop all", etc., ALWAYS include the appropriate cancel/delete ACTION tags. Do not just describe what to do — emit the action tags so they can be executed.
+
 Available roles: pm, developer, reviewer, designer, devops, qa
 Available models: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
 Available characters: brainstorm, planning, review, retrospective, kickoff, architecture, design, sprint-planning, estimation, demo, postmortem, code-review, daily
@@ -1677,6 +1683,12 @@ ${state}
 - 사용자가 "리뷰", "점수화", "후보 평가" 등을 말하면 start_review를 제안하세요.
 - view_task_result: 완료된 태스크의 상세 결과를 조회하여 사용자에게 보여줌
 
+취소/종료 액션:
+- cancel_task: 특정 태스크 취소 (대기 + 진행중 모두 가능, 실행 중인 에이전트 프로세스도 종료)
+- cancel_all_pending: 전체 태스크 취소 (대기 + 진행중 모두 종료)
+- cancel_meeting / delete_meeting / delete_all_meetings: 미팅 삭제
+- 사용자가 "종료", "멈춰", "취소", "전체 종료", "stop", "kill" 등을 말하면 반드시 적절한 cancel/delete ACTION 태그를 포함하세요. 설명만 하지 말고 실행 가능한 액션 태그를 반드시 출력하세요.
+
 사용 가능한 role: pm, developer, reviewer, designer, devops, qa
 사용 가능한 model: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
 사용 가능한 character: brainstorm, planning, review, retrospective, kickoff, architecture, design, sprint-planning, estimation, demo, postmortem, code-review, daily
@@ -1783,21 +1795,16 @@ function recommendStartRoleFromIntent(title: string, description: string, explic
   return 'pm';
 }
 
-function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'definition' | 'other' {
+function classifyIntent(userMessage: string): 'status' | 'other' {
   const msg = (userMessage || '').toLowerCase();
 
-  // Keep status detection strict to avoid misclassifying normal requests.
+  // Only detect read-only status queries for fast synchronous response.
+  // Everything else goes to LLM for flexible intent handling.
   const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|상태\s*확인|진행\s*중(이야|인가|이냐)?|진행중\??|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|결과\s*(나왔|는\??|어때\??)?|다\s*됐(어|나|니)?\??|아직(이야|이냐|인가)?\??|끝났(어|나|니)?\??|완료\s*됐(어|나|니)?\??|언제\s*(줘|돼|됨|끝나)|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
-  const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소|종료|stop|kill|중지|멈춰|끝내|abort|terminate|shut\s*down)/i.test(msg);
+  const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|종료|stop|kill|중지|멈춰|끝내)/i.test(msg);
 
   if (readOnlyStatusLike && !mutationLike) {
     return 'status';
-  }
-  if (mutationLike) {
-    return 'simple_action';
-  }
-  if (/(설명|요약|원칙|기준|체크리스트|절차|포인트|가능\s*여부|몇\s*개|\d+\s*줄)/i.test(msg)) {
-    return 'definition';
   }
   return 'other';
 }
@@ -1812,21 +1819,7 @@ function toConciseModeReply(userMessage: string, reply: string): string {
     return oneLine.slice(0, 180);
   }
 
-  if (intent === 'simple_action') {
-    const lines = normalized.split('\n').map(s => s.trim()).filter(Boolean);
-    const picked: string[] = [];
-    for (const line of lines) {
-      picked.push(line);
-      if (/[?]|승인|진행할까요|실행할까요/.test(line) || picked.length >= 2) break;
-    }
-    return picked.join(' ');
-  }
-
-  if (intent === 'definition') {
-    const lines = normalized.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 4);
-    return lines.join('\n');
-  }
-
+  // Let LLM handle response formatting for all other intents
   return normalized;
 }
 
@@ -1867,8 +1860,8 @@ function buildMonitoringReply(userMessage: string): string {
   return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건이며, 에이전트는 ${agents.length}명입니다${latestProgress ? ` (진행중: ${latestProgress})` : ''}.`;
 }
 
-function shouldSuppressActionsByIntent(intent: 'status' | 'simple_action' | 'definition' | 'other'): boolean {
-  return intent === 'status' || intent === 'definition';
+function shouldSuppressActionsByIntent(intent: 'status' | 'other'): boolean {
+  return intent === 'status';
 }
 
 function shouldAutoSuggestMeeting(userMessage: string): boolean {
@@ -2986,7 +2979,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
 
   const ruleIntent = classifyIntent(userMessage);
   const inDemoMode = isDemoMode();
-  const intent: 'status' | 'simple_action' | 'definition' | 'other' = inDemoMode ? ruleIntent : 'other';
+  const intent: 'status' | 'other' = inDemoMode ? ruleIntent : 'other';
 
   // Always handle read-only status queries synchronously so they are never misrouted as amendments/actions.
   if (ruleIntent === 'status') {
@@ -3131,7 +3124,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
           }
 
           const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
-          const compactActionList = intent === 'simple_action' && proposedActions.length > 2
+          const compactActionList = proposedActions.length > 5
             ? L(language, `\n\n${proposedActions.length} proposed actions ready. Approve to execute in order.`, `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`)
             : formatActionList(proposedActions, language);
           const batchHint = batchId
