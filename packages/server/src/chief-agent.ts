@@ -797,6 +797,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             L(lang, `[Review] ${sourceMeeting.title}`, `[리뷰] ${sourceMeeting.title}`),
             meetingId,
             reviewerIds,
+            lang,
           );
           if (reviewMeeting) {
             reply = L(lang,
@@ -2198,11 +2199,13 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
           }
         }
 
+        const meetingLang = getSessionLang(sessionId);
         const meeting = startPlanningMeeting(
-          title || '총괄자 미팅',
+          title || (meetingLang === 'en' ? 'Chief Meeting' : '총괄자 미팅'),
           meetingDescription,
           participantIds,
           (character as any) || 'planning',
+          meetingLang,
         );
 
         const createdMsg = createdAgentNames.length > 0

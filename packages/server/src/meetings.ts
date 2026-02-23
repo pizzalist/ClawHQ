@@ -5,8 +5,249 @@ import { getAgent, listAgents, transitionAgent, resetAgent, createAgent } from '
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
 type RoleInfo = { label: string; focus: string };
+type Lang = 'en' | 'ko';
 
-function buildMeetingPrompt(agentName: string, roleInfo: RoleInfo, title: string, description: string, character: MeetingCharacter): string {
+function getRoleFocus(lang: Lang): Record<string, RoleInfo> {
+  if (lang === 'en') {
+    return {
+      pm: { label: 'PM', focus: 'Strategy, priorities, execution plan, resource allocation, scheduling' },
+      developer: { label: 'Developer', focus: 'Technical analysis, feasibility, tech stack, technical risks, architecture' },
+      reviewer: { label: 'Reviewer', focus: 'Quality, risks, improvements, blind spots, potential issues' },
+      designer: { label: 'Designer', focus: 'UX/UI, user perspective, design direction, usability' },
+      devops: { label: 'DevOps', focus: 'Infrastructure, deployment, operations, monitoring, scalability' },
+      qa: { label: 'QA', focus: 'Test strategy, stability, edge cases, quality assurance' },
+    };
+  }
+  return {
+    pm: { label: 'PM', focus: '전략, 우선순위, 실행계획, 리소스 배분, 일정 관리' },
+    developer: { label: '개발자', focus: '기술적 분석, 구현 가능성, 기술 스택, 기술 리스크, 아키텍처' },
+    reviewer: { label: '리뷰어', focus: '품질, 리스크, 개선점, 놓친 부분, 잠재적 문제' },
+    designer: { label: '디자이너', focus: 'UX/UI, 사용자 관점, 디자인 방향, 사용성' },
+    devops: { label: 'DevOps', focus: '인프라, 배포, 운영, 모니터링, 확장성' },
+    qa: { label: 'QA', focus: '테스트 전략, 안정성, 엣지케이스, 품질 보증' },
+  };
+}
+
+function buildMeetingPrompt(agentName: string, roleInfo: RoleInfo, title: string, description: string, character: MeetingCharacter, lang: Lang = 'ko'): string {
+  if (lang === 'en') {
+    return buildMeetingPromptEN(agentName, roleInfo, title, description, character);
+  }
+  return buildMeetingPromptKO(agentName, roleInfo, title, description, character);
+}
+
+function buildMeetingPromptEN(agentName: string, roleInfo: RoleInfo, title: string, description: string, character: MeetingCharacter): string {
+  const header = `You are ${agentName}, the team's ${roleInfo.label} at AI Office.\n\nThe team is holding a meeting on the following topic:\n\n## "${title}"\n\n${description}\n\nShare your expert analysis and opinions from the ${roleInfo.label} perspective.\n\nAreas to focus on:\n- ${roleInfo.focus}\n`;
+
+  const PROMPTS: Record<string, string> = {
+    brainstorm: `## Required Output Format (must follow)
+
+### Candidate List
+Present 3–5 specific candidates/ideas. Each candidate must follow this format:
+
+[CANDIDATE] Candidate Name: (one-line description and rationale)
+
+### Diversity Rules (strict)
+- Each candidate must come from a different domain/category (no duplicates)
+- Prefer novel, specific candidates over "safe" ones
+
+### Analysis
+After listing candidates, write a brief analysis of each from the ${roleInfo.label} perspective.`,
+
+    planning: (() => {
+      const roleTasks: Record<string, string> = {
+        PM: `### PM Scope\n- Project goals and scope definition\n- Feature requirements list (with priorities)\n- MVP scope and milestone timeline\n- Stakeholders and success metrics`,
+        Developer: `### Developer Scope\n- Tech stack selection and rationale\n- System architecture design (component diagram)\n- Key API endpoint design\n- Data model draft\n- Technical risks and alternatives`,
+        Reviewer: `### Reviewer Scope\n- Code quality standards and review checklist\n- Potential risks and bottleneck analysis\n- Security/performance considerations\n- Test strategy proposal`,
+        Designer: `### Designer Scope\n- UX flows and key screen layouts\n- Design system/component inventory\n- Usability considerations\n- Accessibility requirements`,
+        DevOps: `### DevOps Scope\n- Infrastructure setup and deployment strategy\n- CI/CD pipeline design\n- Monitoring/logging plan\n- Scaling strategy`,
+        QA: `### QA Scope\n- Test strategy (unit/integration/E2E)\n- Key test case scenarios\n- Quality criteria and acceptance conditions\n- Automation scope`,
+      };
+      const roleSection = roleTasks[roleInfo.label] || `### ${roleInfo.label} Scope\n- Write detailed specs from the ${roleInfo.focus} perspective`;
+      return `## Required Output Format — Planning/Specification (do NOT propose candidates!)
+
+This meeting is about writing a **detailed plan/development spec** for an already-decided topic.
+Do not propose new candidates. Do not use [CANDIDATE] tags.
+
+${roleSection}
+
+Structure the spec using markdown ## sections.
+Be specific and actionable — detailed enough to start development immediately, not vague direction-setting.`;
+    })(),
+
+    kickoff: `## Required Output Format — Project Kickoff
+
+### Project Goals & Vision
+- Problem the project solves
+- Definition of success
+
+### Team Roles & Responsibilities
+- Each role's scope
+
+### Timeline & Milestones
+- Key milestones and expected dates
+- Dependencies and bottlenecks
+
+### Success Criteria & KPIs
+- Measurable success metrics
+- Monitoring approach`,
+
+    architecture: `## Required Output Format — Technical Architecture Design
+
+### System Architecture
+- Overall system structure (component roles)
+- Data flow
+
+### Tech Stack Selection
+- Technology choices per layer with rationale
+- Alternative comparison
+
+### DB Schema Design
+- Core entities and relationships
+- Indexing strategy
+
+### API Design
+- Key endpoints
+- Auth/authorization approach
+
+### Infrastructure & Deployment
+- Deployment environment
+- CI/CD pipeline
+- Monitoring/logging`,
+
+    design: `## Required Output Format — UI/UX Design
+
+### User Personas
+- Target user definitions
+
+### Core User Flows
+- User journey per key scenario
+
+### Screen Layout
+- Layout and components per key screen
+- Navigation structure
+
+### Design System
+- Color/typography/component guide
+- Responsive strategy`,
+
+    'sprint-planning': `## Required Output Format — Sprint Planning
+
+### Sprint Goal
+- Core objectives for this sprint
+
+### Backlog Priorities
+- Task list (by priority)
+- Story points/effort estimate per task
+
+### Task Assignment
+- Tasks assigned per team member
+
+### Risks & Dependencies
+- Potential blockers
+- External dependencies`,
+
+    estimation: `## Required Output Format — Effort/Resource Estimation
+
+### Per-Feature Effort Estimate
+- Expected effort per feature/module (in person-days)
+
+### Timeline Estimate
+- Optimistic / realistic / pessimistic scenarios
+
+### Resource Requirements
+- Required personnel and roles
+- External resources (APIs, services, etc.)
+
+### Risk Buffer
+- Uncertainty factors
+- Recommended buffer ratio`,
+
+    demo: `## Required Output Format — Demo/Presentation Review
+
+### Demo Item Evaluation
+- Completeness assessment per demo item
+- Achievement rate vs. goals
+
+### Feedback
+- What went well
+- Areas needing improvement
+
+### Next Steps
+- Priority fixes
+- Goals for next demo`,
+
+    postmortem: `## Required Output Format — Postmortem (Incident/Failure Analysis)
+
+### Incident Timeline
+- Chronological record from occurrence to resolution
+
+### Root Cause Analysis
+- Direct cause
+- Root cause (5 Whys)
+
+### Impact Scope
+- Impact on users/systems
+
+### Prevention Measures
+- Short-term fixes
+- Long-term improvements
+- Monitoring enhancements`,
+
+    'code-review': `## Required Output Format — Code Review
+
+### Code Quality
+- Readability, structure, naming assessment
+- SOLID principles compliance
+
+### Security
+- Potential security vulnerabilities
+
+### Performance
+- Performance issues or optimization opportunities
+
+### Improvement Suggestions
+- Specific refactoring proposals
+- Test coverage opinions`,
+
+    daily: `## Required Output Format — Daily Standup
+
+### Completed Yesterday
+- Key completed items
+
+### Today's Plan
+- Planned work items
+
+### Blockers/Issues
+- Problems blocking progress
+- Areas needing help`,
+
+    retrospective: `## Required Output Format — Retrospective
+
+### What Went Well (Keep)
+- Things to continue doing
+
+### What to Improve (Problem)
+- What was problematic or inefficient
+
+### What to Try (Try)
+- Improvements to try next time
+- Specific action items`,
+
+    review: `## Required Output Format — Review/Evaluation
+
+Rate each candidate on these criteria (1–10):
+- Feasibility
+- Impact/Value
+- Risk
+
+[SCORE] Candidate Name: (score) — (one-line evaluation)`,
+  };
+
+  const body = PROMPTS[character] || PROMPTS.brainstorm;
+  return `${header}\n${body}\n\nRespond in English.`;
+}
+
+function buildMeetingPromptKO(agentName: string, roleInfo: RoleInfo, title: string, description: string, character: MeetingCharacter): string {
   const header = `당신은 ${agentName}, AI 오피스 팀의 ${roleInfo.label}입니다.\n\n팀이 다음 주제에 대해 회의를 진행하고 있습니다:\n\n## "${title}"\n\n${description}\n\n${roleInfo.label} 관점에서 전문적인 분석과 의견을 공유해주세요.\n\n집중해야 할 영역:\n- ${roleInfo.focus}\n`;
 
   const PROMPTS: Record<string, string> = {
@@ -276,6 +517,8 @@ function saveMeeting(m: Meeting) {
 
 // Track pending contributions per meeting
 const pendingContributions = new Map<string, { total: number; done: number }>();
+// Track language per meeting for finalization
+const meetingLangMap = new Map<string, Lang>();
 
 export function createMeeting(
   title: string,
@@ -303,33 +546,8 @@ export function createMeeting(
   return meeting;
 }
 
-/** Role-specific focus areas for meeting contributions */
-const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
-  pm: {
-    label: 'PM',
-    focus: '전략, 우선순위, 실행계획, 리소스 배분, 일정 관리',
-  },
-  developer: {
-    label: '개발자',
-    focus: '기술적 분석, 구현 가능성, 기술 스택, 기술 리스크, 아키텍처',
-  },
-  reviewer: {
-    label: '리뷰어',
-    focus: '품질, 리스크, 개선점, 놓친 부분, 잠재적 문제',
-  },
-  designer: {
-    label: '디자이너',
-    focus: 'UX/UI, 사용자 관점, 디자인 방향, 사용성',
-  },
-  devops: {
-    label: 'DevOps',
-    focus: '인프라, 배포, 운영, 모니터링, 확장성',
-  },
-  qa: {
-    label: 'QA',
-    focus: '테스트 전략, 안정성, 엣지케이스, 품질 보증',
-  },
-};
+/** Role-specific focus areas for meeting contributions (kept for backward compat) */
+const ROLE_FOCUS: Record<string, { label: string; focus: string }> = getRoleFocus('ko');
 
 
 /**
@@ -337,7 +555,7 @@ const ROLE_FOCUS: Record<string, { label: string; focus: string }> = {
  * Each agent contributes their expert perspective on the topic (NOT a competing proposal).
  * When all contributions are in, a consolidated report is generated.
  */
-export function startPlanningMeeting(title: string, description: string, participantIds: string[], character?: MeetingCharacter): Meeting {
+export function startPlanningMeeting(title: string, description: string, participantIds: string[], character?: MeetingCharacter, lang: Lang = 'ko'): Meeting {
   console.log(`[meeting] startPlanningMeeting: requested ${participantIds.length} participants:`, participantIds);
   // === Hard participant count check: validate ALL agents exist before starting ===
   const validatedIds: string[] = [];
@@ -377,10 +595,11 @@ export function startPlanningMeeting(title: string, description: string, partici
     const agent = getAgent(agentId);
     if (!agent) continue; // should not happen after validation
 
-    const roleInfo = ROLE_FOCUS[agent.role] || { label: agent.role, focus: '전반적인 분석' };
+    const roleFocus = getRoleFocus(lang);
+    const roleInfo = roleFocus[agent.role] || { label: agent.role, focus: lang === 'en' ? 'General analysis' : '전반적인 분석' };
     const sessionId = `meeting-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
 
-    const prompt = buildMeetingPrompt(agent.name, roleInfo, title, description, character || 'planning');
+    const prompt = buildMeetingPrompt(agent.name, roleInfo, title, description, character || 'planning', lang);
 
     // Force-reset agent to idle before starting to avoid FSM conflicts
     try { resetAgent(agentId); } catch { /* ignore */ }
@@ -403,9 +622,10 @@ export function startPlanningMeeting(title: string, description: string, partici
   }
 
   pendingContributions.set(meeting.id, { total: startedContributions, done: 0 });
+  meetingLangMap.set(meeting.id, lang);
   if (startedContributions === 0) {
     pendingContributions.delete(meeting.id);
-    finalizeMeeting(meeting.id);
+    finalizeMeeting(meeting.id, lang);
   }
 
   return meeting;
@@ -449,7 +669,9 @@ function handleContributionComplete(meetingId: string, agentId: string, agentNam
     if (tracker.done >= tracker.total) {
       pendingContributions.delete(meetingId);
       // All contributions received — generate consolidated report
-      finalizeMeeting(meetingId);
+      const lang = meetingLangMap.get(meetingId) || 'ko';
+      meetingLangMap.delete(meetingId);
+      finalizeMeeting(meetingId, lang);
     }
   }
 }
@@ -458,17 +680,17 @@ function handleContributionComplete(meetingId: string, agentId: string, agentNam
  * Finalize meeting: generate a consolidated report from all contributions.
  * No review phase, no winner selection — just a unified summary.
  */
-function finalizeMeeting(meetingId: string) {
+function finalizeMeeting(meetingId: string, lang: Lang = 'ko') {
   const meeting = getMeeting(meetingId);
   if (!meeting) return;
 
   meeting.status = 'completed';
   if (meeting.sourceMeetingId || meeting.character === 'review' || meeting.type === 'review') {
-    const { report, decisionPacket } = buildReviewScoringReport(meeting);
+    const { report, decisionPacket } = buildReviewScoringReport(meeting, lang);
     meeting.report = report;
     meeting.decisionPacket = decisionPacket;
   } else {
-    meeting.report = generateConsolidatedReport(meeting);
+    meeting.report = generateConsolidatedReport(meeting, lang);
   }
   saveMeeting(meeting);
 }
@@ -532,54 +754,119 @@ function buildReviewDecisionPacket(meeting: Meeting): DecisionPacket | null {
   };
 }
 
-export function buildReviewScoringReport(meeting: Meeting): { report: string; decisionPacket: DecisionPacket | null } {
+export function buildReviewScoringReport(meeting: Meeting, lang: Lang = 'ko'): { report: string; decisionPacket: DecisionPacket | null } {
   const packet = buildReviewDecisionPacket(meeting);
   if (!meeting.sourceCandidates || meeting.sourceCandidates.length === 0 || !packet) {
     return {
-      report: [
-        '# 리뷰 점수화 결과',
-        '',
-        '⚠️ sourceCandidates가 없어 점수화 미팅을 생성할 수 없습니다.',
-        '기획/브레인스토밍 미팅에서 후보를 먼저 생성한 뒤, "리뷰어 점수화 시작"을 사용해주세요.',
-      ].join('\n'),
+      report: lang === 'en'
+        ? [
+            '# Review Scoring Results',
+            '',
+            '⚠️ No sourceCandidates found — cannot create a scoring meeting.',
+            'Please generate candidates in a planning/brainstorming meeting first, then use "Start reviewer scoring".',
+          ].join('\n')
+        : [
+            '# 리뷰 점수화 결과',
+            '',
+            '⚠️ sourceCandidates가 없어 점수화 미팅을 생성할 수 없습니다.',
+            '기획/브레인스토밍 미팅에서 후보를 먼저 생성한 뒤, "리뷰어 점수화 시작"을 사용해주세요.',
+          ].join('\n'),
       decisionPacket: null,
     };
   }
 
-  // NOTE: 점수표는 markdown table 대신 decisionPacket(JSON) 기반 UI 컴포넌트에서 렌더한다.
-  // report는 의사결정 요약 텍스트만 유지한다.
   const rec = packet.recommendation;
   const alts = packet.alternatives;
 
-  const report = [
-    `# ${meeting.title} 점수화 결과`,
-    '',
-    '## 결과 요약',
-    `- 후보 수: ${meeting.sourceCandidates.length}`,
-    `- 리뷰어 수: ${packet.reviewerScoreCards.length}`,
-    '- 후보별 점수표/총점/추천안/대안은 구조화 데이터 기반 UI에서 제공합니다.',
-    '',
-    '## 1순위 추천',
-    `- ${rec.name} (평균 ${Number(rec.score || 0).toFixed(2)})`,
-    `- 이유: 다수 리뷰어 점수 기준 총점이 가장 높고, 실행 가능성과 임팩트 균형이 우수합니다.`,
-    '',
-    '## 대안 1~2',
-    ...(alts.length > 0
-      ? alts.map((a, i) => `${i + 1}. ${a.name} (평균 ${Number(a.score || 0).toFixed(2)})`)
-      : ['- 없음']),
-    '',
-    '## 의사결정 요청',
-    '- 이 추천안으로 확정할까요, 아니면 기준/가중치를 수정할까요?',
-  ].join('\n');
+  const report = lang === 'en'
+    ? [
+        `# ${meeting.title} Scoring Results`,
+        '',
+        '## Summary',
+        `- Candidates: ${meeting.sourceCandidates.length}`,
+        `- Reviewers: ${packet.reviewerScoreCards.length}`,
+        '- Per-candidate scorecards, totals, recommendations, and alternatives are rendered via structured data UI.',
+        '',
+        '## Top Recommendation',
+        `- ${rec.name} (avg ${Number(rec.score || 0).toFixed(2)})`,
+        `- Reason: Highest total score across reviewers, with a strong balance of feasibility and impact.`,
+        '',
+        '## Alternatives',
+        ...(alts.length > 0
+          ? alts.map((a, i) => `${i + 1}. ${a.name} (avg ${Number(a.score || 0).toFixed(2)})`)
+          : ['- None']),
+        '',
+        '## Decision Request',
+        '- Shall we finalize this recommendation, or adjust the criteria/weights?',
+      ].join('\n')
+    : [
+        `# ${meeting.title} 점수화 결과`,
+        '',
+        '## 결과 요약',
+        `- 후보 수: ${meeting.sourceCandidates.length}`,
+        `- 리뷰어 수: ${packet.reviewerScoreCards.length}`,
+        '- 후보별 점수표/총점/추천안/대안은 구조화 데이터 기반 UI에서 제공합니다.',
+        '',
+        '## 1순위 추천',
+        `- ${rec.name} (평균 ${Number(rec.score || 0).toFixed(2)})`,
+        `- 이유: 다수 리뷰어 점수 기준 총점이 가장 높고, 실행 가능성과 임팩트 균형이 우수합니다.`,
+        '',
+        '## 대안 1~2',
+        ...(alts.length > 0
+          ? alts.map((a, i) => `${i + 1}. ${a.name} (평균 ${Number(a.score || 0).toFixed(2)})`)
+          : ['- 없음']),
+        '',
+        '## 의사결정 요청',
+        '- 이 추천안으로 확정할까요, 아니면 기준/가중치를 수정할까요?',
+      ].join('\n');
 
   return { report, decisionPacket: packet };
 }
 
-function generateConsolidatedReport(meeting: Meeting): string {
+function generateConsolidatedReport(meeting: Meeting, lang: Lang = 'ko'): string {
   const agents = listAgents();
   const agentMap = new Map(agents.map(a => [a.id, a]));
-  const date = new Date().toLocaleDateString('ko-KR');
+  const roleFocus = getRoleFocus(lang);
 
+  if (lang === 'en') {
+    const date = new Date().toLocaleDateString('en-US');
+    const charLabels: Record<string, string> = {
+      brainstorm: '🧠 Brainstorm',
+      planning: '📋 Planning Meeting',
+      review: '🔍 Review Meeting',
+      retrospective: '🔄 Retrospective',
+    };
+    const charLabel = meeting.character ? (charLabels[meeting.character] || meeting.character) : meeting.type;
+
+    const participantLines = meeting.proposals.map(p => {
+      const agent = agentMap.get(p.agentId);
+      const roleInfo = roleFocus[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
+      return `- ${p.agentName} (${roleInfo.label}): ${roleInfo.focus.split(',')[0].trim()} perspective`;
+    }).join('\n');
+
+    const perspectiveSections = meeting.proposals.map(p => {
+      const agent = agentMap.get(p.agentId);
+      const roleInfo = roleFocus[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
+      const summary = p.content.length > 600
+        ? p.content.slice(0, 600).replace(/\n*$/, '') + '...'
+        : p.content;
+      return `### ${roleInfo.label} Perspective (${p.agentName})\n\n${summary}`;
+    }).join('\n\n');
+
+    const requestedCount = meeting.participants?.length || meeting.proposals.length;
+    let report = `# ${meeting.title} Meeting Results\n\n`;
+    report += `**Type:** ${charLabel} | **Date:** ${date}\n\n`;
+    report += `## Participants\n${participantLines}\n\n`;
+    report += `## Agenda\n\n${meeting.description || '(No description)'}\n\n`;
+    report += `## Key Discussion Points\n\n${perspectiveSections}\n\n`;
+    report += `## Summary\n\n`;
+    report += `${requestedCount} experts analyzed "${meeting.title}" from their respective perspectives. `;
+    report += `Please decide on the next steps based on the above.\n`;
+    return report;
+  }
+
+  // Korean (original)
+  const date = new Date().toLocaleDateString('ko-KR');
   const charLabels: Record<string, string> = {
     brainstorm: '🧠 자유 토론',
     planning: '📋 기획 회의',
@@ -588,25 +875,21 @@ function generateConsolidatedReport(meeting: Meeting): string {
   };
   const charLabel = meeting.character ? (charLabels[meeting.character] || meeting.character) : meeting.type;
 
-  // Build participant list
   const participantLines = meeting.proposals.map(p => {
     const agent = agentMap.get(p.agentId);
-    const roleInfo = ROLE_FOCUS[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
+    const roleInfo = roleFocus[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
     return `- ${p.agentName} (${roleInfo.label}): ${roleInfo.focus.split(',')[0].trim()} 관점`;
   }).join('\n');
 
-  // Build per-perspective summaries
   const perspectiveSections = meeting.proposals.map(p => {
     const agent = agentMap.get(p.agentId);
-    const roleInfo = ROLE_FOCUS[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
-    // Take first ~500 chars as summary, or full content if short
+    const roleInfo = roleFocus[agent?.role || ''] || { label: agent?.role || '?', focus: '' };
     const summary = p.content.length > 600
       ? p.content.slice(0, 600).replace(/\n*$/, '') + '...'
       : p.content;
     return `### ${roleInfo.label} 관점 (${p.agentName})\n\n${summary}`;
   }).join('\n\n');
 
-  // Extract common themes (simple keyword-based)
   const allContent = meeting.proposals.map(p => p.content).join('\n');
 
   let report = `# ${meeting.title} 회의 결과\n\n`;
@@ -677,6 +960,7 @@ export function startReviewMeetingFromSource(
   title: string,
   sourceMeetingId: string,
   reviewerIds: string[],
+  lang: Lang = 'ko',
 ): Meeting | null {
   const sourceMeeting = getMeeting(sourceMeetingId);
   if (!sourceMeeting || sourceMeeting.status !== 'completed') return null;
@@ -686,7 +970,9 @@ export function startReviewMeetingFromSource(
 
   const meeting = createMeeting(
     title,
-    `"${sourceMeeting.title}" 회의 결과를 기반으로 후보를 평가합니다.`,
+    lang === 'en'
+      ? `Evaluating candidates based on the "${sourceMeeting.title}" meeting results.`
+      : `"${sourceMeeting.title}" 회의 결과를 기반으로 후보를 평가합니다.`,
     'review',
     reviewerIds,
     'review',
@@ -707,7 +993,48 @@ export function startReviewMeetingFromSource(
 
     const sessionId = `review-${meeting.id.slice(0, 8)}-${agent.name.toLowerCase()}-${Date.now()}`;
     const candidateNames = candidates.map(c => c.name);
-    const prompt = `당신은 ${agent.name}, 전문 리뷰어입니다.
+    const scoreLines = candidateNames.map(name => `[SCORE] ${name} | Problem: ?/10 | Feasibility: ?/10 | Differentiation: ?/10 | Time-to-Demo: ?/10 | Risk: ?/10 | Total: ?/50`).join('\n');
+
+    const prompt = lang === 'en'
+      ? `You are ${agent.name}, an expert reviewer.
+
+Please score the candidates from the "${sourceMeeting.title}" planning meeting.
+
+## Candidates to Evaluate (${candidates.length})
+${candidatesSummary}
+
+## ⚠️ Important Rules
+- Evaluate ONLY the ${candidates.length} candidates listed above
+- Do not write general commentary, market analysis, or anything unrelated to the candidates
+- Output a [SCORE] tag for every candidate without exception
+- Use the exact candidate names from the list above
+
+## Required Output Format (must follow exactly)
+
+### Scorecard
+
+Rate each candidate on these 5 criteria (1–10):
+- Problem: Clarity and magnitude of the problem being solved
+- Feasibility: How achievable with current resources
+- Differentiation: Originality compared to existing solutions
+- Time-to-Demo: Time to MVP (faster = higher score)
+- Risk: Lower risk = higher score
+
+**Output ALL ${candidates.length} candidates in this exact format (do not skip any):**
+
+${scoreLines}
+
+### Final Recommendation
+
+[RECOMMENDATION] #1: (candidate name) | Reason: (one line) | Preconditions: (one line) | Kill Criteria: (one line)
+[ALTERNATIVE] #2: (candidate name) | Reason: (one line)
+
+### One-Line Assessment Per Candidate
+
+Write one line per candidate covering key pros and cons. No generalities.
+
+Respond in English. You MUST include [SCORE], [RECOMMENDATION], and [ALTERNATIVE] tags.`
+      : `당신은 ${agent.name}, 전문 리뷰어입니다.
 
 "${sourceMeeting.title}" 기획 회의에서 도출된 후보들을 점수화해주세요.
 
@@ -733,7 +1060,7 @@ ${candidatesSummary}
 
 **반드시 아래 형식으로 모든 ${candidates.length}개 후보를 출력하세요 (하나도 빠뜨리지 마세요):**
 
-${candidateNames.map(name => `[SCORE] ${name} | Problem: ?/10 | Feasibility: ?/10 | Differentiation: ?/10 | Time-to-Demo: ?/10 | Risk: ?/10 | Total: ?/50`).join('\n')}
+${scoreLines}
 
 ### 최종 추천
 
@@ -762,9 +1089,10 @@ ${candidateNames.map(name => `[SCORE] ${name} | Problem: ?/10 | Feasibility: ?/1
   }
 
   pendingContributions.set(meeting.id, { total: startedContributions, done: 0 });
+  meetingLangMap.set(meeting.id, lang);
   if (startedContributions === 0) {
     pendingContributions.delete(meeting.id);
-    finalizeMeeting(meeting.id);
+    finalizeMeeting(meeting.id, lang);
   }
 
   return meeting;
