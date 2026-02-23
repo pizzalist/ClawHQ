@@ -14,7 +14,7 @@ function L(lang: Lang, en: string, ko: string): string { return lang === 'en' ? 
 // Track language preference per session for async notifications
 const sessionLanguageMap = new Map<string, Lang>();
 function getSessionLang(sessionId?: string): Lang {
-  return sessionLanguageMap.get(sessionId || '') || 'ko';
+  return sessionLanguageMap.get(sessionId || '') || 'en';
 }
 
 const MAX_HISTORY = 50;
