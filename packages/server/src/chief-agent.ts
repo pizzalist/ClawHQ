@@ -1228,8 +1228,9 @@ export function chiefHandleMeetingChange() {
  * Handle user's response to a check-in option.
  * Returns a chief message with follow-up or action.
  */
-export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string, language?: Lang): { reply: string; actions?: ChiefAction[] } {
-  const lang: Lang = language || 'ko';
+export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string, language?: Lang, sessionId?: string): { reply: string; actions?: ChiefAction[] } {
+  const resolvedSessionId = (sessionId || 'chief-default').trim() || 'chief-default';
+  const lang: Lang = language || getSessionLang(resolvedSessionId);
   const dedupeKey = makeCheckInIdempotencyKey(checkInId, optionId);
   if (handledCheckInResponseKeys.has(dedupeKey)) {
     return { reply: L(lang, 'Already processed. (duplicate click prevention)', '이미 처리된 응답입니다. (중복 클릭 방지)') };
@@ -1247,55 +1248,55 @@ export function respondToCheckIn(checkInId: string, optionId: string, userCommen
   if (checkInId.includes('completion')) {
     switch (optionId) {
       case 'confirm':
-        reply = '좋습니다! 모든 결과가 확정되었습니다. 추가 작업이 필요하면 언제든 말씀해주세요. ✅';
+        reply = L(lang, 'All results confirmed. If you need any follow-up work, just let me know. ✅', '좋습니다! 모든 결과가 확정되었습니다. 추가 작업이 필요하면 언제든 말씀해주세요. ✅');
         break;
       case 'revise':
-        reply = '어떤 부분을 수정해야 할까요? 구체적으로 말씀해주시면 수정 작업을 만들겠습니다.';
+        reply = L(lang, 'What needs revision? If you share specifics, I will create a revision task.', '어떤 부분을 수정해야 할까요? 구체적으로 말씀해주시면 수정 작업을 만들겠습니다.');
         break;
       case 'add-task':
-        reply = '어떤 후속 작업이 필요한가요? 설명해주시면 작업을 생성하고 적절한 에이전트에게 배정하겠습니다.';
+        reply = L(lang, 'What follow-up task is needed? Tell me and I will create it and assign it to an appropriate agent.', '어떤 후속 작업이 필요한가요? 설명해주시면 작업을 생성하고 적절한 에이전트에게 배정하겠습니다.');
         break;
       default:
-        reply = userComment || '알겠습니다. 어떻게 진행할까요?';
+        reply = userComment || L(lang, 'Got it. How shall we proceed?', '알겠습니다. 어떻게 진행할까요?');
     }
   } else if (checkInId.includes('progress')) {
     switch (optionId) {
       case 'ok':
-        reply = '👍 좋습니다! 나머지 작업을 계속 진행합니다.';
+        reply = L(lang, '👍 Great! Continuing with remaining tasks.', '👍 좋습니다! 나머지 작업을 계속 진행합니다.');
         break;
       case 'revise':
-        reply = '어떤 부분이 마음에 안 드시나요? 수정 방향을 알려주시면 재작업 지시하겠습니다.';
+        reply = L(lang, "What's not right? Share the revision direction and I will issue rework instructions.", '어떤 부분이 마음에 안 드시나요? 수정 방향을 알려주시면 재작업 지시하겠습니다.');
         break;
       case 'pause':
-        reply = '⏸️ 진행을 멈췄습니다. 재개하려면 말씀해주세요.';
+        reply = L(lang, '⏸️ Paused. Tell me whenever you want to resume.', '⏸️ 진행을 멈췄습니다. 재개하려면 말씀해주세요.');
         break;
       default:
-        reply = userComment || '알겠습니다.';
+        reply = userComment || L(lang, 'Got it.', '알겠습니다.');
     }
   } else if (checkInId.includes('failure')) {
     switch (optionId) {
       case 'retry':
-        reply = '같은 에이전트로 재시도합니다. 잠시 기다려주세요.';
+        reply = L(lang, 'Retrying with the same agent. Please wait a moment.', '같은 에이전트로 재시도합니다. 잠시 기다려주세요.');
         break;
       case 'reassign':
-        reply = '다른 에이전트에게 배정할게요. 가용한 에이전트를 확인 중입니다...';
+        reply = L(lang, 'Reassigning to another agent. Checking available agents now...', '다른 에이전트에게 배정할게요. 가용한 에이전트를 확인 중입니다...');
         break;
       case 'skip':
-        reply = '이 작업을 건너뜁니다. 다른 작업은 계속 진행합니다.';
+        reply = L(lang, 'Skipping this task. Other tasks will continue.', '이 작업을 건너뜁니다. 다른 작업은 계속 진행합니다.');
         break;
       case 'modify':
-        reply = '작업 내용을 어떻게 수정할까요? 구체적으로 알려주세요.';
+        reply = L(lang, 'How should we modify the task details? Please be specific.', '작업 내용을 어떻게 수정할까요? 구체적으로 알려주세요.');
         break;
       default:
-        reply = userComment || '알겠습니다.';
+        reply = userComment || L(lang, 'Got it.', '알겠습니다.');
     }
   } else if (checkInId.includes('meeting')) {
-    reply = `선택하신 안으로 진행하겠습니다. ${userComment ? `추가 의견: ${userComment}` : '결정이 반영됩니다.'}`;
+    reply = L(lang, 'Proceeding with your selection.', '선택하신 안으로 진행하겠습니다.') + ` ${userComment ? L(lang, `Additional note: ${userComment}`, `추가 의견: ${userComment}`) : L(lang, 'Your decision will be applied.', '결정이 반영됩니다.')}`;
   } else {
-    reply = userComment || '알겠습니다. 계속 진행합니다.';
+    reply = userComment || L(lang, 'Got it. Continuing.', '알겠습니다. 계속 진행합니다.');
   }
 
-  pushMessage('chief-default', { id: msgId, role: 'chief', content: reply, createdAt: now });
+  pushMessage(resolvedSessionId, { id: msgId, role: 'chief', content: reply, createdAt: now });
   return { reply, actions };
 }
 

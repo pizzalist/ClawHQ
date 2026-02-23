@@ -192,12 +192,16 @@ app.post('/api/chief/proposal/approve', (req, res) => {
 });
 
 app.post('/api/chief/checkin/respond', (req, res) => {
-  const { checkInId, optionId, comment } = req.body || {};
+  const { checkInId, optionId, comment, sessionId } = req.body || {};
   if (!checkInId || !optionId) {
     return res.status(400).json({ error: 'checkInId and optionId are required' });
   }
   try {
-    const result = respondToCheckIn(checkInId, optionId, comment);
+    const resolvedSessionId =
+      typeof sessionId === 'string' && sessionId.trim().length > 0
+        ? sessionId.trim()
+        : (req.header('x-chief-session-id') || 'chief-default');
+    const result = respondToCheckIn(checkInId, optionId, comment, undefined, resolvedSessionId);
     res.json({ ok: true, ...result });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
