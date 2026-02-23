@@ -6,7 +6,7 @@ import { listMeetings, startPlanningMeeting, getMeeting, extractCandidatesFromMe
 import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.js';
 import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan, linkTaskToChainPlan, listActiveChainPlans } from './chain-plan.js';
 import { stmts } from './db.js';
-import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
+import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
 
 type Lang = 'en' | 'ko';
 function L(lang: Lang, en: string, ko: string): string { return lang === 'en' ? en : ko; }
@@ -1788,7 +1788,7 @@ function classifyIntent(userMessage: string): 'status' | 'simple_action' | 'defi
 
   // Keep status detection strict to avoid misclassifying normal requests.
   const readOnlyStatusLike = /(상태\s*재?확인|재확인|다시\s*상태|상태\s*체크|상태\s*확인|진행\s*중(이야|인가|이냐)?|진행중\??|실행\s*중|실행중|진행\s*상황|진행률|현황|지금\s*상태|현재\s*상태|결과\s*(나왔|는\??|어때\??)?|다\s*됐(어|나|니)?\??|아직(이야|이냐|인가)?\??|끝났(어|나|니)?\??|완료\s*됐(어|나|니)?\??|언제\s*(줘|돼|됨|끝나)|status|eta|예상\s*시간|얼마나\s*남|몇\s*명|몇\s*건)/i.test(msg);
-  const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소)/i.test(msg);
+  const mutationLike = /(추가|생성|create|만들|리셋|reset|취소|cancel|배정|assign|재시작|restart|전부\s*리셋|전부\s*취소|전체\s*취소|종료|stop|kill|중지|멈춰|끝내|abort|terminate|shut\s*down)/i.test(msg);
 
   if (readOnlyStatusLike && !mutationLike) {
     return 'status';
@@ -2266,13 +2266,24 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         if (!task) {
           return { ...action, result: { ok: false, message: `작업을 찾을 수 없습니다: ${taskId}` } };
         }
+        // Kill running agent process if in-progress
+        if (task.status === 'in-progress' && task.session_id) {
+          killAgentRun(task.session_id);
+        }
         stmts.cancelTask.run(taskId);
         return { ...action, result: { ok: true, message: `작업 "${task.title}" 취소됨` } };
       }
       case 'cancel_all_pending': {
+        // Also kill in-progress tasks
+        const inProgressTasks = listTasks().filter(t => t.status === 'in-progress');
+        for (const t of inProgressTasks) {
+          if ((t as any).session_id) killAgentRun((t as any).session_id);
+          stmts.cancelTask.run(t.id);
+        }
         const result = stmts.cancelAllPending.run();
-        const count = result.changes;
-        return { ...action, result: { ok: true, message: `대기 중 작업 ${count}건 취소됨` } };
+        const count = result.changes + inProgressTasks.length;
+        const cancelLang = getSessionLang(sessionId);
+        return { ...action, result: { ok: true, message: L(cancelLang, `Cancelled ${count} task(s) (pending + in-progress)`, `작업 ${count}건 취소됨 (대기 + 진행중)`) } };
       }
       case 'reset_agent': {
         const { agentId } = action.params;
