@@ -373,7 +373,7 @@ function parseApprovalSelection(userMessage: string, total: number): number[] | 
  * e.g. "응, 그리고 개발 태스크도 만들어줘" → "그리고 개발 태스크도 만들어줘"
  */
 function extractPostApprovalMessage(userMessage: string): string | null {
-  const match = userMessage.trim().match(/^(?:ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+(.+)$/is);
+  const match = userMessage.trim().match(/^(?:ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes|approve|sure)\s*[,.]?\s+(.+)$/is);
   return match ? match[1].trim() : null;
 }
 
@@ -2771,7 +2771,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
   })?.id;
 
   const isStatusIntent = classifyIntent(userMessage) === 'status';
-  const isStatusOrApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes)$/i.test(userMessage.trim()) || isStatusIntent;
+  const isStatusOrApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes|approve|sure|do it|proceed|run|execute)$/i.test(userMessage.trim()) || isStatusIntent;
   if (activeChainRootId && !isStatusOrApproval) {
     const amendments = chainAmendments.get(activeChainRootId) || [];
     amendments.push(userMessage.trim());
@@ -2869,7 +2869,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
     const selected = parseApprovalSelection(userMessage, pending.length);
     if (selected && selected.length > 0) {
       // If user says generic approval ("응", "승인"), execute ALL pending actions sequentially
-      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase())
+      const isGenericApproval = /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes|approve|sure|do it|proceed|run|execute|네\s*,?\s*실행)$/i.test(userMessage.trim().toLowerCase())
         || /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+/i.test(userMessage.trim().toLowerCase());
       const toExecute = isGenericApproval ? [...pending] : [pending[selected[0]]];
 
@@ -3004,6 +3004,8 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         try {
+          console.log(`[chief-debug] stdout-full: ${run.stdout.slice(0, 2000)}`);
+          console.log(`[chief-debug] stderr-full: ${run.stderr.slice(0, 2000)}`);
           const rawOutput = parseAgentOutput(run.stdout);
           const { actions: parsedActions, cleanText } = parseActions(rawOutput);
           const intentActions = shouldSuppressActionsByIntent(intent) ? [] : parsedActions;
