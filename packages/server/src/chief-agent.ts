@@ -1494,13 +1494,18 @@ When the user requests a new project/feature, assess difficulty first and sugges
 **Level 3 — Complex**
 - Criteria: Multi-service/microservices, real-time features, DB design needed, large-scale architecture, mixed tech stacks
 - Examples: "SNS platform", "E-commerce site", "Real-time collaboration tool", "SaaS product"
-- Flow:
+- Flow (topic is decided):
   1. First convene a technical review meeting (start_meeting, character="architecture")
-     - Participants: Match project scale (CTO-role PM, Frontend Dev, Backend Dev, DevOps, etc.)
-     - Discuss architecture/tech stack/role distribution in the meeting
   2. PM writes development spec based on meeting results (create_task, PM)
-  3. Distribute role-based tasks from the spec (frontend/backend/infra — parallelizable)
-- Action order: start_meeting (architecture) → confirm after completion → PM spec → role-based create_task
+  3. Distribute role-based tasks from the spec (parallelizable)
+- Flow (topic/idea is NOT decided, e.g. "I want to build the best project"):
+  1. Brainstorm meeting (start_meeting, character="brainstorm") — generate candidate ideas
+  2. After completion, review/evaluate candidates (start_review) — score and select
+  3. Planning meeting for the selected topic (start_meeting, character="planning")
+  4. PM spec → role-based development
+- Decision: If the user specified a concrete project → architecture. If they're exploring ideas → brainstorm.
+- Action order (topic decided): start_meeting (architecture) → confirm → PM spec → role-based create_task
+- Action order (idea exploration): start_meeting (brainstorm) → start_review → confirm → planning → create_task
 
 Assessment notes:
 - If the user explicitly says "skip meeting" or "just build it", respect their preference.
@@ -1619,13 +1624,18 @@ ${langRule}
 **Level 3 — Complex (복잡)**
 - 기준: 다중 서비스/마이크로서비스, 실시간 기능, DB 설계 필요, 대규모 아키텍처, 여러 기술 스택 혼합
 - 예시: "SNS 플랫폼", "이커머스 사이트", "실시간 협업 툴", "SaaS 제품"
-- 플로우:
+- 플로우 (주제가 정해진 경우):
   1. 먼저 기술 검토 회의를 소집 (start_meeting, character="architecture")
-     - 참여자: 프로젝트 규모에 맞게 선택 (CTO역 PM, Frontend Dev, Backend Dev, DevOps 등)
-     - 회의에서 아키텍처/기술 스택/역할 분담 논의
   2. 회의 결과를 바탕으로 PM이 개발 명세서 작성 (create_task, PM)
-  3. 명세서 기반으로 역할별 태스크 분배 (프론트엔드/백엔드/인프라 등 병렬 가능)
-- 액션 순서: start_meeting (architecture) → 완료 후 confirm → PM 명세서 → 역할별 create_task
+  3. 명세서 기반으로 역할별 태스크 분배
+- 플로우 (주제/아이디어가 정해지지 않은 경우, 예: "최고의 프로젝트 만들고 싶어"):
+  1. 브레인스토밍 회의 (start_meeting, character="brainstorm") — 후보 아이디어 도출
+  2. 회의 완료 후 리뷰 평가 (start_review) — 후보 점수화 및 최종 선정
+  3. 선정된 주제로 기획 회의 (start_meeting, character="planning")
+  4. PM 명세서 → 역할별 개발
+- 판단 기준: 사용자가 구체적인 프로젝트를 지정했으면 architecture, 아이디어를 찾는 단계면 brainstorm
+- 액션 순서 (주제 확정): start_meeting (architecture) → confirm → PM 명세서 → 역할별 create_task
+- 액션 순서 (아이디어 탐색): start_meeting (brainstorm) → start_review → confirm → planning → create_task
 
 판단 시 주의:
 - 사용자가 "회의 없이 바로 해줘", "바로 개발해줘" 등 명시적으로 요청하면 그 의사를 존중하세요.
@@ -2184,18 +2194,23 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         }
 
         // Build contextual description from recent session messages
-        let meetingDescription = '총괄자가 시작한 미팅';
+        const meetingLangCtx = getSessionLang(sessionId);
+        let meetingDescription = meetingLangCtx === 'en' ? 'Meeting initiated by Chief' : '총괄자가 시작한 미팅';
         if (sessionId) {
           const recentMsgs = getSessionMessages(sessionId).slice(-15);
           const contextParts: string[] = [];
           for (const m of recentMsgs) {
             if (!m.content?.trim()) continue;
-            const prefix = m.role === 'user' ? '[사용자]' : '[총괄자]';
+            const prefix = m.role === 'user'
+              ? (meetingLangCtx === 'en' ? '[User]' : '[사용자]')
+              : (meetingLangCtx === 'en' ? '[Chief]' : '[총괄자]');
             const truncated = m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content;
             contextParts.push(`${prefix} ${truncated}`);
           }
           if (contextParts.length > 0) {
-            meetingDescription = `## 이전 대화 컨텍스트\n\n${contextParts.join('\n\n')}\n\n위 대화를 바탕으로 미팅을 진행해주세요.`;
+            meetingDescription = meetingLangCtx === 'en'
+              ? `## Previous Conversation Context\n\n${contextParts.join('\n\n')}\n\nPlease conduct the meeting based on the conversation above.`
+              : `## 이전 대화 컨텍스트\n\n${contextParts.join('\n\n')}\n\n위 대화를 바탕으로 미팅을 진행해주세요.`;
           }
         }
 
@@ -3007,7 +3022,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         try {
-          console.log(`[chief-debug] stdout-full: ${run.stdout.slice(0, 2000)}`);
+          console.log(`[chief-debug] stdout-full: ${JSON.stringify(run.stdout.slice(0, 3000))}`);
           console.log(`[chief-debug] stderr-full: ${run.stderr.slice(0, 2000)}`);
           const rawOutput = parseAgentOutput(run.stdout);
           const { actions: parsedActions, cleanText } = parseActions(rawOutput);
