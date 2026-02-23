@@ -2472,7 +2472,7 @@ export function approveProposal(
     pushMessage(scopedSessionId, {
       id: `exec-start-${Date.now()}-${i}`,
       role: 'chief',
-      content: L(lang, `⏳ ${stepLabel} Executing: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`, `⏳ ${stepLabel} 실행 중: ${ACTION_LABEL_MAP[action.type] || action.type}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`),
+      content: L(lang, `⏳ ${stepLabel} Executing: ${getActionLabelMap(action.type, lang)}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`, `⏳ ${stepLabel} 실행 중: ${getActionLabelMap(action.type, lang)}${action.params.title ? ` — "${action.params.title}"` : action.params.name ? ` — "${action.params.name}"` : ''}`),
       createdAt: new Date().toISOString(),
     });
 
@@ -2503,7 +2503,7 @@ export function approveProposal(
 
   const skippedActions = stopIndex >= 0 ? toExecute.slice(stopIndex + 1) : [];
   if (stoppedReason && skippedActions.length > 0) {
-    const skippedList = skippedActions.map((a, idx) => `${stopIndex + 2 + idx}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join(', ');
+    const skippedList = skippedActions.map((a, idx) => `${stopIndex + 2 + idx}. ${getActionLabelMap(a.type, lang)}`).join(', ');
     pushMessage(scopedSessionId, {
       id: `exec-abort-${Date.now()}`,
       role: 'chief',
@@ -2530,7 +2530,7 @@ export function approveProposal(
   if (failCount > 0) summaryMsg += `, 실패 ${failCount}건`;
   if (stoppedReason) summaryMsg += `\n\n⛔ **중단 사유:** ${stoppedReason}`;
   if (skippedActions.length > 0) {
-    summaryMsg += `\n🧾 **미실행 액션:** ${skippedActions.map(a => ACTION_LABEL_MAP[a.type] || a.type).join(', ')}`;
+    summaryMsg += `\n🧾 **미실행 액션:** ${skippedActions.map(a => getActionLabelMap(a.type, lang)).join(', ')}`;
   }
   if (traceLines.length > 0) {
     summaryMsg += `\n\n🔎 **실행 추적 정보**\n${traceLines.join('\n')}`;
@@ -2585,23 +2585,7 @@ function getActionLabelMap(type: string, lang: Lang = 'ko'): string {
   return pair ? L(lang, pair[0], pair[1]) : type;
 }
 
-// Keep backward-compatible constant for places that don't have lang context
-const ACTION_LABEL_MAP: Record<string, string> = {
-  create_task: '작업 생성',
-  create_agent: '에이전트 생성',
-  start_meeting: '미팅 시작',
-  assign_task: '작업 배정',
-  cancel_task: '작업 취소',
-  cancel_all_pending: '대기 작업 전체 취소',
-  reset_agent: '에이전트 초기화',
-  cancel_meeting: '미팅 삭제',
-  delete_meeting: '미팅 삭제',
-  delete_all_meetings: '전체 미팅 삭제',
-  start_review: '후보 순위 평가',
-  confirm_meeting: '미팅 확정',
-  confirm_task: '태스크 확정',
-  view_task_result: '태스크 결과 조회',
-};
+// ACTION_LABEL_MAP removed — use getActionLabelMap(type, lang) instead
 
 /** Reject / discard a pending proposal */
 export function rejectProposal(messageId: string): void {
@@ -3079,9 +3063,9 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
             for (const action of proposedActions) {
               try {
                 const r = executeAction(action, sessionId);
-                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || L(lang, 'Done', '완료')}`);
+                results.push(`✅ ${getActionLabelMap(action.type, lang)}: ${r.result?.message || L(lang, 'Done', '완료')}`);
               } catch (e) {
-                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
+                results.push(`❌ ${getActionLabelMap(action.type, lang)}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
               }
             }
             const autoReply = `${cleanText ? cleanText + '\n\n' : ''}${results.join('\n')}`;
@@ -3106,9 +3090,9 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
             for (const action of proposedActions) {
               try {
                 const r = executeAction(action, sessionId);
-                results.push(`✅ ${ACTION_LABEL_MAP[action.type] || action.type}: ${r.result?.message || L(lang, 'Done', '완료')}`);
+                results.push(`✅ ${getActionLabelMap(action.type, lang)}: ${r.result?.message || L(lang, 'Done', '완료')}`);
               } catch (e) {
-                results.push(`❌ ${ACTION_LABEL_MAP[action.type] || action.type}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
+                results.push(`❌ ${getActionLabelMap(action.type, lang)}: ${e instanceof Error ? e.message : L(lang, 'Failed', '실패')}`);
               }
             }
             const emergencyReply = results.join('\n');
