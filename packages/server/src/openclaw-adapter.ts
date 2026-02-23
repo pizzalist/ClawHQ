@@ -67,7 +67,6 @@ export function spawnAgentSession(options: {
     '--session-id', options.sessionId,
     '--message', options.prompt,
     '--json',
-    '--local',
   ];
 
   const child = spawn(OPENCLAW_BIN, args, {
