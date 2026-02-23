@@ -362,9 +362,9 @@ function parseApprovalSelection(userMessage: string, total: number): number[] | 
     return null;
   }
   // Short approval words — exact match for short messages
-  if (msg.length < 10 && /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)$/i.test(msg)) return [0];
-  // Approval prefix with additional instructions — "응, 그리고 ..." / "응 근데 ..." / "네, ..." etc.
-  if (/^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok)\s*[,.]?\s+/i.test(msg)) return [0];
+  if (msg.length < 20 && /^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes|approve|sure|do it|proceed|run|execute)$/i.test(msg)) return [0];
+  // Approval prefix with additional instructions — "응, 그리고 ..." / "yes, and also ..." etc.
+  if (/^(ㅇ|ㅇㅇ|응|네|예|승인|확인|좋아|진행해|go|ok|yes|approve|sure)\s*[,.]?\s+/i.test(msg)) return [0];
   return null;
 }
 
