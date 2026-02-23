@@ -8,6 +8,15 @@ import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChai
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, type AgentRun } from './openclaw-adapter.js';
 
+type Lang = 'en' | 'ko';
+function L(lang: Lang, en: string, ko: string): string { return lang === 'en' ? en : ko; }
+
+// Track language preference per session for async notifications
+const sessionLanguageMap = new Map<string, Lang>();
+function getSessionLang(sessionId?: string): Lang {
+  return sessionLanguageMap.get(sessionId || '') || 'ko';
+}
+
 const MAX_HISTORY = 50;
 const MAX_COUNT_PER_ROLE = 5;
 const MAX_TOTAL_ADDITIONAL = 10;
@@ -48,26 +57,27 @@ export function resetChiefState() {
   llmInFlightBySession.clear();
   queuedApprovalBySession.clear();
   notificationSessionById.clear();
+  sessionLanguageMap.clear();
   lastActiveChiefSessionId = 'chief-default';
   reportedTaskCompletions.clear();
   emittedNotificationKeys.clear();
   handledInlineActionKeys.clear();
 }
 
-function compactText(input: string, limit = 500): string {
+function compactText(input: string, limit = 500, lang: Lang = 'ko'): string {
   const normalized = (input || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, limit)}...\n\n(더 보기는 '결과 보기'를 눌러주세요)`;
+  return `${normalized.slice(0, limit)}...\n\n${L(lang, '(Click "View Result" to see more)', '(더 보기는 \'결과 보기\'를 눌러주세요)')}`;
 }
 
-function summarizeTaskResult(result: string | null | undefined): string {
-  if (!result) return '(결과 없음)';
+function summarizeTaskResult(result: string | null | undefined, lang: Lang = 'ko'): string {
+  if (!result) return L(lang, '(No result)', '(결과 없음)');
   const cleaned = result
-    .replace(/```[\s\S]*?```/g, '[코드 블록 생략]')
+    .replace(/```[\s\S]*?```/g, L(lang, '[code block omitted]', '[코드 블록 생략]'))
     .replace(/<[^>]+>/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-  return compactText(cleaned, 500);
+  return compactText(cleaned, 500, lang);
 }
 
 function hasCriticalReviewFindings(text: string | null | undefined): boolean {
@@ -279,39 +289,42 @@ const ACTION_EMOJI_MAP: Record<string, string> = {
   delete_all_meetings: '❌',
 };
 
-const ACTION_FRIENDLY_LABEL: Record<string, string> = {
-  create_task: '태스크 생성',
-  create_agent: '에이전트 생성',
-  start_meeting: '회의 소집',
-  assign_task: '태스크 배정',
-  cancel_task: '태스크 취소',
-  cancel_all_pending: '대기 작업 전체 취소',
-  reset_agent: '에이전트 리셋',
-  cancel_meeting: '미팅 취소',
-  delete_meeting: '미팅 삭제',
-  delete_all_meetings: '전체 미팅 삭제',
-};
+function getActionFriendlyLabel(type: string, lang: Lang = 'ko'): string {
+  const labels: Record<string, [string, string]> = {
+    create_task: ['Create Task', '태스크 생성'],
+    create_agent: ['Create Agent', '에이전트 생성'],
+    start_meeting: ['Start Meeting', '회의 소집'],
+    assign_task: ['Assign Task', '태스크 배정'],
+    cancel_task: ['Cancel Task', '태스크 취소'],
+    cancel_all_pending: ['Cancel All Pending', '대기 작업 전체 취소'],
+    reset_agent: ['Reset Agent', '에이전트 리셋'],
+    cancel_meeting: ['Cancel Meeting', '미팅 취소'],
+    delete_meeting: ['Delete Meeting', '미팅 삭제'],
+    delete_all_meetings: ['Delete All Meetings', '전체 미팅 삭제'],
+  };
+  const pair = labels[type];
+  return pair ? L(lang, pair[0], pair[1]) : type;
+}
 
-function formatActionForDisplay(action: ChiefAction): string {
+function formatActionForDisplay(action: ChiefAction, lang: Lang = 'ko'): string {
   const emoji = ACTION_EMOJI_MAP[action.type] || '▶️';
-  const label = ACTION_FRIENDLY_LABEL[action.type] || action.type;
+  const label = getActionFriendlyLabel(action.type, lang);
   const p = action.params;
 
-  // Resolve human-readable descriptions based on action type
   if (action.type === 'cancel_task' && p.taskId) {
     const row = stmts.getTask.get(p.taskId) as any;
-    const title = row?.title || '알 수 없는 태스크';
+    const title = row?.title || L(lang, 'Unknown task', '알 수 없는 태스크');
     return `${emoji} ${label}: "${title}"`;
   }
   if (action.type === 'reset_agent' && p.agentId) {
     const row = stmts.getAgent.get(p.agentId) as any;
-    const name = row?.name || '알 수 없는 에이전트';
+    const name = row?.name || L(lang, 'Unknown agent', '알 수 없는 에이전트');
     return `${emoji} ${label}: "${name}"`;
   }
   if (action.type === 'assign_task' && p.taskId) {
     const taskRow = stmts.getTask.get(p.taskId) as any;
     const agentRow = p.agentId ? stmts.getAgent.get(p.agentId) as any : null;
-    const taskTitle = taskRow?.title || '알 수 없는 태스크';
+    const taskTitle = taskRow?.title || L(lang, 'Unknown task', '알 수 없는 태스크');
     const agentName = agentRow?.name || p.agentId || '';
     return `${emoji} ${label}: "${taskTitle}"${agentName ? ` → ${agentName}` : ''}`;
   }
@@ -321,14 +334,15 @@ function formatActionForDisplay(action: ChiefAction): string {
   if (p.name) {
     return `${emoji} ${label}: "${p.name}"`;
   }
-  // Fallback: show label only, hide raw IDs
   return `${emoji} ${label}`;
 }
 
-function formatActionList(actions: ChiefAction[]): string {
+function formatActionList(actions: ChiefAction[], lang: Lang = 'ko'): string {
   if (actions.length === 0) return '';
-  const lines = actions.map((a, i) => `${i + 1}. ${formatActionForDisplay(a)}`);
-  return `\n\n실행 후보 액션:\n${lines.join('\n')}\n\n원하는 번호(예: 1번)를 말해 주세요. '응/승인'이면 1번부터 순서대로 진행합니다.`;
+  const lines = actions.map((a, i) => `${i + 1}. ${formatActionForDisplay(a, lang)}`);
+  return lang === 'en'
+    ? `\n\nProposed actions:\n${lines.join('\n')}\n\nSay a number (e.g. "1") to pick one, or "yes/approve" to run them in order.`
+    : `\n\n실행 후보 액션:\n${lines.join('\n')}\n\n원하는 번호(예: 1번)를 말해 주세요. '응/승인'이면 1번부터 순서대로 진행합니다.`;
 }
 
 function parseApprovalSelection(userMessage: string, total: number): number[] | null {
@@ -388,9 +402,9 @@ function resolveNotificationSession(notification: ChiefNotification): string {
   return lastActiveChiefSessionId || 'chief-default';
 }
 
-function formatMeetingResult(meetingId: string): string {
+function formatMeetingResult(meetingId: string, lang: Lang = 'ko'): string {
   const meeting = getMeeting(meetingId);
-  if (!meeting) return '해당 회의를 찾을 수 없습니다. 회의 목록에서 다시 선택해주세요.';
+  if (!meeting) return L(lang, 'Meeting not found. Please select from the meeting list.', '해당 회의를 찾을 수 없습니다. 회의 목록에서 다시 선택해주세요.');
 
   const proposalCount = meeting.proposals?.length || 0;
   const report = meeting.report?.trim();
@@ -398,32 +412,32 @@ function formatMeetingResult(meetingId: string): string {
 
   const participantTotal = meeting.participants?.length || proposalCount;
   const lines = [
-    `📄 **회의 결과**: "${meeting.title}"`,
-    `상태: ${meeting.status} · 참여자: ${participantTotal}명 · 제안: ${proposalCount}건`,
+    `📄 **${L(lang, 'Meeting Result', '회의 결과')}**: "${meeting.title}"`,
+    L(lang,
+      `Status: ${meeting.status} · Participants: ${participantTotal} · Proposals: ${proposalCount}`,
+      `상태: ${meeting.status} · 참여자: ${participantTotal}명 · 제안: ${proposalCount}건`),
   ];
 
-  // Show lineage info
   if (meeting.sourceMeetingId) {
     const sourceMeeting = getMeeting(meeting.sourceMeetingId);
     if (sourceMeeting) {
-      lines.push(`📌 기반 회의: "${sourceMeeting.title}"`);
+      lines.push(`📌 ${L(lang, 'Based on', '기반 회의')}: "${sourceMeeting.title}"`);
     }
   }
   if (meeting.sourceCandidates && meeting.sourceCandidates.length > 0) {
-    lines.push(`📋 평가 대상 후보: ${meeting.sourceCandidates.map(c => c.name).join(', ')}`);
+    lines.push(`📋 ${L(lang, 'Candidates evaluated', '평가 대상 후보')}: ${meeting.sourceCandidates.map(c => c.name).join(', ')}`);
   }
 
-  lines.push('', preview || '(결과 없음)');
+  lines.push('', preview || L(lang, '(No result)', '(결과 없음)'));
 
-  // Show decision packet if available
   if (meeting.decisionPacket) {
     const dp = meeting.decisionPacket;
-    lines.push('', '---', '📊 **최종 의사결정 패킷**');
+    lines.push('', '---', `📊 **${L(lang, 'Final Decision Packet', '최종 의사결정 패킷')}**`);
     if (dp.recommendation) {
-      lines.push(`🏆 추천안: **${dp.recommendation.name}** — ${dp.recommendation.summary?.slice(0, 100) || ''}`);
+      lines.push(`🏆 ${L(lang, 'Recommendation', '추천안')}: **${dp.recommendation.name}** — ${dp.recommendation.summary?.slice(0, 100) || ''}`);
     }
     if (dp.alternatives && dp.alternatives.length > 0) {
-      lines.push(`💡 대안: ${dp.alternatives.map(a => a.name).join(', ')}`);
+      lines.push(`💡 ${L(lang, 'Alternatives', '대안')}: ${dp.alternatives.map(a => a.name).join(', ')}`);
     }
     if (dp.reviewerScoreCards && dp.reviewerScoreCards.length > 0) {
       for (const card of dp.reviewerScoreCards) {
@@ -436,12 +450,12 @@ function formatMeetingResult(meetingId: string): string {
   return lines.join('\n');
 }
 
-function formatTaskResult(taskId: string): string {
+function formatTaskResult(taskId: string, lang: Lang = 'ko'): string {
   const task = listTasks().find(t => t.id === taskId);
-  if (!task) return '해당 작업을 찾을 수 없습니다. 목록에서 다시 선택해주세요.';
+  if (!task) return L(lang, 'Task not found. Please select from the list.', '해당 작업을 찾을 수 없습니다. 목록에서 다시 선택해주세요.');
   const status = task.status;
-  const preview = (task.result || '(결과 없음)').trim();
-  return `📄 **작업 결과**: "${task.title}"\n상태: ${status}\n\n${preview}`;
+  const preview = (task.result || L(lang, '(No result)', '(결과 없음)')).trim();
+  return `📄 **${L(lang, 'Task Result', '작업 결과')}**: "${task.title}"\n${L(lang, 'Status', '상태')}: ${status}\n\n${preview}`;
 }
 
 export function notifyChief(notification: ChiefNotification) {
@@ -463,14 +477,15 @@ export function notifyChief(notification: ChiefNotification) {
 /**
  * Handle an inline action button click from the Chief console.
  */
-export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string): { reply: string; sessionId: string } {
+export function handleChiefAction(notificationId: string, actionId: string, params?: Record<string, string>, sessionId?: string, language?: Lang): { reply: string; sessionId: string } {
   const scopedSessionId = (notificationSessionById.get(notificationId) || sessionId || 'chief-default').trim() || 'chief-default';
+  const lang: Lang = language || getSessionLang(scopedSessionId);
   // Keep lastActiveChiefSessionId in sync so async notifications (e.g. meeting completion) route to the correct client session
   if (sessionId && sessionId.trim()) lastActiveChiefSessionId = sessionId.trim();
 
   const actionKey = makeInlineActionIdempotencyKey(notificationId, actionId);
   if (handledInlineActionKeys.has(actionKey)) {
-    return { reply: '이미 처리된 요청입니다. (중복 클릭 방지)', sessionId: scopedSessionId };
+    return { reply: L(lang, 'Already processed. (duplicate click prevention)', '이미 처리된 요청입니다. (중복 클릭 방지)'), sessionId: scopedSessionId };
   }
   handledInlineActionKeys.add(actionKey);
 
@@ -493,30 +508,51 @@ export function handleChiefAction(notificationId: string, actionId: string, para
   if (actionId === 'approve' || actionId.startsWith('approve-') || actionId.startsWith('approve_')) {
     const meetingId = params?.meetingId;
     const taskId = params?.taskId;
-    const nextStepLines: string[] = ['✅ 확정되었습니다.'];
+    const nextStepLines: string[] = [L(lang, '✅ Confirmed.', '✅ 확정되었습니다.')];
 
     if (meetingId) {
       const meeting = getMeeting(meetingId);
       if (!meeting) {
-        nextStepLines.push('\n\n완료.');
+        nextStepLines.push(L(lang, '\n\nDone.', '\n\n완료.'));
       } else {
         if (meeting.character === 'planning' || meeting.character === 'brainstorm') {
-          // Do NOT auto-start review. Show review option only when comparable candidates are explicit.
           const { candidates, canScore } = getMeetingReviewReadiness(meetingId);
           if (canScore) {
             const candidateList = candidates.map((c, i) => `${i + 1}. **${c.name}**: ${c.summary.slice(0, 120)}`).join('\n');
-            nextStepLines.push(`\n\n📋 **도출된 후보 ${candidates.length}건:**\n${candidateList}`);
-            nextStepLines.push(`\n후보 순위 평가를 원하시면 회의 완료 알림의 "🏆 후보 순위 평가" 버튼을 눌러주세요.`);
+            nextStepLines.push(L(lang,
+              `\n\n📋 **${candidates.length} candidates identified:**\n${candidateList}`,
+              `\n\n📋 **도출된 후보 ${candidates.length}건:**\n${candidateList}`));
+            nextStepLines.push(L(lang,
+              `\nTo rank candidates, click the "🏆 Rank Candidates" button on the meeting completion notification.`,
+              `\n후보 순위 평가를 원하시면 회의 완료 알림의 "🏆 후보 순위 평가" 버튼을 눌러주세요.`));
           } else {
-            nextStepLines.push(`\n\n📋 비교 가능한 후보가 없어 점수화 평가는 건너뜁니다.`);
-            nextStepLines.push(`🧭 이번 건은 총괄자 최종안으로 취합해 실행 단계로 넘깁니다.`);
+            nextStepLines.push(L(lang,
+              `\n\n📋 No comparable candidates found — skipping scored evaluation.`,
+              `\n\n📋 비교 가능한 후보가 없어 점수화 평가는 건너뜁니다.`));
+            nextStepLines.push(L(lang,
+              `🧭 The Chief will consolidate a final proposal and move to execution.`,
+              `🧭 이번 건은 총괄자 최종안으로 취합해 실행 단계로 넘깁니다.`));
           }
         } else if (meeting.sourceMeetingId) {
           // Review meeting confirmed → auto-create spec task from recommendation
           const rec = meeting.decisionPacket?.recommendation;
           const recName = rec?.name || meeting.title;
-          const taskTitle = `[기획/명세서] ${recName}`;
-          const taskDesc = [
+          const taskTitle = L(lang, `[Spec] ${recName}`, `[기획/명세서] ${recName}`);
+          const taskDesc = lang === 'en' ? [
+            `Auto-generated task based on confirmed meeting "${meeting.title}".`,
+            ``,
+            rec ? `## Recommendation` : '',
+            rec ? `- Name: ${rec.name}` : '',
+            rec?.summary ? `- Summary: ${rec.summary}` : '',
+            rec?.score != null ? `- Score: ${Number(rec.score).toFixed(2)}` : '',
+            ``,
+            `## Requirements`,
+            `Based on the above recommendation, write a detailed spec and development plan.`,
+            `- Define functional requirements`,
+            `- Propose tech stack and architecture`,
+            `- Define MVP scope and milestones`,
+            `- Identify risks and mitigation strategies`,
+          ].filter(Boolean).join('\n') : [
             `회의 "${meeting.title}" 확정 결과 기반 자동 생성 태스크입니다.`,
             ``,
             rec ? `## 추천안` : '',
@@ -539,20 +575,25 @@ export function handleChiefAction(notificationId: string, actionId: string, para
           const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
           setTimeout(() => processQueue(), 200);
 
-          nextStepLines.push(`\n\n🚀 **자동 실행:** 추천안 "${recName}" 기반 기획/명세서 작성 태스크 생성 → ${pmAgent.name}에게 배정 → 실행 중`);
-          nextStepLines.push(`📋 태스크: "${taskTitle}"`);
-          nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+          nextStepLines.push(L(lang,
+            `\n\n🚀 **Auto-executing:** Creating spec task based on "${recName}" → assigned to ${pmAgent.name} → running`,
+            `\n\n🚀 **자동 실행:** 추천안 "${recName}" 기반 기획/명세서 작성 태스크 생성 → ${pmAgent.name}에게 배정 → 실행 중`));
+          nextStepLines.push(`📋 ${L(lang, 'Task', '태스크')}: "${taskTitle}"`);
+          nextStepLines.push(L(lang, `You'll be notified when it's done.`, `완료 시 자동으로 보고드리겠습니다.`));
         } else {
-          // Generic meeting — create task from content
-          const taskTitle = `[실행] ${meeting.title} 확정안`;
-          const taskDesc = `회의 "${meeting.title}" 결과를 실행하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`;
+          const taskTitle = L(lang, `[Execute] ${meeting.title} — confirmed`, `[실행] ${meeting.title} 확정안`);
+          const taskDesc = L(lang,
+            `Execute the results of meeting "${meeting.title}".\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`,
+            `회의 "${meeting.title}" 결과를 실행하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`);
           const agents = listAgents();
           let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
           if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
           const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
           setTimeout(() => processQueue(), 200);
-          nextStepLines.push(`\n\n🚀 **자동 실행:** 실행 태스크를 ${pmAgent.name}에게 배정했습니다.`);
-          nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+          nextStepLines.push(L(lang,
+            `\n\n🚀 **Auto-executing:** Execution task assigned to ${pmAgent.name}.`,
+            `\n\n🚀 **자동 실행:** 실행 태스크를 ${pmAgent.name}에게 배정했습니다.`));
+          nextStepLines.push(L(lang, `You'll be notified when it's done.`, `완료 시 자동으로 보고드리겠습니다.`));
         }
       }
     } else if (taskId) {
@@ -592,12 +633,14 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             // Delay processQueue enough for agent to transition to idle (2s idle delay + buffer)
             setTimeout(() => processQueue(), 3000);
 
-            nextStepLines.push(`\n\n🚀 **자동 실행:** 다음 단계 "${nextStep.label}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
-            nextStepLines.push(`📋 태스크: "${nextTitle}"`);
-            nextStepLines.push(`📊 체인 진행: ${nextIdx + 1}/${chainPlan.steps.length} 단계`);
-            nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+            nextStepLines.push(L(lang,
+              `\n\n🚀 **Auto-executing:** Next step "${nextStep.label}" task created → assigned to ${nextAgent.name} → running`,
+              `\n\n🚀 **자동 실행:** 다음 단계 "${nextStep.label}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`));
+            nextStepLines.push(`📋 ${L(lang, 'Task', '태스크')}: "${nextTitle}"`);
+            nextStepLines.push(`📊 ${L(lang, 'Chain progress', '체인 진행')}: ${nextIdx + 1}/${chainPlan.steps.length} ${L(lang, 'steps', '단계')}`);
+            nextStepLines.push(L(lang, `You'll be notified when it's done.`, `완료 시 자동으로 보고드리겠습니다.`));
           } else {
-            nextStepLines.push(`\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`);
+            nextStepLines.push(L(lang, `\n\n✅ All chain plan steps completed.`, `\n\n✅ 체인 플랜의 모든 단계가 완료되었습니다.`));
           }
         } else {
           // Chain plan exhausted — fall through to context-based next step derivation below
@@ -623,9 +666,11 @@ export function handleChiefAction(notificationId: string, actionId: string, para
           // Default: no auto follow-up for ambiguous tasks
           const pendingCount = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress').length;
           if (pendingCount > 0) {
-            nextStepLines.push(`\n\n📌 남은 작업 ${pendingCount}건이 진행/대기 중입니다. 완료 시 자동 보고드립니다.`);
+            nextStepLines.push(L(lang,
+              `\n\n📌 ${pendingCount} tasks in progress/pending. You'll be notified when done.`,
+              `\n\n📌 남은 작업 ${pendingCount}건이 진행/대기 중입니다. 완료 시 자동 보고드립니다.`));
           } else {
-            nextStepLines.push(`\n\n✅ 모든 작업이 완료되었습니다.`);
+            nextStepLines.push(L(lang, `\n\n✅ All tasks completed.`, `\n\n✅ 모든 작업이 완료되었습니다.`));
           }
           reply = nextStepLines.join('');
           // skip the auto-follow-up below
@@ -653,14 +698,20 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         const newTask = createTask(nextTaskTitle, nextTaskDesc, nextAgent.id, taskId);
         setTimeout(() => processQueue(), 3000);
 
-        nextStepLines.push(`\n\n🚀 **자동 실행:** "${nextLabel}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`);
-        nextStepLines.push(`📋 태스크: "${nextTaskTitle}"`);
-        nextStepLines.push(`완료 시 자동으로 보고드리겠습니다.`);
+        nextStepLines.push(L(lang,
+          `\n\n🚀 **Auto-executing:** "${nextLabel}" task created → assigned to ${nextAgent.name} → running`,
+          `\n\n🚀 **자동 실행:** "${nextLabel}" 태스크 생성 → ${nextAgent.name}에게 배정 → 실행 중`));
+        nextStepLines.push(`📋 ${L(lang, 'Task', '태스크')}: "${nextTaskTitle}"`);
+        nextStepLines.push(L(lang, `You'll be notified when it's done.`, `완료 시 자동으로 보고드리겠습니다.`));
       } else {
-        nextStepLines.push(`\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`);
+        nextStepLines.push(L(lang,
+          `\n\n📌 Next step: Check pending/in-progress tasks and provide further instructions if needed.`,
+          `\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`));
       }
     } else {
-      nextStepLines.push(`\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`);
+      nextStepLines.push(L(lang,
+        `\n\n📌 Next step: Check pending/in-progress tasks and provide further instructions if needed.`,
+        `\n\n📌 다음 단계: 현재 대기/진행 작업 상태를 확인하고, 필요 시 추가 실행을 지시해주세요.`));
     }
 
     reply = nextStepLines.join('');
@@ -692,26 +743,32 @@ export function handleChiefAction(notificationId: string, actionId: string, para
       const pendingId = `fix-from-action-${Date.now()}`;
       pendingProposals.set(pendingId, [fixAction]);
       pendingProposalBySession.set(scopedSessionId, pendingId);
-      reply = `✅ 수정 반영 작업을 준비했습니다.\n\n${formatActionForDisplay(fixAction)}\n\n승인하면 즉시 실행됩니다.`;
+      reply = L(lang,
+        `✅ Fix task prepared.\n\n${formatActionForDisplay(fixAction, lang)}\n\nApprove to execute immediately.`,
+        `✅ 수정 반영 작업을 준비했습니다.\n\n${formatActionForDisplay(fixAction, lang)}\n\n승인하면 즉시 실행됩니다.`);
     } else {
-      reply = '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?\n\n💡 구체적인 수정 방향을 알려주시면 더 빠르게 처리할 수 있습니다.';
+      reply = L(lang,
+        'Revision request noted. What needs to be changed?\n\n💡 The more specific the direction, the faster we can process it.',
+        '수정 요청을 접수했습니다. 어떤 부분을 수정해야 할까요?\n\n💡 구체적인 수정 방향을 알려주시면 더 빠르게 처리할 수 있습니다.');
     }
   } else if (actionId === 'view_result' || actionId.startsWith('view-')) {
     const meetingId = extractIdFromAction(actionId, 'view-meeting') || params?.meetingId;
     const taskId = extractIdFromAction(actionId, 'view') || params?.taskId;
 
     if (meetingId) {
-      reply = formatMeetingResult(meetingId);
+      reply = formatMeetingResult(meetingId, lang);
     } else if (taskId) {
-      reply = formatTaskResult(taskId);
+      reply = formatTaskResult(taskId, lang);
     } else {
-      reply = '확인할 결과 대상을 찾지 못했습니다. 목록에서 다시 선택해주세요.';
+      reply = L(lang, 'Could not find the result target. Please select from the list.', '확인할 결과 대상을 찾지 못했습니다. 목록에서 다시 선택해주세요.');
     }
   } else if (actionId === 'select_proposal' || actionId.startsWith('select-')) {
-    const proposalAgent = params?.agentName || '선택된 안';
-    reply = `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`;
+    const proposalAgent = params?.agentName || L(lang, 'Selected proposal', '선택된 안');
+    reply = L(lang,
+      `Selected ${proposalAgent}'s proposal. Shall we proceed?`,
+      `${proposalAgent}의 제안을 선택했습니다. 이대로 진행할까요?`);
   } else if (actionId === 'retry' || actionId.startsWith('retry-')) {
-    reply = '재시도를 시작합니다. 잠시 기다려주세요.';
+    reply = L(lang, 'Retrying. Please wait...', '재시도를 시작합니다. 잠시 기다려주세요.');
   } else if (actionId === 'start_review' || actionId.startsWith('start-review-')) {
     // Auto-start review meeting from source meeting
     const meetingId = extractIdFromAction(actionId, 'start-review') || params?.meetingId;
@@ -720,7 +777,9 @@ export function handleChiefAction(notificationId: string, actionId: string, para
       if (sourceMeeting) {
         const { canScore } = getMeetingReviewReadiness(meetingId);
         if (!canScore) {
-          reply = 'ℹ️ 비교 가능한 후보가 없어 후보 평가는 생략됩니다.\n\n총괄자 최종안 작성(취합 결정)으로 진행해주세요.';
+          reply = L(lang,
+            'ℹ️ No comparable candidates found — skipping candidate evaluation.\n\nPlease proceed with Chief\'s consolidated final proposal.',
+            'ℹ️ 비교 가능한 후보가 없어 후보 평가는 생략됩니다.\n\n총괄자 최종안 작성(취합 결정)으로 진행해주세요.');
         } else {
           // Find or create 3 reviewers
           const agents = listAgents();
@@ -735,25 +794,28 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             reviewerIds.push(created.id);
           }
           const reviewMeeting = startReviewMeetingFromSource(
-            `[리뷰] ${sourceMeeting.title}`,
+            L(lang, `[Review] ${sourceMeeting.title}`, `[리뷰] ${sourceMeeting.title}`),
             meetingId,
             reviewerIds,
           );
           if (reviewMeeting) {
-            reply = `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`;
+            reply = L(lang,
+              `🔍 Review meeting "${reviewMeeting.title}" started.\n${reviewerIds.length} reviewers are evaluating the planning meeting candidates.\nYou'll be notified with scorecards and the final recommendation.`,
+              `🔍 리뷰 미팅 "${reviewMeeting.title}"을 시작했습니다.\n${reviewerIds.length}명의 리뷰어가 기획 회의 후보를 평가 중입니다.\n완료 시 점수표와 최종 추천안을 보고드리겠습니다.`);
           } else {
-            reply = '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보가 2개 이상 필요합니다. 먼저 명시적 [CANDIDATE] 후보를 도출해 주세요.';
+            reply = L(lang,
+              '⚠️ Cannot start review meeting.\n\nAt least 2 scoreable candidates are required. Please generate explicit [CANDIDATE] entries first.',
+              '⚠️ 리뷰 미팅을 시작할 수 없습니다.\n\n점수화 대상 후보가 2개 이상 필요합니다. 먼저 명시적 [CANDIDATE] 후보를 도출해 주세요.');
           }
         }
       } else {
-        reply = '리뷰 대상 회의를 찾을 수 없습니다.';
+        reply = L(lang, 'Source meeting not found.', '리뷰 대상 회의를 찾을 수 없습니다.');
       }
     } else {
-      reply = '리뷰 대상 회의를 찾을 수 없습니다.';
+      reply = L(lang, 'Source meeting not found.', '리뷰 대상 회의를 찾을 수 없습니다.');
     }
   } else {
-    // Catch-all: graceful fallback — never expose raw actionId to user
-    reply = `요청을 확인했습니다. 다시 시도하거나 다른 옵션을 선택해주세요.`;
+    reply = L(lang, 'Request acknowledged. Please try again or choose a different option.', `요청을 확인했습니다. 다시 시도하거나 다른 옵션을 선택해주세요.`);
   }
 
   const replyMsg: ChiefChatMessage = {
@@ -821,6 +883,7 @@ function makeCheckInIdempotencyKey(checkInId: string, optionId: string): string 
  * Chief monitors progress and proactively communicates with the user.
  */
 export function chiefHandleTaskEvent(event: AppEvent) {
+  const lang = getSessionLang(lastActiveChiefSessionId);
   // Issue 2: Chain completion notification in chat
   if (event.type === 'chain_completed' && event.taskId) {
     const tasks = listTasks();
@@ -864,12 +927,14 @@ export function chiefHandleTaskEvent(event: AppEvent) {
         ? '\n\n📄 **결과 미리보기:**\n' + rootTask.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (rootTask.result.length > 300 ? '...' : '')
         : '';
 
-      const summary = `🎉 [체인 완료] "${rootTask.title}" 전체 파이프라인이 완료되었습니다.\n${stepLine ? `• ${stepLine}` : ''}${reviewInfo}${resultPreview}\n\n📊 결과 보기 버튼으로 최종 결과를 확인하세요.`;
+      const summary = L(lang,
+        `🎉 [Chain Complete] "${rootTask.title}" — full pipeline finished.\n${stepLine ? `• ${stepLine}` : ''}${reviewInfo}${resultPreview}\n\n📊 Click "View Result" to see the final output.`,
+        `🎉 [체인 완료] "${rootTask.title}" 전체 파이프라인이 완료되었습니다.\n${stepLine ? `• ${stepLine}` : ''}${reviewInfo}${resultPreview}\n\n📊 결과 보기 버튼으로 최종 결과를 확인하세요.`);
 
       notifyChief({
         id: `notif-chain-complete-${event.taskId}-${Date.now()}`,
         type: 'task_complete',
-        title: `🎉 체인 완료: ${rootTask.title}`,
+        title: L(lang, `🎉 Chain Complete: ${rootTask.title}`, `🎉 체인 완료: ${rootTask.title}`),
         summary,
         actions: [
           { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
@@ -929,19 +994,19 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     if (task.parentTaskId) return;
 
     const assignee = task.assigneeId ? getAgent(task.assigneeId) : null;
-    const resultPreview = summarizeTaskResult(task.result);
+    const resultPreview = summarizeTaskResult(task.result, lang);
     const elapsedMs = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime();
     const elapsedSec = Math.round(elapsedMs / 1000);
 
-    // Check web deliverables for validation issues
     const deliverables = listDeliverablesByTask(event.taskId);
     const webDeliverables = deliverables.filter(d => d.type === 'web');
     let validationWarning = '';
     for (const wd of webDeliverables) {
-      // Always re-validate to catch edge cases
       const validation = validateWebDeliverable(wd.content);
       if (!validation.valid) {
-        validationWarning = `\n\n⚠️ **빈 화면 위험 경고**:\n${validation.issues.map(i => `• ${i}`).join('\n')}\n\n🔍 체크리스트: DOM mount 확인 / console error 확인 / network 404·500 확인 / 렌더 루프 여부\n수정 요청을 권장합니다.`;
+        validationWarning = L(lang,
+          `\n\n⚠️ **Blank Screen Risk Warning**:\n${validation.issues.map(i => `• ${i}`).join('\n')}\n\n🔍 Checklist: DOM mount / console errors / network 404·500 / render loop\nRevision recommended.`,
+          `\n\n⚠️ **빈 화면 위험 경고**:\n${validation.issues.map(i => `• ${i}`).join('\n')}\n\n🔍 체크리스트: DOM mount 확인 / console error 확인 / network 404·500 확인 / 렌더 루프 여부\n수정 요청을 권장합니다.`);
         break;
       }
     }
@@ -952,7 +1017,9 @@ export function chiefHandleTaskEvent(event: AppEvent) {
     const isReviewTask = /(review|리뷰|검토|qa|qc)/i.test(task.title);
     const needsFixFromReview = isReviewTask && hasCriticalReviewFindings(task.result);
     const reviewFixHint = needsFixFromReview
-      ? `\n\n💡 리뷰 피드백 반영이 필요하면 아래 "🔧 수정 반영(Fix)" 버튼(또는 "리뷰 피드백 반영해줘")을 사용하세요.`
+      ? L(lang,
+        `\n\n💡 To apply review fixes, click "🔧 Apply Fix" below or say "apply review feedback".`,
+        `\n\n💡 리뷰 피드백 반영이 필요하면 아래 "🔧 수정 반영(Fix)" 버튼(또는 "리뷰 피드백 반영해줘")을 사용하세요.`)
       : '';
 
     // Emit notification with inline actions
@@ -960,7 +1027,9 @@ export function chiefHandleTaskEvent(event: AppEvent) {
       id: `notif-task-${event.taskId}-${Date.now()}`,
       type: webDeliverables.length > 0 && validationWarning ? 'task_failed' : 'task_complete',
       title: task.title,
-      summary: `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}${reviewFixHint}${task.result ? '\n\n📄 **결과 미리보기:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`,
+      summary: L(lang,
+        `✅ [Task Complete] "${task.title}"\nAssigned: ${assignee?.name || 'Unassigned'} (${assignee?.role || '-'}) | Duration: ${elapsedSec}s${validationWarning}${reviewFixHint}${task.result ? '\n\n📄 **Result Preview:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`,
+        `✅ [태스크 완료] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'}) | 소요: ${elapsedSec}초${validationWarning}${reviewFixHint}${task.result ? '\n\n📄 **결과 미리보기:**\n' + task.result.slice(0, 300).replace(/\n{2,}/g, '\n') + (task.result.length > 300 ? '...' : '') : ''}`),
       actions: [
         { id: `view-${event.taskId}`, label: '📄 결과 보기', action: 'view_result', params: { taskId: event.taskId } },
         { id: `approve-${event.taskId}`, label: '✅ 확정', action: 'approve', params: { taskId: event.taskId } },
@@ -1037,7 +1106,9 @@ export function chiefHandleTaskEvent(event: AppEvent) {
       id: `notif-taskfail-${event.taskId}-${Date.now()}`,
       type: 'task_failed',
       title: task.title,
-      summary: `❌ [태스크 실패] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n오류: ${(task.result || event.message || '알 수 없는 오류').slice(0, 200)}`,
+      summary: L(lang,
+        `❌ [Task Failed] "${task.title}"\nAssigned: ${assignee?.name || 'Unassigned'} (${assignee?.role || '-'})\nError: ${(task.result || event.message || 'Unknown error').slice(0, 200)}`,
+        `❌ [태스크 실패] "${task.title}"\n담당: ${assignee?.name || '미배정'} (${assignee?.role || '-'})\n오류: ${(task.result || event.message || '알 수 없는 오류').slice(0, 200)}`),
       actions: [
         { id: `view-${event.taskId}`, label: '📄 상세 보기', action: 'view_result', params: { taskId: event.taskId } },
         { id: `retry-${event.taskId}`, label: '🔄 재시도', action: 'custom', params: { taskId: event.taskId, command: 'retry' } },
@@ -1055,6 +1126,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
  * Chief reports meeting progress and asks for decisions.
  */
 export function chiefHandleMeetingChange() {
+  const lang = getSessionLang(lastActiveChiefSessionId);
   const meetings = listMeetings();
   for (const meeting of meetings) {
     if (meeting.status === 'completed' && !reportedMeetingCompletions.has(meeting.id)) {
@@ -1069,8 +1141,8 @@ export function chiefHandleMeetingChange() {
         .join('\n');
 
       const reportPreview = meeting.report
-        ? compactText(meeting.report, 500)
-        : compactText(participantSummary, 500);
+        ? compactText(meeting.report, 500, lang)
+        : compactText(participantSummary, 500, lang);
 
       // Build context-appropriate actions
       const meetingActions: any[] = [
@@ -1112,13 +1184,17 @@ export function chiefHandleMeetingChange() {
       if (!isNotificationDuplicate('meeting_complete', meeting.id)) {
         const participantCount = meeting.participants?.length || contributionCount;
         const noCandidateHint = isPlanningLike && !(readiness?.canScore)
-          ? '\n\nℹ️ 비교 가능한 후보가 없어 후보 평가는 비활성화되었습니다. 총괄자 최종안 작성으로 진행하세요.'
+          ? L(lang,
+            '\n\nℹ️ No comparable candidates found — candidate evaluation is disabled. Please proceed with Chief\'s consolidated final proposal.',
+            '\n\nℹ️ 비교 가능한 후보가 없어 후보 평가는 비활성화되었습니다. 총괄자 최종안 작성으로 진행하세요.')
           : '';
         notifyChief({
           id: `notif-meeting-${meeting.id}-${Date.now()}`,
           type: 'meeting_complete',
           title: meeting.title,
-          summary: `🏛️ [회의 완료] "${meeting.title}"\n\n참여자 ${participantCount}명 중 ${contributionCount}명이 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}${noCandidateHint}\n\n결과를 확인하고 다음 단계를 결정해주세요.`,
+          summary: L(lang,
+            `🏛️ [Meeting Complete] "${meeting.title}"\n\n${contributionCount} of ${participantCount} participants completed discussions.${lineageInfo}\n\n${reportPreview}${noCandidateHint}\n\nReview the results and decide on next steps.`,
+            `🏛️ [회의 완료] "${meeting.title}"\n\n참여자 ${participantCount}명 중 ${contributionCount}명이 논의를 완료했습니다.${lineageInfo}\n\n${reportPreview}${noCandidateHint}\n\n결과를 확인하고 다음 단계를 결정해주세요.`),
           actions: meetingActions,
           meetingId: meeting.id,
           createdAt: new Date().toISOString(),
@@ -1151,10 +1227,11 @@ export function chiefHandleMeetingChange() {
  * Handle user's response to a check-in option.
  * Returns a chief message with follow-up or action.
  */
-export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string): { reply: string; actions?: ChiefAction[] } {
+export function respondToCheckIn(checkInId: string, optionId: string, userComment?: string, language?: Lang): { reply: string; actions?: ChiefAction[] } {
+  const lang: Lang = language || 'ko';
   const dedupeKey = makeCheckInIdempotencyKey(checkInId, optionId);
   if (handledCheckInResponseKeys.has(dedupeKey)) {
-    return { reply: '이미 처리된 응답입니다. (중복 클릭 방지)' };
+    return { reply: L(lang, 'Already processed. (duplicate click prevention)', '이미 처리된 응답입니다. (중복 클릭 방지)') };
   }
   handledCheckInResponseKeys.add(dedupeKey);
 
@@ -1224,10 +1301,13 @@ export function respondToCheckIn(checkInId: string, optionId: string, userCommen
 function getSessionMessages(sessionId: string): ChiefChatMessage[] {
   const existing = sessionMessages.get(sessionId);
   if (existing) return existing;
+  const lang = getSessionLang(sessionId);
   const seeded: ChiefChatMessage[] = [{
     id: `chief-welcome-${Date.now()}`,
     role: 'chief',
-    content: '안녕하세요, 총괄자입니다. 현재 오피스 상태를 보고 팀 편성과 실행 플랜을 제안해드릴게요. 어떤 일을 시작할까요?',
+    content: L(lang,
+      "Hello, I'm the Chief. I'll review the current office state and suggest team composition and execution plans. What shall we start?",
+      '안녕하세요, 총괄자입니다. 현재 오피스 상태를 보고 팀 편성과 실행 플랜을 제안해드릴게요. 어떤 일을 시작할까요?'),
     createdAt: new Date().toISOString(),
   }];
   sessionMessages.set(sessionId, seeded);
@@ -1363,6 +1443,132 @@ function buildChiefSystemPrompt(language: 'en' | 'ko' = 'ko'): string {
   const intro = language === 'en'
     ? 'You are ClawHQ\'s Chief (총괄자).'
     : '당신은 ClawHQ의 총괄자(Chief)입니다.';
+
+  if (language === 'en') {
+    return `${intro}
+
+Rules:
+1. Be concise. Default is 1-2 sentences; never exceed 3 sentences.
+2. For simple operations (status check, delete, cancel), suggest execution immediately. Do not suggest meetings.
+3. Only present options for complex tasks (new projects, team composition, etc.).
+4. Present at most 2 options when giving choices.
+${langRule}
+6. Always get user approval before execution.
+7. Use taskId, agentId, etc. directly from the office state below.
+8. For simple/definitional questions (e.g. "explain principles", "summarize criteria", "N-item checklist"), give a direct short answer without unnecessary execution suggestions.
+9. When a chain is in progress and the user makes additional requests, inform them the content will be applied to the next step.
+10. For add/create/reset/cancel requests, respond in 1-2 sentences with only the minimum required actions.
+
+Response length:
+- Status query → 1-2 sentences (one line if possible)
+- Simple action (add/create/reset/cancel) → 1-2 sentences + minimal actions
+- Simple/definitional explanation → max 4 lines
+- Complex planning → max 8 lines + 2 options
+
+When proposing chains/pipelines:
+- Always frame as "Here's the recommended plan. Approve to execute."
+- Before approval, never use definitive phrases like "executing" or "proceeding".
+- For role transitions (e.g. QA→Dev), use "Recommending X as the next step. Shall we proceed?"
+
+Only suggest meetings when:
+- The user explicitly requests a meeting
+- Complex work requiring 3+ agents to collaborate
+Never suggest meetings for simple tasks (delete, status check, single-agent work).
+
+## Auto Difficulty Assessment
+When the user requests a new project/feature, assess difficulty first and suggest the appropriate flow.
+
+**Level 1 — Simple**
+- Criteria: Single page/component, existing feature modification, UI change, style update
+- Examples: "Create a login page", "Change button color", "Fix header"
+- Flow: Assign directly to 1 Developer
+- Actions: create_task → assign (developer)
+
+**Level 2 — Standard**
+- Criteria: CRUD app, multiple pages, API integration, single service scope
+- Examples: "Build a chat app", "Todo CRUD", "Create a bulletin board"
+- Flow: PM writes spec → Developer implements → Reviewer reviews
+- Actions: create_task (PM spec) → chain to dev/review after completion
+
+**Level 3 — Complex**
+- Criteria: Multi-service/microservices, real-time features, DB design needed, large-scale architecture, mixed tech stacks
+- Examples: "SNS platform", "E-commerce site", "Real-time collaboration tool", "SaaS product"
+- Flow:
+  1. First convene a technical review meeting (start_meeting, character="architecture")
+     - Participants: Match project scale (CTO-role PM, Frontend Dev, Backend Dev, DevOps, etc.)
+     - Discuss architecture/tech stack/role distribution in the meeting
+  2. PM writes development spec based on meeting results (create_task, PM)
+  3. Distribute role-based tasks from the spec (frontend/backend/infra — parallelizable)
+- Action order: start_meeting (architecture) → confirm after completion → PM spec → role-based create_task
+
+Assessment notes:
+- If the user explicitly says "skip meeting" or "just build it", respect their preference.
+- When in doubt, treat as Standard. Fast execution beats excessive process.
+- Briefly inform the user of your difficulty assessment (e.g. "This looks complex. Shall we start with a technical review meeting?")
+
+## Meeting Flow Rules (Strict)
+- "Have N PMs meet first" → Always create/run the meeting first.
+- Do not pre-present candidate proposals before the meeting. Candidates are derived only from meeting results.
+- Order: Create meeting → Wait for completion → Report results → Present candidates (strictly follow this order)
+- Never present "Plan A/B/C" or candidate lists before a meeting.
+
+## Current Office State
+${state}
+
+## Action Format
+Include actions in the following format (not auto-executed — requires user approval):
+
+[ACTION:create_task title="Task Title" description="Description" assignRole="developer"]
+[ACTION:create_agent name="Name" role="pm" model="claude-opus-4-6"]
+[ACTION:start_meeting title="Meeting Title" participants="pm,developer,reviewer" participantCount="3" character="planning"]
+[ACTION:assign_task taskId="taskID" agentId="agentID"]
+[ACTION:cancel_task taskId="taskID"]
+[ACTION:cancel_all_pending]
+[ACTION:reset_agent agentId="agentID"]
+[ACTION:cancel_meeting meetingId="meetingID"]
+[ACTION:delete_meeting meetingId="meetingID"]
+[ACTION:delete_all_meetings]
+[ACTION:confirm_meeting meetingId="meetingID"]
+[ACTION:confirm_task taskId="taskID"]
+[ACTION:start_review meetingId="meetingID"]
+[ACTION:view_task_result taskId="taskID"]
+
+Decision actions:
+- confirm_meeting: Confirm a completed meeting and auto-execute next step (meetingId optional — auto-selects latest completed meeting)
+- confirm_task: Confirm a completed task and auto-advance chain (taskId optional — defaults to latest completed task)
+- start_review: Score brainstorming/planning meeting results via reviewers (meetingId optional — defaults to latest meeting)
+- When user says "confirm", "proceed", "next step", suggest the appropriate confirm action.
+- When user says "review", "score", "evaluate candidates", suggest start_review.
+- view_task_result: Retrieve and display detailed results of a completed task
+
+Available roles: pm, developer, reviewer, designer, devops, qa
+Available models: claude-opus-4-6, claude-sonnet-4, openai-codex/o3, openai-codex/gpt-5.3-codex
+Available characters: brainstorm, planning, review, retrospective, kickoff, architecture, design, sprint-planning, estimation, demo, postmortem, code-review, daily
+- brainstorm: Idea generation / candidate derivation
+- planning: Spec/plan writing (based on confirmed topic)
+- kickoff: Project kickoff (goals/roles/timeline)
+- architecture: Technical architecture design
+- design: UI/UX design
+- sprint-planning: Sprint planning / task distribution
+- estimation: Effort/resource/timeline estimation
+- demo: Deliverable demo review
+- postmortem: Incident/failure analysis
+- code-review: Code review
+- daily: Daily standup
+- retrospective: Retrospective (what went well/improvements/action items)
+- review: Candidate scoring/evaluation
+
+Character selection: Auto-select the type matching user request context. E.g. "architecture design meeting" → architecture, "sprint planning" → sprint-planning
+
+Reuse existing agents when possible — don't create new ones unnecessarily.
+
+## Review Feedback Application
+When the user says "apply review feedback", "fix it", "apply fixes", etc.:
+1. Reference the most recently completed review result (check office state above)
+2. Suggest creating a fix task with [Fix] prefix via create_task
+3. Include "apply review feedback" in the task description
+4. Assign to developer with assignRole="developer" (Dev→Review 2-step chain auto-applies)`;
+  }
 
   return `${intro}
 
@@ -2334,6 +2540,28 @@ export function approveProposal(
 
 // Dynamic chain recommendation mode: no forced QA->Dev normalization.
 
+function getActionLabelMap(type: string, lang: Lang = 'ko'): string {
+  const labels: Record<string, [string, string]> = {
+    create_task: ['Create Task', '작업 생성'],
+    create_agent: ['Create Agent', '에이전트 생성'],
+    start_meeting: ['Start Meeting', '미팅 시작'],
+    assign_task: ['Assign Task', '작업 배정'],
+    cancel_task: ['Cancel Task', '작업 취소'],
+    cancel_all_pending: ['Cancel All Pending', '대기 작업 전체 취소'],
+    reset_agent: ['Reset Agent', '에이전트 초기화'],
+    cancel_meeting: ['Delete Meeting', '미팅 삭제'],
+    delete_meeting: ['Delete Meeting', '미팅 삭제'],
+    delete_all_meetings: ['Delete All Meetings', '전체 미팅 삭제'],
+    start_review: ['Rank Candidates', '후보 순위 평가'],
+    confirm_meeting: ['Confirm Meeting', '미팅 확정'],
+    confirm_task: ['Confirm Task', '태스크 확정'],
+    view_task_result: ['View Task Result', '태스크 결과 조회'],
+  };
+  const pair = labels[type];
+  return pair ? L(lang, pair[0], pair[1]) : type;
+}
+
+// Keep backward-compatible constant for places that don't have lang context
 const ACTION_LABEL_MAP: Record<string, string> = {
   create_task: '작업 생성',
   create_agent: '에이전트 생성',
@@ -2521,6 +2749,8 @@ export function getChiefMessages(sessionId: string): ChiefChatMessage[] {
  */
 export function chatWithChief(sessionId: string, userMessage: string, language: 'en' | 'ko' = 'ko'): { messageId: string; async: boolean; reply?: string; suggestions?: TeamPlanSuggestion[]; messages?: ChiefChatMessage[] } {
   lastActiveChiefSessionId = sessionId || 'chief-default';
+  sessionLanguageMap.set(sessionId, language);
+  const lang: Lang = language;
   const now = new Date().toISOString();
   pushMessage(sessionId, { id: `user-${Date.now()}`, role: 'user', content: userMessage, createdAt: now });
 
@@ -2546,7 +2776,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
     const amendments = chainAmendments.get(activeChainRootId) || [];
     amendments.push(userMessage.trim());
     chainAmendments.set(activeChainRootId, amendments);
-    const reply = `✅ 메모했습니다. 다음 단계에 반영됩니다: ${userMessage.trim()}`;
+    const reply = L(lang, `✅ Noted. Will be applied to the next step: ${userMessage.trim()}`, `✅ 메모했습니다. 다음 단계에 반영됩니다: ${userMessage.trim()}`);
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
     if (responseCallback) {
       responseCallback(sessionId, {
@@ -2595,7 +2825,9 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       pendingProposals.set(messageId, [fixAction]);
       pendingProposalBySession.set(sessionId, messageId);
 
-      const reply = `✅ 리뷰 피드백 반영 작업을 제안합니다.\n\n📋 "${fixTitle}"\n• 개발자가 리뷰 피드백을 반영하여 수정합니다\n• 수정 완료 후 자동으로 재리뷰합니다\n\n승인하시면 실행합니다.${formatActionList([fixAction])}`;
+      const reply = L(lang,
+        `✅ Proposing a fix task for review feedback.\n\n📋 "${fixTitle}"\n• Developer will apply review feedback\n• Auto-review after fix completes\n\nApprove to execute.${formatActionList([fixAction], lang)}`,
+        `✅ 리뷰 피드백 반영 작업을 제안합니다.\n\n📋 "${fixTitle}"\n• 개발자가 리뷰 피드백을 반영하여 수정합니다\n• 수정 완료 후 자동으로 재리뷰합니다\n\n승인하시면 실행합니다.${formatActionList([fixAction], lang)}`);
       pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
       if (responseCallback) {
         responseCallback(sessionId, {
@@ -2622,11 +2854,11 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
   if (isShortAffirmative && !pendingMessageId) {
     if (llmInFlightBySession.has(sessionId)) {
       queuedApprovalBySession.add(sessionId);
-      const reply = '직전 요청을 처리 중입니다. 완료되면 방금 승인("응")을 자동으로 이어서 실행할게요.';
+      const reply = L(lang, 'Processing previous request. Your approval will be auto-applied once it completes.', '직전 요청을 처리 중입니다. 완료되면 방금 승인("응")을 자동으로 이어서 실행할게요.');
       pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
       return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
     }
-    const reply = '현재 대기 중인 제안이 없습니다. 새로운 지시를 해주세요.';
+    const reply = L(lang, 'No pending proposals. Please give a new instruction.', '현재 대기 중인 제안이 없습니다. 새로운 지시를 해주세요.');
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: now });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
   }
@@ -2644,7 +2876,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       const results: string[] = [];
       const runtimeBinding: { lastCreatedTaskId?: string | null } = { lastCreatedTaskId: null };
       batchAssignedAgentIds.clear(); // Reset batch tracking for this approval round
-      results.push(`✅ 승인됨 — ${toExecute.length}건 실행 시작`);
+      results.push(L(lang, `✅ Approved — executing ${toExecute.length} action(s)`, `✅ 승인됨 — ${toExecute.length}건 실행 시작`));
       console.log(`[chief] chatWithChief approval: executing ${toExecute.length} actions, isGenericApproval=${isGenericApproval}`);
       for (let i = 0; i < toExecute.length; i++) {
         const action = bindActionWithRuntimeContext(toExecute[i], runtimeBinding);
@@ -2664,7 +2896,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
             confirmChainPlan(taskChainPlan.id);
             setChainAutoExecute(taskChainPlan.id, true);
           }
-          results.push(`${stepLabel}↪ 추천 체인이 자동 확정되었습니다. 체인 미리보기에서 진행 상황을 확인할 수 있습니다.`);
+          results.push(`${stepLabel}↪ ${L(lang, 'Recommended chain auto-confirmed. Track progress in the chain preview.', '추천 체인이 자동 확정되었습니다. 체인 미리보기에서 진행 상황을 확인할 수 있습니다.')}`);
         }
       }
 
@@ -2685,15 +2917,21 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       const remainingPending = pendingProposals.get(pendingMessageId);
       const remainingCount = remainingPending?.length || 0;
 
-      let reply = `실행 결과:\n${results.join('\n')}`;
+      let reply = `${L(lang, 'Execution results', '실행 결과')}:\n${results.join('\n')}`;
       if (remainingCount > 0) {
-        reply += `\n\n📌 **다음 단계:** 남은 액션 ${remainingCount}건이 있습니다.\n${remainingPending!.map((a, i) => `${i + 1}. ${ACTION_LABEL_MAP[a.type] || a.type}`).join('\n')}\n\n'승인'이라고 하시면 나머지도 자동 실행합니다.`;
+        reply += L(lang,
+          `\n\n📌 **Next:** ${remainingCount} remaining action(s).\n${remainingPending!.map((a, i) => `${i + 1}. ${getActionLabelMap(a.type, lang)}`).join('\n')}\n\nSay "approve" to auto-execute the rest.`,
+          `\n\n📌 **다음 단계:** 남은 액션 ${remainingCount}건이 있습니다.\n${remainingPending!.map((a, i) => `${i + 1}. ${getActionLabelMap(a.type, lang)}`).join('\n')}\n\n'승인'이라고 하시면 나머지도 자동 실행합니다.`);
       } else {
         const pendingTasks = listTasks().filter(t => t.status === 'pending' || t.status === 'in-progress');
         if (pendingTasks.length > 0) {
-          reply += `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• 상태 확인: "진행중이야?" 또는 "상태 확인"\n• 결과 확인: 완료 시 자동으로 알려드립니다\n• 추가 요청: 언제든 새 작업을 지시할 수 있습니다`;
+          reply += L(lang,
+            `\n\n📌 **Next:** ${pendingTasks.length} task(s) in progress/pending.\n• Check status: "status" or "what's happening?"\n• Results: You'll be notified automatically\n• New requests: You can assign new tasks anytime`,
+            `\n\n📌 **다음 단계:** ${pendingTasks.length}건의 작업이 진행/대기 중입니다.\n• 상태 확인: "진행중이야?" 또는 "상태 확인"\n• 결과 확인: 완료 시 자동으로 알려드립니다\n• 추가 요청: 언제든 새 작업을 지시할 수 있습니다`);
         } else {
-          reply += `\n\n📌 **다음 단계:** 모든 작업이 완료되었습니다.\n• 추가 작업이 필요하면 말씀해주세요\n• "상태 확인"으로 전체 현황을 볼 수 있습니다`;
+          reply += L(lang,
+            `\n\n📌 **Next:** All tasks completed.\n• Need more? Just ask\n• Say "status" to see the full overview`,
+            `\n\n📌 **다음 단계:** 모든 작업이 완료되었습니다.\n• 추가 작업이 필요하면 말씀해주세요\n• "상태 확인"으로 전체 현황을 볼 수 있습니다`);
         }
       }
 
@@ -2863,8 +3101,8 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
 
           const conciseBaseReply = toConciseModeReply(userMessage, cleanText || '처리가 완료되었습니다.');
           const compactActionList = intent === 'simple_action' && proposedActions.length > 2
-            ? `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`
-            : formatActionList(proposedActions);
+            ? L(language, `\n\n${proposedActions.length} proposed actions ready. Approve to execute in order.`, `\n\n실행 후보 액션 ${proposedActions.length}건이 준비되었습니다. 승인하시면 필요한 순서로 실행합니다.`)
+            : formatActionList(proposedActions, language);
           const batchHint = batchId
             ? `\n\n🧩 멀티-스택 분할 작업으로 판단되어 batch(${batchId})로 묶었습니다. 각 파트 완료 후 종합 취합 태스크가 자동 생성됩니다.`
             : '';

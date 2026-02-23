@@ -64,10 +64,10 @@ export const TEAM_PRESETS: import('./types.js').TeamPreset[] = [
     name: 'Web Dev Team',
     description: 'PM + 2 Developers + Code Reviewer',
     agents: [
-      { name: 'Alice', role: 'pm', model: 'claude-opus-4-6' },
-      { name: 'Bob', role: 'developer', model: 'claude-sonnet-4' },
-      { name: 'Charlie', role: 'developer', model: 'openai-codex/o3' },
-      { name: 'Diana', role: 'reviewer', model: 'claude-opus-4-6' },
+      { name: 'Alice', role: 'pm', model: 'claude-sonnet-4' },
+      { name: 'Bob', role: 'developer', model: 'claude-opus-4-6' },
+      { name: 'Charlie', role: 'developer', model: 'claude-opus-4-6' },
+      { name: 'Diana', role: 'reviewer', model: 'openai-codex/gpt-5.3-codex' },
     ],
   },
   {
@@ -75,9 +75,9 @@ export const TEAM_PRESETS: import('./types.js').TeamPreset[] = [
     name: 'Content Team',
     description: 'PM + Designer + Developer (Writer)',
     agents: [
-      { name: 'Alice', role: 'pm', model: 'claude-opus-4-6' },
+      { name: 'Alice', role: 'pm', model: 'claude-sonnet-4' },
       { name: 'Eve', role: 'designer', model: 'claude-sonnet-4' },
-      { name: 'Bob', role: 'developer', model: 'claude-sonnet-4' },
+      { name: 'Bob', role: 'developer', model: 'claude-opus-4-6' },
     ],
   },
   {
@@ -85,11 +85,11 @@ export const TEAM_PRESETS: import('./types.js').TeamPreset[] = [
     name: 'Full Stack',
     description: 'PM + Frontend + Backend + DevOps + Reviewer',
     agents: [
-      { name: 'Alice', role: 'pm', model: 'claude-opus-4-6' },
-      { name: 'Bob', role: 'developer', model: 'claude-sonnet-4' },
-      { name: 'Charlie', role: 'developer', model: 'openai-codex/o3' },
+      { name: 'Alice', role: 'pm', model: 'claude-sonnet-4' },
+      { name: 'Bob', role: 'developer', model: 'claude-opus-4-6' },
+      { name: 'Charlie', role: 'developer', model: 'claude-opus-4-6' },
       { name: 'Frank', role: 'devops', model: 'openai-codex/gpt-5.3-codex' },
-      { name: 'Diana', role: 'reviewer', model: 'claude-opus-4-6' },
+      { name: 'Diana', role: 'reviewer', model: 'openai-codex/gpt-5.3-codex' },
     ],
   },
 ];
