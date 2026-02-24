@@ -25,16 +25,30 @@ https://github.com/user-attachments/assets/a636ff8b-c65c-4a23-84b3-fd596128caf7
 
 ## 🤔 Why ClawHQ?
 
-Most multi-agent tools run tasks in isolation. ClawHQ agents work as a **team**.
+**A single AI agent has blind spots. A team doesn't.**
 
-- **They brainstorm** — Multiple agents propose competing approaches in structured meetings
-- **They debate & vote** — Reviewers score each candidate with structured scorecards and pick the best one
-- **They plan & spec** — PMs write technical specifications and break down work
-- **They build** — Developers implement code with automatic chain handoffs (spec → implement → review)
-- **They review & test** — Reviewers evaluate quality, flag issues, and request fixes
-- **They decide together** — Every decision has an audit trail: who proposed what, who scored how, why it was chosen
+When you ask one agent to "build a todo app," you get one perspective, one architecture, no second opinion. If there's a bad decision buried in the code, nobody catches it.
 
-One instruction in, full team execution out. You manage the team, not individual agents.
+ClawHQ runs a **team** — and teams work differently:
+
+| | Single Agent | ClawHQ Team |
+|---|---|---|
+| **Ideas** | One approach, no alternatives | 3 agents brainstorm, 5+ competing candidates |
+| **Quality** | Self-review (marking your own homework) | Independent reviewers score with structured scorecards |
+| **Decisions** | Implicit, no record | Full audit trail — who proposed what, who scored how |
+| **Failures** | "It broke" | Failure timeline with event context and root cause |
+| **Visibility** | Terminal logs | Real-time office view, dashboard, meeting history |
+
+### vs. Other Multi-Agent Frameworks
+
+| | CrewAI | MetaGPT | AutoGen | **ClawHQ** |
+|---|---|---|---|---|
+| Visual UI | ❌ CLI only | ❌ CLI only | ❌ CLI only | ✅ Isometric office + dashboard |
+| Structured decisions | ❌ | ❌ | ❌ | ✅ Scorecards, voting, audit trail |
+| Meeting system | ❌ | Partial | ❌ | ✅ 13 types (brainstorm, review, retro…) |
+| Failure debugging | ❌ | ❌ | ❌ | ✅ Failure timeline + event replay |
+| Observability | ❌ | ❌ | Basic | ✅ KPI metrics, time series, alerts |
+| Open source | ✅ | ✅ | ✅ | ✅ MIT |
 
 ---
 
