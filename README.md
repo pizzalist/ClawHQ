@@ -19,7 +19,7 @@ Not just task execution — full decision history, failure debugging, and team-l
 
 > Chief chat → Brainstorm meeting → Reviewer scoring → Implementation chain → Completed
 
-https://github.com/pizzalist/ClawHQ/releases/download/demo-v1/clawhq_demo.mp4
+https://github.com/user-attachments/assets/a636ff8b-c65c-4a23-84b3-fd596128caf7
 
 ---
 
