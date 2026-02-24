@@ -18,6 +18,7 @@ import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, appro
 import { stmts } from './db.js';
 import { commitDeliverable, commitTaskDeliverables, getCommitLog } from './git-commit.js';
 import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample, resetMonitoringState, unresetMonitoringState } from './monitoring-mock.js';
+import { AVAILABLE_MODELS, getSettings, saveSettings } from './settings.js';
 
 const app = express();
 app.use(cors());
@@ -135,6 +136,23 @@ app.post('/api/agents', (req, res) => {
   try {
     const agent = createAgent(name, role, model);
     res.status(201).json(agent);
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get('/api/models', (_req, res) => {
+  res.json({ models: AVAILABLE_MODELS });
+});
+
+app.get('/api/settings', (_req, res) => {
+  res.json(getSettings());
+});
+
+app.put('/api/settings', (req, res) => {
+  try {
+    const updated = saveSettings(req.body || {});
+    res.json(updated);
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

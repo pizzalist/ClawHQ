@@ -273,6 +273,19 @@ const translations: Record<string, { en: string; ko: string }> = {
   'error.unhandled': { en: 'An unhandled error occurred.', ko: '처리되지 않은 오류가 발생했습니다.' },
   'error.chiefChat': { en: 'Failed to chat with Chief', ko: '총괄자 대화에 실패했어요' },
 
+  // Settings
+  'settings.title': { en: 'Settings', ko: '설정' },
+  'settings.chiefModel': { en: 'Chief Model', ko: 'Chief 모델' },
+  'settings.agentModels': { en: 'Agent Default Models', ko: '에이전트 기본 모델' },
+  'settings.save': { en: 'Save', ko: '저장' },
+  'settings.saved': { en: 'Settings saved', ko: '설정이 저장되었습니다' },
+  'settings.role.pm': { en: 'PM', ko: 'PM' },
+  'settings.role.developer': { en: 'Developer', ko: '개발자' },
+  'settings.role.reviewer': { en: 'Reviewer', ko: '리뷰어' },
+  'settings.role.designer': { en: 'Designer', ko: '디자이너' },
+  'settings.role.devops': { en: 'DevOps', ko: 'DevOps' },
+  'settings.role.qa': { en: 'QA', ko: 'QA' },
+
   // Roles
   'role.pm': { en: 'PM', ko: 'PM' },
   'role.developer': { en: 'Developer', ko: '개발' },

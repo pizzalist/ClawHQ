@@ -14,6 +14,7 @@ import ToastContainer, { toast } from './components/Toast';
 import TaskListView from './components/TaskListView';
 import TaskResultModal from './components/TaskResultModal';
 import DecisionsView from './components/decisions/DecisionsView';
+import Settings from './components/Settings';
 import MeetingRoom from './components/MeetingRoom';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useT } from './i18n';
@@ -26,6 +27,7 @@ export default function App() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
   const [decisionCount, setDecisionCount] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => { connectWS(); }, []);
   useEffect(() => {
     const validViews: View[] = ['office', 'dashboard', 'decisions', 'meetings', 'workflow', 'failures', 'history', 'tasks'];
@@ -75,7 +77,7 @@ export default function App() {
   return (
     <div className="h-screen w-screen flex flex-col bg-[#0f0f1a] text-gray-100 overflow-hidden">
       <ToastContainer />
-      <TopBar />
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       {/* View tabs */}
       <div className="flex items-center gap-1 px-4 py-1.5 bg-panel border-b border-gray-700/30 shrink-0">
         {/* Sidebar toggle */}
@@ -145,6 +147,7 @@ export default function App() {
       </div>
       <AgentDetailPanel />
       <TaskResultModal />
+      <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {/* Mobile bottom bar */}
       <div className="sm:hidden flex items-center justify-around bg-panel border-t border-gray-700/50 py-2 shrink-0">
         {tabs.map(([v, label]) => (

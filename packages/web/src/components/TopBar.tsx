@@ -46,7 +46,11 @@ function LanguageToggle() {
   );
 }
 
-export default function TopBar() {
+interface TopBarProps {
+  onOpenSettings?: () => void;
+}
+
+export default function TopBar({ onOpenSettings }: TopBarProps) {
   const { agents, tasks, connected } = useStore();
   const working = agents.filter(a => a.state === 'working').length;
   const pending = tasks.filter(t => t.status === 'pending').length;
@@ -83,6 +87,14 @@ export default function TopBar() {
             <span className="hidden sm:inline">{connected ? t('topbar.connected') : t('topbar.disconnected')}</span>
           </span>
           <LanguageToggle />
+          <button
+            onClick={onOpenSettings}
+            className="px-2.5 py-1.5 bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 text-sm rounded-lg font-medium transition-all"
+            title={t('settings.title')}
+            aria-label={t('settings.title')}
+          >
+            ⚙️
+          </button>
           <ExportMenu />
           <button
             onClick={async () => {

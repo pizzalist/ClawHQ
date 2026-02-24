@@ -7,6 +7,8 @@ import { listDeliverablesByTask, validateWebDeliverable } from './deliverables.j
 import { suggestChainPlan, getChainPlanForTask, advanceChainPlan, shouldAutoChain, setChainAutoExecute, confirmChainPlan, linkTaskToChainPlan, listActiveChainPlans } from './chain-plan.js';
 import { stmts } from './db.js';
 import { spawnAgentSession, isDemoMode, parseAgentOutput, cleanupRun, killAgentRun, type AgentRun } from './openclaw-adapter.js';
+import { getChiefModel, getDefaultModelByRole } from './settings.js';
+export { getChiefModel, getDefaultModelByRole };
 
 type Lang = 'en' | 'ko';
 function L(lang: Lang, en: string, ko: string): string { return lang === 'en' ? en : ko; }
@@ -24,15 +26,6 @@ export function getActiveChiefLang(): Lang {
 const MAX_HISTORY = 50;
 const MAX_COUNT_PER_ROLE = 5;
 const MAX_TOTAL_ADDITIONAL = 10;
-
-const DEFAULT_MODEL_BY_ROLE: Record<AgentRole, AgentModel> = {
-  pm: 'claude-opus-4-6',
-  developer: 'openai-codex/gpt-5.3-codex',
-  reviewer: 'claude-opus-4-6',
-  designer: 'claude-sonnet-4',
-  devops: 'openai-codex/o3',
-  qa: 'claude-sonnet-4',
-};
 
 const sessionMessages = new Map<string, ChiefChatMessage[]>();
 
@@ -574,7 +567,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
 
           const agents = listAgents();
           let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
-          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', getDefaultModelByRole().pm);
 
           const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
           setTimeout(() => processQueue(), 200);
@@ -591,7 +584,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             `회의 "${meeting.title}" 결과를 실행하세요.\n\n${meeting.report || meeting.proposals.map(p => `${p.agentName}: ${p.content}`).join('\n\n')}`);
           const agents = listAgents();
           let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
-          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+          if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', getDefaultModelByRole().pm);
           const newTask = createTask(taskTitle, taskDesc, pmAgent.id);
           setTimeout(() => processQueue(), 200);
           nextStepLines.push(L(lang,
@@ -625,7 +618,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
             const anyCandidates = agents.filter(a => a.role === nextStep.role)
               .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
             let nextAgent = idleCandidates[0] || anyCandidates[0];
-            if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextStep.role), nextStep.role, DEFAULT_MODEL_BY_ROLE[nextStep.role]);
+            if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextStep.role), nextStep.role, getDefaultModelByRole()[nextStep.role]);
 
             // Bug 4 fix: 기존 prefix 제거 후 현재 단계 prefix만 붙임
             const strippedTaskTitle = (task?.title || '').replace(/^(\[[^\]]*\]\s*)+/, '');
@@ -694,7 +687,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
         const anyOfRole = agents.filter(a => a.role === nextRole)
           .sort((a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime());
         let nextAgent = idleOfRole[0] || anyOfRole[0];
-        if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextRole), nextRole, DEFAULT_MODEL_BY_ROLE[nextRole]);
+        if (!nextAgent) nextAgent = createAgent(suggestFriendlyAgentName(nextRole), nextRole, getDefaultModelByRole()[nextRole]);
 
         // Bug 4 fix: 기존 prefix 제거
         const nextTaskTitle = `[${nextLabel}] ${task.title.replace(/^(\[[^\]]*\]\s*)+/, '')}`;
@@ -794,7 +787,7 @@ export function handleChiefAction(notificationId: string, actionId: string, para
           }
           // Create additional reviewers if needed
           while (reviewerIds.length < 3) {
-            const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', 'claude-opus-4-6' as any);
+            const created = createAgent(suggestFriendlyAgentName('reviewer'), 'reviewer', getDefaultModelByRole().reviewer as any);
             reviewerIds.push(created.id);
           }
           const reviewMeeting = startReviewMeetingFromSource(
@@ -1055,7 +1048,7 @@ export function chiefHandleTaskEvent(event: AppEvent) {
         // Create consolidation task assigned to a PM
         const agents = listAgents();
         let pmAgent = agents.find(a => a.role === 'pm' && a.state === 'idle') || agents.find(a => a.role === 'pm');
-        if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', DEFAULT_MODEL_BY_ROLE.pm);
+        if (!pmAgent) pmAgent = createAgent(suggestFriendlyAgentName('pm'), 'pm', getDefaultModelByRole().pm);
 
         const consolidationTitle = `[취합 보고서] ${batchTasks.map(t => t.title).join(' + ')}`;
         const consolidationDesc = [
@@ -2032,7 +2025,7 @@ function ensureMeetingParticipants(roleCounts: Record<AgentRole, number>): { par
       return;
     }
 
-    const created = createAgent(suggestFriendlyAgentName(role), role, DEFAULT_MODEL_BY_ROLE[role]);
+    const created = createAgent(suggestFriendlyAgentName(role), role, getDefaultModelByRole()[role]);
     participantIds.push(created.id);
     createdAgentNames.push(created.name);
   };
@@ -2172,7 +2165,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
       case 'create_agent': {
         const { name, role, model } = action.params;
         const agentRole = (role || 'developer') as AgentRole;
-        const agentModel = (model || DEFAULT_MODEL_BY_ROLE[agentRole]) as AgentModel;
+        const agentModel = (model || getDefaultModelByRole()[agentRole]) as AgentModel;
         const safeName = name || suggestFriendlyAgentName(agentRole);
         const agent = createAgent(safeName, agentRole, agentModel);
         return { ...action, result: { ok: true, message: L(lang, `Agent "${agent.name}" created`, `에이전트 "${agent.name}" 생성됨`), id: agent.id } };
@@ -2213,7 +2206,7 @@ function executeAction(action: ChiefAction, sessionId?: string): ChiefAction {
         if (requestedCount && !isNaN(requestedCount) && requestedCount > 0) {
           const fallbackRole: AgentRole = (Object.keys(roleCounts) as AgentRole[]).find(r => roleCounts[r] > 0) || 'pm';
           while (participantIds.length < requestedCount) {
-            const created = createAgent(suggestFriendlyAgentName(fallbackRole), fallbackRole, DEFAULT_MODEL_BY_ROLE[fallbackRole]);
+            const created = createAgent(suggestFriendlyAgentName(fallbackRole), fallbackRole, getDefaultModelByRole()[fallbackRole]);
             participantIds.push(created.id);
             createdAgentNames.push(created.name);
           }
@@ -3047,7 +3040,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
       sessionId: `chief-llm-${messageId}`,
       agentName: 'Chief',
       role: 'chief',
-      model: 'claude-opus-4-6',
+      model: getChiefModel(),
       prompt: fullPrompt,
       onComplete: (run: AgentRun) => {
         try {
@@ -3220,7 +3213,7 @@ export function applyChiefPlan(inputSuggestions: TeamPlanSuggestion[]) {
     for (let i = 0; i < suggestion.count; i++) {
       roleCounts[suggestion.role] += 1;
       const name = `${suggestion.role.toUpperCase()}-${String(roleCounts[suggestion.role]).padStart(2, '0')}`;
-      created.push(createAgent(name, suggestion.role, DEFAULT_MODEL_BY_ROLE[suggestion.role]));
+      created.push(createAgent(name, suggestion.role, getDefaultModelByRole()[suggestion.role]));
     }
   }
 
