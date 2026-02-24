@@ -2,10 +2,10 @@
 
 # ClawHQ
 
-### Your AI team, one office. Plan, execute, decide, review.
+### Your AI team, one office. Brainstorm, plan, build, review — together.
 
 An open-source AI team operating system built on [OpenClaw](https://github.com/openclaw/openclaw).
-Not just task execution — full decision history, failure debugging, and team-level observability.
+Agents brainstorm ideas, debate approaches, score candidates, write specs, implement code, and review each other's work — just like a real engineering team.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -25,13 +25,16 @@ https://github.com/user-attachments/assets/a636ff8b-c65c-4a23-84b3-fd596128caf7
 
 ## 🤔 Why ClawHQ?
 
-Most agent tools generate outputs. Few answer the questions that actually matter:
+Most multi-agent tools run tasks in isolation. ClawHQ agents work as a **team**.
 
-- **Who decided what?** — Full decision audit trail with reviewer scorecards
-- **Why did this fail?** — Failure timeline for debugging operational issues
-- **Which task passed QC?** — Quality gates with traceability at every step
+- **They brainstorm** — Multiple agents propose competing approaches in structured meetings
+- **They debate & vote** — Reviewers score each candidate with structured scorecards and pick the best one
+- **They plan & spec** — PMs write technical specifications and break down work
+- **They build** — Developers implement code with automatic chain handoffs (spec → implement → review)
+- **They review & test** — Reviewers evaluate quality, flag issues, and request fixes
+- **They decide together** — Every decision has an audit trail: who proposed what, who scored how, why it was chosen
 
-ClawHQ focuses on **team operations** — not single-shot generation.
+One instruction in, full team execution out. You manage the team, not individual agents.
 
 ---
 
@@ -50,6 +53,7 @@ ClawHQ focuses on **team operations** — not single-shot generation.
 - 📊 **Monitoring Dashboard** — KPI metrics, time series charts, alert system
 - 🔥 **Failure Timeline** — Debug operational issues with full event context
 - 🏢 **Meeting Lineage** — Parent-child meeting relationships, candidate inheritance
+- 🌐 **i18n** — Full English and Korean language support
 
 ---
 
@@ -59,26 +63,15 @@ ClawHQ focuses on **team operations** — not single-shot generation.
 git clone https://github.com/pizzalist/ClawHQ.git
 cd ClawHQ/app
 npm install
-npm run demo:start
+npm run dev
 ```
 
-`demo:start` behavior:
-- If OpenClaw is installed → **full runtime mode** (real agent orchestration)
-- If OpenClaw is missing → attempts auto-install, then falls back to **demo mode** (UI preview)
+Requires [OpenClaw](https://github.com/openclaw/openclaw) for agent orchestration.
 
-Disable auto-install: `CLAWHQ_AUTO_INSTALL_OPENCLAW=0 npm run demo:start`
-
-Open **http://localhost:3001** and try Chief Chat:
-1. `AI 챗봇 MVP 기획서 만들어줘` → PM creates a plan
-2. `응` → Dev implements, Reviewer evaluates
-3. `확정` → Decision finalized, visible in dashboard
-
----
-
-## ⚙️ Runtime
-
-- **Full mode (recommended):** [OpenClaw](https://github.com/openclaw/openclaw) required — real agent orchestration, task execution, quality gates
-- **Demo mode (fallback):** OpenClaw optional — UI + simulated flow for product preview
+Open **http://localhost:3000** and try Chief Chat:
+1. `Build me a todo app` → PM creates a spec
+2. `yes` → Dev implements, Reviewer evaluates
+3. `approve` → Decision finalized, visible in dashboard
 
 ---
 
@@ -126,11 +119,3 @@ PRs welcome! Good starting points:
 ## 📄 License
 
 MIT
-
----
-
-<div align="center">
-
-If this project is useful, consider giving it a ⭐
-
-</div>
