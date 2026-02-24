@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { STATE_TRANSITIONS } from '@ai-office/shared';
+import { STATE_TRANSITIONS } from '@clawhq/shared';
 import { stmts } from './db.js';
 const listeners = [];
 export function onEvent(fn) {
@@ -172,10 +172,10 @@ export function seedDemoAgents() {
     if (count > 0)
         return;
     const demos = [
-        ['Alice', 'pm', 'claude-opus-4-6'],
-        ['Bob', 'developer', 'claude-sonnet-4'],
-        ['Charlie', 'developer', 'openai-codex/o3'],
-        ['Diana', 'reviewer', 'claude-opus-4-6'],
+        ['Alice', 'pm', 'claude-sonnet-4'],
+        ['Bob', 'developer', 'claude-opus-4-6'],
+        ['Charlie', 'developer', 'claude-opus-4-6'],
+        ['Diana', 'reviewer', 'openai-codex/gpt-5.3-codex'],
         ['Eve', 'designer', 'claude-sonnet-4'],
         ['Frank', 'devops', 'openai-codex/gpt-5.3-codex'],
     ];

@@ -1,12 +1,12 @@
 import { v4 as uuid } from 'uuid';
-import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@ai-office/shared';
-import { detectDeliverableType, detectDeliverableTypeForRole } from '@ai-office/shared';
+import { MAX_CONCURRENT_TASKS, CHAIN_STEP_LABELS, REPORT_ONLY_TYPES } from '@clawhq/shared';
+import { detectDeliverableType, detectDeliverableTypeForRole } from '@clawhq/shared';
 import { stmts } from './db.js';
 import { listAgents, getAgent, transitionAgent, resetAgent } from './agent-manager.js';
 import { spawnAgentSession, parseAgentOutput, cleanupRun, killAgentRun, getAgentRun } from './openclaw-adapter.js';
 import { createDeliverablesFromResult } from './deliverables.js';
 import { shouldAutoChain, advanceChainPlan, hasPendingChainPlan, getChainPlanForTask, markChainCompleted } from './chain-plan.js';
-import { chainAmendments } from './chief-agent.js';
+import { chainAmendments, getActiveChiefLang } from './chief-agent.js';
 const listeners = [];
 export function onTaskEvent(fn) {
     listeners.push(fn);
@@ -243,7 +243,7 @@ function assignTask(agentId, task) {
     const agent = getAgent(agentId);
     if (!agent)
         return;
-    const sessionId = `ai-office-${agent.name.toLowerCase()}-${task.id.slice(0, 8)}-${Date.now()}`;
+    const sessionId = `clawhq-${agent.name.toLowerCase()}-${task.id.slice(0, 8)}-${Date.now()}`;
     // Mark task in-progress and agent working
     stmts.updateTask.run(agent.id, 'in-progress', null, task.id);
     transitionAgent(agent.id, 'working', task.id, sessionId);
@@ -268,7 +268,7 @@ CRITICAL RULES — VIOLATION = FAILURE:
 - Your output is ALWAYS a structured markdown document with headers (# ## ###), bullet points, and tables.
 - If the task says "만들어줘" or "build", produce a PLAN/SPECIFICATION for how to build it. DO NOT build it.
 - If the task says "분석" or "리포트" or "report", produce a concise markdown report.
-- Keep reports focused and actionable. Use Korean if the task is in Korean.
+- Keep reports focused and actionable. Match the language specified in the Language section below.
 - Structure: 1) 개요 2) 핵심 내용 3) 결론/권장사항`,
     developer: `You are a Developer. Implement the task by writing working code.
 
@@ -280,7 +280,7 @@ CRITICAL RULES for web deliverables (HTML):
 - For games: include game loop, input handling, and visible canvas/elements
 - For apps: include working UI with event handlers
 - Test mentally: would this HTML file work if opened directly in a browser? If not, fix it.
-- Use Korean for UI text if the task is in Korean.`,
+- Match the language specified in the Language section below for UI text.`,
     designer: 'You are a Designer. Create design specifications, mockups, or UI implementations.',
     reviewer: 'You are a Code Reviewer. Review the work and produce a structured report with findings and recommendations.',
     devops: 'You are a DevOps Engineer. Create infrastructure code, deployment configs, or operational documents.',
@@ -290,14 +290,22 @@ function buildPrompt(name, role, task) {
     const roleInstruction = ROLE_INSTRUCTIONS[role] || `Complete this task concisely and report what you did.`;
     const isFixTask = /^\[fix\]/i.test(task.title) || /(수정|fix|피드백\s*반영)/i.test(`${task.title}\n${task.description}`);
     const parts = [
-        `You are ${name}, a ${role} in the AI Office.`,
+        `You are ${name}, a ${role} in the ClawHQ.`,
         roleInstruction,
         ``,
         `## Task: ${task.title}`,
         task.description ? `\n${task.description}` : '',
     ];
     if (role === 'developer' && isFixTask) {
-        parts.push('', '## FIX MODE (MANDATORY)', '- This is a PATCH task. Modify the EXISTING code from the context, do NOT replace with an unrelated rewrite.', '- Keep original architecture, identifiers, and behavior unless the review explicitly asks to change them.', '- Reflect reviewer feedback item-by-item.', '- Output format must be:', '  1) "### 변경 요약" (bullet list)', '  2) "### 반영 체크리스트" (리뷰 피드백별 반영 여부)', '  3) "### 수정된 코드" (patched full code)', '- If required context is missing, explicitly state what is missing instead of fabricating a new project.');
+        parts.push('', '## FIX MODE (MANDATORY)', '- This is a PATCH task. Modify the EXISTING code from the context, do NOT replace with an unrelated rewrite.', '- Keep original architecture, identifiers, and behavior unless the review explicitly asks to change them.', '- Reflect reviewer feedback item-by-item.', '- Output format must be:', ...(getActiveChiefLang() === 'en' ? [
+            '  1) "### Change Summary" (bullet list)',
+            '  2) "### Review Feedback Checklist" (addressed each review item)',
+            '  3) "### Updated Code" (patched full code)',
+        ] : [
+            '  1) "### 변경 요약" (bullet list)',
+            '  2) "### 반영 체크리스트" (리뷰 피드백별 반영 여부)',
+            '  3) "### 수정된 코드" (patched full code)',
+        ]), '- If required context is missing, explicitly state what is missing instead of fabricating a new project.');
     }
     if (task.expectedDeliverables && task.expectedDeliverables.length > 0) {
         const formatHints = {
@@ -311,6 +319,14 @@ function buildPrompt(name, role, task) {
         };
         const hints = task.expectedDeliverables.map(t => formatHints[t] || t).join('; ');
         parts.push(``, `## Expected Output Format`, `Produce: ${hints}`);
+    }
+    // Language directive based on active chief session
+    const lang = getActiveChiefLang();
+    if (lang === 'en') {
+        parts.push(``, `## Language`, `Respond entirely in English. All headings, summaries, and review text must be in English.`);
+    }
+    else {
+        parts.push(``, `## Language`, `한국어로 응답하세요. 모든 제목, 요약, 리뷰 텍스트를 한국어로 작성하세요.`);
     }
     parts.push(``, `Respond with a clear summary of what you accomplished.`);
     return parts.join('\n');

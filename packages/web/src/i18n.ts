@@ -276,15 +276,9 @@ const translations: Record<string, { en: string; ko: string }> = {
   // Settings
   'settings.title': { en: 'Settings', ko: '설정' },
   'settings.chiefModel': { en: 'Chief Model', ko: 'Chief 모델' },
-  'settings.agentModels': { en: 'Agent Default Models', ko: '에이전트 기본 모델' },
   'settings.save': { en: 'Save', ko: '저장' },
   'settings.saved': { en: 'Settings saved', ko: '설정이 저장되었습니다' },
-  'settings.role.pm': { en: 'PM', ko: 'PM' },
-  'settings.role.developer': { en: 'Developer', ko: '개발자' },
-  'settings.role.reviewer': { en: 'Reviewer', ko: '리뷰어' },
-  'settings.role.designer': { en: 'Designer', ko: '디자이너' },
-  'settings.role.devops': { en: 'DevOps', ko: 'DevOps' },
-  'settings.role.qa': { en: 'QA', ko: 'QA' },
+  'settings.chiefModelDesc': { en: 'The AI model used for Chief chat responses and decision-making.', ko: 'Chief 채팅 응답 및 의사결정에 사용되는 AI 모델입니다.' },
 
   // Roles
   'role.pm': { en: 'PM', ko: 'PM' },

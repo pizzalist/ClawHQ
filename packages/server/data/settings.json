@@ -1,0 +1,11 @@
+{
+  "chiefModel": "claude-opus-4-6",
+  "defaultModelByRole": {
+    "pm": "claude-opus-4-6",
+    "developer": "openai-codex/gpt-5.3-codex",
+    "reviewer": "claude-opus-4-6",
+    "designer": "claude-sonnet-4",
+    "devops": "openai-codex/o3",
+    "qa": "claude-sonnet-4"
+  }
+}

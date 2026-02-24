@@ -4,19 +4,20 @@ import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { SERVER_PORT } from '@ai-office/shared';
+import { SERVER_PORT } from '@clawhq/shared';
 import { checkOpenClaw, isDemoMode, listSessions } from './openclaw-adapter.js';
-import { TEAM_PRESETS } from '@ai-office/shared';
+import { TEAM_PRESETS } from '@clawhq/shared';
 import { listAgents, createAgent, deleteAgent, deleteAllAgents, resetAgent, seedDemoAgents, onEvent, getAgent, listTestAgents, cleanupTestAgents } from './agent-manager.js';
 import { listTasks, createTask, listEvents, onTaskEvent, processQueue, stopAgentTask, getChainChildren, findRootTask, spawnChainFollowUp, syncRootTaskStates } from './task-queue.js';
 import { suggestChainPlan, getChainPlan, getChainPlanForTask, listActiveChainPlans, listAllChainPlans, editChainPlan, setChainAutoExecute, confirmChainPlan, advanceChainPlan, cancelChainPlan, markChainRunning, onChainPlanChange, resetChainPlanState } from './chain-plan.js';
 import { listDeliverablesByTask, getDeliverable, renderDeliverable, validateWebDeliverable } from './deliverables.js';
-import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings } from './meetings.js';
+import { listMeetings, getMeeting, startPlanningMeeting, decideMeeting, onMeetingChange, cleanupLegacyMeetings, startReviewMeetingFromSource, extractCandidatesFromMeeting } from './meetings.js';
 import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTechSpecData, onTechSpecChange } from './tech-spec-meeting.js';
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn, resetChiefState } from './chief-agent.js';
 import { stmts } from './db.js';
 import { commitDeliverable, commitTaskDeliverables, getCommitLog } from './git-commit.js';
 import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample, resetMonitoringState, unresetMonitoringState } from './monitoring-mock.js';
+import { AVAILABLE_MODELS, getSettings, saveSettings } from './settings.js';
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -119,15 +120,31 @@ app.post('/api/agents', (req, res) => {
         res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
 });
+app.get('/api/models', (_req, res) => {
+    res.json({ models: AVAILABLE_MODELS });
+});
+app.get('/api/settings', (_req, res) => {
+    res.json(getSettings());
+});
+app.put('/api/settings', (req, res) => {
+    try {
+        const updated = saveSettings(req.body || {});
+        res.json(updated);
+    }
+    catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+});
 app.post('/api/chief/chat', (req, res) => {
-    const { message, sessionId } = req.body || {};
+    const { message, sessionId, language } = req.body || {};
     if (typeof message !== 'string' || message.trim().length === 0) {
         return res.status(400).json({ error: 'message is required' });
     }
     const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
         ? sessionId.trim()
         : (req.header('x-chief-session-id') || req.ip || 'default');
-    const result = chatWithChief(resolvedSessionId, message.trim());
+    const resolvedLang = (language === 'en' || language === 'ko') ? language : 'ko';
+    const result = chatWithChief(resolvedSessionId, message.trim(), resolvedLang);
     if (result.async) {
         // LLM mode: return immediately, results come via WebSocket
         res.json({ status: 'processing', messageId: result.messageId });
@@ -165,12 +182,15 @@ app.post('/api/chief/proposal/approve', (req, res) => {
     }
 });
 app.post('/api/chief/checkin/respond', (req, res) => {
-    const { checkInId, optionId, comment } = req.body || {};
+    const { checkInId, optionId, comment, sessionId } = req.body || {};
     if (!checkInId || !optionId) {
         return res.status(400).json({ error: 'checkInId and optionId are required' });
     }
     try {
-        const result = respondToCheckIn(checkInId, optionId, comment);
+        const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0
+            ? sessionId.trim()
+            : (req.header('x-chief-session-id') || 'chief-default');
+        const result = respondToCheckIn(checkInId, optionId, comment, undefined, resolvedSessionId);
         res.json({ ok: true, ...result });
     }
     catch (err) {
@@ -574,7 +594,7 @@ app.get('/api/export/json', (_req, res) => {
     const counts = stmts.taskCounts.get();
     const avgRow = stmts.avgCompletionTime.get();
     const perAgent = stmts.perAgentStats.all();
-    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-export.json"');
+    res.setHeader('Content-Disposition', 'attachment; filename="clawhq-export.json"');
     res.json({ exportedAt: new Date().toISOString(), agents, tasks, events, stats: { ...counts, avgCompletionMs: avgRow.avg_ms || 0, perAgent } });
 });
 app.get('/api/export/markdown', (_req, res) => {
@@ -587,7 +607,7 @@ app.get('/api/export/markdown', (_req, res) => {
     const completed = counts.completed || 0;
     const failed = counts.failed || 0;
     const pending = counts.pending || 0;
-    let md = `# AI Office Report\n\n`;
+    let md = `# ClawHQ Report\n\n`;
     md += `**Generated:** ${new Date().toISOString()}\n\n`;
     md += `## Summary\n\n`;
     md += `| Metric | Value |\n|--------|-------|\n`;
@@ -615,7 +635,7 @@ app.get('/api/export/markdown', (_req, res) => {
         md += `\n`;
     }
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-report.md"');
+    res.setHeader('Content-Disposition', 'attachment; filename="clawhq-report.md"');
     res.send(md);
 });
 app.get('/api/export/csv', (_req, res) => {
@@ -629,7 +649,7 @@ app.get('/api/export/csv', (_req, res) => {
         csv += `${t.id},${escape(t.title)},${t.status},${escape(agent?.name || '')},${t.createdAt},${t.updatedAt},${escape((t.result || '').slice(0, 100))}\n`;
     }
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="ai-office-tasks.csv"');
+    res.setHeader('Content-Disposition', 'attachment; filename="clawhq-tasks.csv"');
     res.send(csv);
 });
 // ---- Decision API ----
@@ -788,6 +808,24 @@ app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {
     const result = cleanupLegacyMeetings();
     broadcast({ type: 'meetings_update', payload: listMeetings() });
     res.json({ ok: true, ...result });
+});
+// Extract candidates from a meeting (debug/demo)
+app.get('/api/meetings/:id/candidates', (req, res) => {
+    const candidates = extractCandidatesFromMeeting(req.params.id);
+    res.json(candidates);
+});
+// Start review meeting from source meeting
+app.post('/api/meetings/:id/start-review', (req, res) => {
+    const { reviewerIds, title } = req.body;
+    const result = startReviewMeetingFromSource(title || `[Review] Meeting`, req.params.id, reviewerIds || []);
+    if (result) {
+        broadcast({ type: 'meetings_update', payload: listMeetings() });
+        broadcast({ type: 'agents_update', payload: listAgents() });
+        res.json(result);
+    }
+    else {
+        res.status(400).json({ error: 'Cannot start review - need at least 2 candidates' });
+    }
 });
 // Alias for frontend reset button
 app.post('/api/reset-all', (_req, res) => {
@@ -1065,7 +1103,7 @@ async function main() {
     // Process any pending tasks left from before restart
     setTimeout(() => processQueue(), 2000);
     server.listen(SERVER_PORT, () => {
-        console.log(`[server] AI Office server running on http://localhost:${SERVER_PORT}`);
+        console.log(`[server] ClawHQ server running on http://localhost:${SERVER_PORT}`);
         console.log(`[server] WebSocket available at ws://localhost:${SERVER_PORT}/ws`);
     });
 }
