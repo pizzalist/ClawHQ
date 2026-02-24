@@ -141,8 +141,8 @@ export function stopAgentTask(agentId: string): void {
 
 let isProcessingQueue = false;
 
-const DEFAULT_TASK_TIMEOUT_MS = 120_000;
-const COMPLEX_TASK_TIMEOUT_MS = 240_000;
+const DEFAULT_TASK_TIMEOUT_MS = 180_000;
+const COMPLEX_TASK_TIMEOUT_MS = 360_000;
 const taskTimeoutTimers = new Map<string, NodeJS.Timeout>();
 const completionEventTaskIds = new Set<string>();
 const watchdogReassignCount = new Map<string, number>();
@@ -171,6 +171,19 @@ function scheduleTaskTimeout(task: Task, agentId: string, sessionId: string) {
     if (!current) return;
     const status = current.status as TaskStatus;
     if (status !== 'in-progress') return;
+
+    // If the agent already produced partial/full output, treat as success instead of timeout failure
+    const existingResult = current.result as string | null;
+    if (existingResult && existingResult.length > 50) {
+      console.log(`[task-timeout] Task "${task.title}" timed out but has result (${existingResult.length} chars) — treating as completed`);
+      stmts.updateTask.run(agentId, 'completed', existingResult, task.id);
+      emitTaskCompletedOnce(agentId, task.id, `Task "${task.title}" completed (late finish)`);
+      const agent = getAgent(agentId);
+      if (agent) { try { transitionAgent(agentId, 'idle', null, null); } catch { /* ignore */ } }
+      clearTaskTimeout(task.id);
+      processQueue();
+      return;
+    }
 
     const agent = getAgent(agentId);
     if (agent?.sessionId === sessionId) {

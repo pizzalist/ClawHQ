@@ -1,5 +1,5 @@
 {
-  "chiefModel": "claude-opus-4-6",
+  "chiefModel": "claude-sonnet-4",
   "defaultModelByRole": {
     "pm": "claude-opus-4-6",
     "developer": "openai-codex/gpt-5.3-codex",
