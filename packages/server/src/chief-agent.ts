@@ -1831,9 +1831,12 @@ function toConciseModeReply(userMessage: string, reply: string): string {
 function buildMonitoringReply(userMessage: string, lang: Lang = 'en'): string {
   const agents = listAgents();
   const tasks = listTasks();
+  const meetings = listMeetings();
   const pending = tasks.filter(t => t.status === 'pending');
   const inProgress = tasks.filter(t => t.status === 'in-progress');
   const completed = tasks.filter(t => t.status === 'completed');
+  const activeMeetings = meetings.filter(m => m.status === 'active' || m.status === 'reviewing');
+  const workingAgents = agents.filter(a => a.state !== 'idle');
 
   const latestProgress = [...inProgress]
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
@@ -1845,41 +1848,55 @@ function buildMonitoringReply(userMessage: string, lang: Lang = 'en'): string {
   const wantsResult = /(다\s*됐|끝났|완료\s*됐|결과\s*나왔|result|done|finished)/i.test(userMessage);
 
   if (lang === 'en') {
+    const meetingLine = activeMeetings.length > 0
+      ? ` ${activeMeetings.length} meeting(s) in progress: ${activeMeetings.map(m => `"${m.title}"`).join(', ')}.`
+      : '';
+    const agentLine = workingAgents.length > 0
+      ? ` ${workingAgents.length} agent(s) working: ${workingAgents.map(a => `${a.name}(${a.state})`).join(', ')}.`
+      : '';
+
     if (wantsResult) {
       const recent = [...completed].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 2);
       if (recent.length > 0) {
         const names = recent.map(t => `"${t.title}"`).join(', ');
-        return `Recently completed: ${names}. Total: ${completed.length} completed · ${inProgress.length} in progress · ${pending.length} pending. Check results in 'View Result'.`;
+        return `Recently completed: ${names}. Total: ${completed.length} completed · ${inProgress.length} in progress · ${pending.length} pending.${meetingLine} Check results in 'View Result'.`;
       }
-      return `No completed tasks yet. Currently ${inProgress.length} in progress · ${pending.length} pending.`;
+      return `No completed tasks yet. Currently ${inProgress.length} in progress · ${pending.length} pending.${meetingLine}`;
     }
     if (wantsEta) {
       const etaLine = inProgress.length > 0
         ? `${inProgress.length} task(s) in progress (${latestProgress || 'working'}). You'll be notified on completion.`
-        : 'No tasks in progress. Ready for new work.';
-      return `${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed. ${etaLine}`;
+        : activeMeetings.length > 0 ? `Meeting in progress.` : 'No tasks in progress. Ready for new work.';
+      return `${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed.${meetingLine} ${etaLine}`;
     }
-    return `Currently ${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed, with ${agents.length} agents${latestProgress ? ` (active: ${latestProgress})` : ''}.`;
+    return `Currently ${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed, with ${agents.length} agents.${meetingLine}${agentLine}${latestProgress ? ` Active tasks: ${latestProgress}.` : ''}`;
   }
 
   // Korean
+  const meetingLineKo = activeMeetings.length > 0
+    ? ` 미팅 ${activeMeetings.length}건 진행 중: ${activeMeetings.map(m => `"${m.title}"`).join(', ')}.`
+    : '';
+  const agentLineKo = workingAgents.length > 0
+    ? ` ${workingAgents.length}명 작업 중: ${workingAgents.map(a => `${a.name}(${a.state})`).join(', ')}.`
+    : '';
+
   if (wantsResult) {
     const recent = [...completed].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 2);
     if (recent.length > 0) {
       const names = recent.map(t => `"${t.title}"`).join(', ');
-      return `최근 완료: ${names}. 전체 완료 ${completed.length}건 · 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다. 결과는 '결과 보기'에서 확인할 수 있습니다.`;
+      return `최근 완료: ${names}. 전체 완료 ${completed.length}건 · 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다.${meetingLineKo} 결과는 '결과 보기'에서 확인할 수 있습니다.`;
     }
-    return `아직 완료된 작업이 없습니다. 현재 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다.`;
+    return `아직 완료된 작업이 없습니다. 현재 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다.${meetingLineKo}`;
   }
 
   if (wantsEta) {
     const etaLine = inProgress.length > 0
       ? `현재 진행 중 ${inProgress.length}건(${latestProgress || '작업'})이 있으며, 완료 시 바로 알려드리겠습니다.`
-      : '현재 진행 중 작업이 없어 즉시 처리 가능합니다.';
-    return `대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건. ${etaLine}`;
+      : activeMeetings.length > 0 ? '미팅 진행 중입니다.' : '현재 진행 중 작업이 없어 즉시 처리 가능합니다.';
+    return `대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건.${meetingLineKo} ${etaLine}`;
   }
 
-  return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건이며, 에이전트는 ${agents.length}명입니다${latestProgress ? ` (진행중: ${latestProgress})` : ''}.`;
+  return `현재 대기 ${pending.length}건 · 진행 ${inProgress.length}건 · 완료 ${completed.length}건이며, 에이전트는 ${agents.length}명입니다.${meetingLineKo}${agentLineKo}${latestProgress ? ` (진행중: ${latestProgress})` : ''}`;
 }
 
 function shouldSuppressActionsByIntent(intent: 'status' | 'other'): boolean {

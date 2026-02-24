@@ -15,6 +15,12 @@ Not just task execution — full decision history, failure debugging, and team-l
 
 </div>
 
+## 🎬 Demo
+
+> Chief chat → Brainstorm meeting → Reviewer scoring → Implementation chain → Completed
+
+![ClawHQ Demo](docs/media/demo.gif)
+
 ---
 
 ## 🤔 Why ClawHQ?
