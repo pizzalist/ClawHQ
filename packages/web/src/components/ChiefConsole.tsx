@@ -281,9 +281,9 @@ function InlineNotification({ notification, onViewMeetingResult, onPreviewHtml, 
               {tStatic('action.livePreview')}
             </button>
           )}
-          {onSendMessage && /리뷰|review|FAIL|불합격|수정\s*필요|critical|major/i.test(notification.summary) && (
+          {onSendMessage && notification.type !== 'meeting_complete' && /FAIL|불합격|수정\s*필요|critical|major/i.test(notification.summary) && (
             <button
-              onClick={() => onSendMessage('리뷰 피드백 반영해줘')}
+              onClick={() => onSendMessage((localStorage.getItem('clawhq-lang') || 'en') === 'ko' ? '리뷰 피드백 반영해줘' : 'Apply the review feedback fixes')}
               className="px-3 py-1.5 rounded-lg border border-amber-600 bg-amber-800/70 hover:bg-amber-700 text-sm text-gray-200 transition-colors"
             >
               {tStatic('action.applyFix')}

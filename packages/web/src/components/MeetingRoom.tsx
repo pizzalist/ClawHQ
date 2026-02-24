@@ -132,7 +132,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
           <h4 className="text-xs font-semibold text-emerald-300 uppercase tracking-wider mb-1">{tStatic('meeting.topRecommendation')}</h4>
           <div className="text-sm font-semibold text-emerald-200">{packet.recommendation?.name || '-'}</div>
-          <div className="text-xs text-emerald-100/80 mt-1">평균 {Number(packet.recommendation?.score || 0).toFixed(2)}</div>
+          <div className="text-xs text-emerald-100/80 mt-1">{tStatic('meeting.average')} {Number(packet.recommendation?.score || 0).toFixed(2)}</div>
           {packet.recommendation?.summary && (
             <p className="text-xs text-emerald-100/80 mt-2 whitespace-pre-wrap">{packet.recommendation.summary}</p>
           )}
@@ -144,7 +144,7 @@ function ReviewScoringPanel({ meeting, packet }: { meeting: Meeting; packet: Dec
             <ul className="space-y-1 text-xs text-amber-100/90">
               {packet.alternatives.map((a, i) => (
                 <li key={`${a.name}-${i}`}>
-                  {i + 1}. {a.name} <span className="opacity-80">(평균 {Number(a.score || 0).toFixed(2)})</span>
+                  {i + 1}. {a.name} <span className="opacity-80">({tStatic('meeting.average')} {Number(a.score || 0).toFixed(2)})</span>
                 </li>
               ))}
             </ul>

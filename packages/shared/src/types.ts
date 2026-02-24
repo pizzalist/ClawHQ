@@ -34,6 +34,8 @@ export interface Task {
   taskType?: TaskType;
   linkedMeetingId?: string | null;
   expectedDeliverables?: DeliverableType[];
+  /** Language for agent prompts ('en' | 'ko') */
+  language?: 'en' | 'ko';
   createdAt: string;
   updatedAt: string;
 }

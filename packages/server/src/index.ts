@@ -881,6 +881,29 @@ app.post('/api/admin/cleanup-legacy-meetings', (_req, res) => {
   res.json({ ok: true, ...result });
 });
 
+// Extract candidates from a meeting (debug/demo)
+app.get('/api/meetings/:id/candidates', (req, res) => {
+  const candidates = extractCandidatesFromMeeting(req.params.id);
+  res.json(candidates);
+});
+
+// Start review meeting from source meeting
+app.post('/api/meetings/:id/start-review', (req, res) => {
+  const { reviewerIds, title } = req.body;
+  const result = startReviewMeetingFromSource(
+    title || `[Review] Meeting`,
+    req.params.id,
+    reviewerIds || [],
+  );
+  if (result) {
+    broadcast({ type: 'meetings_update', payload: listMeetings() });
+    broadcast({ type: 'agents_update', payload: listAgents() });
+    res.json(result);
+  } else {
+    res.status(400).json({ error: 'Cannot start review - need at least 2 candidates' });
+  }
+});
+
 // Alias for frontend reset button
 app.post('/api/reset-all', (_req, res) => {
   stmts.deleteAllReviewScores.run();

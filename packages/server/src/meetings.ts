@@ -921,7 +921,9 @@ export function extractCandidatesFromMeeting(meetingId: string): MeetingCandidat
   // Parse structured [CANDIDATE] tags from all proposals
   // Supports: [CANDIDATE] Name: desc, [CANDIDATE] Name — desc, [CANDIDATE] **Name**: desc, [CANDIDATE] **Name** — desc
   const candidateMap = new Map<string, { name: string; summary: string; count: number }>();
-  const candidateRegex = /\[CANDIDATE\]\s*\*{0,2}(.+?)\*{0,2}\s*[:\-—–]\s*(.+)/gi;
+  // Match [CANDIDATE] **Name (with hyphens allowed)**: summary
+  // Use lookahead for the separator: first **: or **: or — or – after the name
+  const candidateRegex = /\[CANDIDATE\]\s*\*{0,2}([^*\n]+?)\*{0,2}\s*(?:\*{0,2}\s*[:\—\–]|:\s)\s*(.+)/gi;
 
   for (const proposal of meeting.proposals) {
     let match: RegExpExecArray | null;
