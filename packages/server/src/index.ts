@@ -17,7 +17,7 @@ import { startTechSpecMeeting, suggestTechSpecAgents, rerunTechSpecRole, getTech
 import { chatWithChief, applyChiefPlan, getChiefMessages, onChiefResponse, approveProposal, rejectProposal, onChiefCheckIn, onChiefNotification, handleChiefAction, chiefHandleTaskEvent, chiefHandleMeetingChange, respondToCheckIn, resetChiefState } from './chief-agent.js';
 import { stmts } from './db.js';
 import { commitDeliverable, commitTaskDeliverables, getCommitLog } from './git-commit.js';
-import { getMockAlerts, getMockMetrics, getMockTimeSeries, getMonitoringSchemaSample, resetMonitoringState, unresetMonitoringState } from './monitoring-mock.js';
+// monitoring-mock.ts no longer used — monitoring APIs now use real task/event data
 import { AVAILABLE_MODELS, getSettings, saveSettings } from './settings.js';
 
 const app = express();
@@ -436,7 +436,6 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.post('/api/tasks', (req, res) => {
-  unresetMonitoringState();
   const { title, description, assigneeId, expectedDeliverables } = req.body;
   if (!title) {
     return res.status(400).json({ error: 'title is required' });
@@ -617,26 +616,64 @@ app.get('/api/failures', (_req, res) => {
   })));
 });
 
-// Monitoring API (mock data): metrics / timeseries / alerts
-app.get('/api/monitoring/metrics', (req, res) => {
-  const window = typeof req.query.window === 'string' ? req.query.window : undefined;
-  res.json(getMockMetrics(window));
+// Monitoring API: real metrics derived from task/agent/event data
+app.get('/api/monitoring/metrics', (_req, res) => {
+  const tasks = listTasks();
+  const agents = listAgents();
+  const completed = tasks.filter(t => t.status === 'completed');
+  const failed = tasks.filter(t => t.status === 'failed');
+  const inProgress = tasks.filter(t => t.status === 'in-progress');
+  const pending = tasks.filter(t => t.status === 'pending');
+  const busyAgents = agents.filter(a => a.state !== 'idle');
+
+  res.json({
+    window: '1h',
+    sampledAt: new Date().toISOString(),
+    metrics: {
+      totalTasks: tasks.length,
+      completedTasks: completed.length,
+      failedTasks: failed.length,
+      inProgressTasks: inProgress.length,
+      pendingTasks: pending.length,
+      successRate: tasks.length > 0 ? Math.round((completed.length / tasks.length) * 100) : 0,
+      totalAgents: agents.length,
+      busyAgents: busyAgents.length,
+    },
+  });
 });
 
-app.get('/api/monitoring/timeseries', (req, res) => {
-  const metric = typeof req.query.metric === 'string' ? req.query.metric : undefined;
-  const window = typeof req.query.window === 'string' ? req.query.window : undefined;
-  const interval = typeof req.query.interval === 'string' ? req.query.interval : undefined;
-  res.json(getMockTimeSeries(metric, window, interval));
+app.get('/api/monitoring/timeseries', (_req, res) => {
+  const events = listEvents();
+  // Group events by 5-min buckets for a simple time series
+  const buckets = new Map<string, { completed: number; failed: number }>();
+  for (const e of events) {
+    const ts = new Date(e.createdAt);
+    ts.setMinutes(Math.floor(ts.getMinutes() / 5) * 5, 0, 0);
+    const key = ts.toISOString();
+    const b = buckets.get(key) || { completed: 0, failed: 0 };
+    if (e.type === 'task_completed') b.completed++;
+    if (e.type === 'task_failed') b.failed++;
+    buckets.set(key, b);
+  }
+  const series = [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([time, data]) => ({ time, ...data }));
+  res.json({ series });
 });
 
-app.get('/api/monitoring/alerts', (req, res) => {
-  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-  res.json(getMockAlerts(status));
-});
-
-app.get('/api/monitoring/schema-sample', (_req, res) => {
-  res.json(getMonitoringSchemaSample());
+app.get('/api/monitoring/alerts', (_req, res) => {
+  const tasks = listTasks();
+  const recentFailed = tasks
+    .filter(t => t.status === 'failed')
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 10)
+    .map(t => ({
+      id: t.id,
+      level: 'error' as const,
+      message: `Task "${t.title}" failed: ${(t.result || 'unknown').slice(0, 100)}`,
+      timestamp: t.updatedAt,
+    }));
+  res.json({ alerts: recentFailed });
 });
 
 // Export endpoints
@@ -933,8 +970,6 @@ app.post('/api/reset-all', (_req, res) => {
   stmts.deleteAllEvents.run();
   resetChiefState();
   resetChainPlanState();
-  resetMonitoringState();
-
   // Fix #5: Reset all agents to idle so they don't stay stuck in 'done'/'working' state
   const agents = listAgents();
   for (const agent of agents) {
