@@ -39,16 +39,6 @@ ClawHQ runs a **team** — and teams work differently:
 | **Failures** | "It broke" | Failure timeline with event context and root cause |
 | **Visibility** | Terminal logs | Real-time office view, dashboard, meeting history |
 
-### What's different from other multi-agent frameworks?
-
-Most frameworks orchestrate agents behind a CLI. ClawHQ gives you the full picture:
-
-- 🖥️ **Visual, not terminal** — Watch your team work in a real-time isometric office, not scroll through logs
-- 📊 **Structured decisions, not black boxes** — Scorecards, voting, and full audit trails for every choice
-- 🏛️ **Real meetings, not prompt chains** — 13 meeting types with proposals, debate, and synthesis
-- 🔥 **Debug failures, not guess** — Failure timeline with event replay and root cause context
-- 📈 **Observe everything** — KPI metrics, time series charts, and alert system built in
-
 ---
 
 ## ✨ Features
