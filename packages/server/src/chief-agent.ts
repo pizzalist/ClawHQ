@@ -1828,7 +1828,7 @@ function toConciseModeReply(userMessage: string, reply: string): string {
   return normalized;
 }
 
-function buildMonitoringReply(userMessage: string): string {
+function buildMonitoringReply(userMessage: string, lang: Lang = 'en'): string {
   const agents = listAgents();
   const tasks = listTasks();
   const pending = tasks.filter(t => t.status === 'pending');
@@ -1842,12 +1842,29 @@ function buildMonitoringReply(userMessage: string): string {
     .join(', ');
 
   const wantsEta = /(eta|예상\s*시간|얼마나\s*남|언제\s*끝|언제\s*줘|언제\s*돼)/i.test(userMessage);
-  const wantsResult = /(다\s*됐|끝났|완료\s*됐|결과\s*나왔)/i.test(userMessage);
+  const wantsResult = /(다\s*됐|끝났|완료\s*됐|결과\s*나왔|result|done|finished)/i.test(userMessage);
 
+  if (lang === 'en') {
+    if (wantsResult) {
+      const recent = [...completed].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 2);
+      if (recent.length > 0) {
+        const names = recent.map(t => `"${t.title}"`).join(', ');
+        return `Recently completed: ${names}. Total: ${completed.length} completed · ${inProgress.length} in progress · ${pending.length} pending. Check results in 'View Result'.`;
+      }
+      return `No completed tasks yet. Currently ${inProgress.length} in progress · ${pending.length} pending.`;
+    }
+    if (wantsEta) {
+      const etaLine = inProgress.length > 0
+        ? `${inProgress.length} task(s) in progress (${latestProgress || 'working'}). You'll be notified on completion.`
+        : 'No tasks in progress. Ready for new work.';
+      return `${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed. ${etaLine}`;
+    }
+    return `Currently ${pending.length} pending · ${inProgress.length} in progress · ${completed.length} completed, with ${agents.length} agents${latestProgress ? ` (active: ${latestProgress})` : ''}.`;
+  }
+
+  // Korean
   if (wantsResult) {
-    const recent = [...completed]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 2);
+    const recent = [...completed].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 2);
     if (recent.length > 0) {
       const names = recent.map(t => `"${t.title}"`).join(', ');
       return `최근 완료: ${names}. 전체 완료 ${completed.length}건 · 진행 ${inProgress.length}건 · 대기 ${pending.length}건입니다. 결과는 '결과 보기'에서 확인할 수 있습니다.`;
@@ -2974,7 +2991,7 @@ export function chatWithChief(sessionId: string, userMessage: string, language: 
 
   // Always handle read-only status queries synchronously so they are never misrouted as amendments/actions.
   if (ruleIntent === 'status') {
-    const reply = buildMonitoringReply(userMessage);
+    const reply = buildMonitoringReply(userMessage, lang);
     pushMessage(sessionId, { id: messageId, role: 'chief', content: reply, createdAt: new Date().toISOString() });
     return { messageId, async: false, reply, messages: getChiefMessages(sessionId) };
   }
