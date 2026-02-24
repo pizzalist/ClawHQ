@@ -141,8 +141,8 @@ export function stopAgentTask(agentId: string): void {
 
 let isProcessingQueue = false;
 
-const DEFAULT_TASK_TIMEOUT_MS = 180_000;
-const COMPLEX_TASK_TIMEOUT_MS = 360_000;
+const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const COMPLEX_TASK_TIMEOUT_MS = 300_000;
 const taskTimeoutTimers = new Map<string, NodeJS.Timeout>();
 const completionEventTaskIds = new Set<string>();
 const watchdogReassignCount = new Map<string, number>();
